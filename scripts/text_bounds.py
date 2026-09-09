@@ -76,10 +76,7 @@ def clean_document_bilevel(gray: np.ndarray, k: float, min_area: float, window: 
     return hi
 
 
-def detect_content_box_scan(bgr: np.ndarray, region: tuple[float, float, float, float] | None = None):
-    """Content-box detection for a scanned/rasterised page. `bgr` is the full-resolution page
-    raster (as it would come off a scanner/renderer). Returns (x0, y0, x1, y1) in `bgr`'s own
-    pixel coordinates. `region`, if given, scopes detection to that pixel sub-rectangle."""
+def _content_components_scan(bgr: np.ndarray, region: tuple[float, float, float, float] | None):
     ph, pw = bgr.shape[:2]
     rx0, ry0, rx1, ry1 = region if region else (0, 0, pw, ph)
     rw, rh = rx1 - rx0, ry1 - ry0
@@ -118,7 +115,14 @@ def detect_content_box_scan(bgr: np.ndarray, region: tuple[float, float, float, 
         return out
 
     kept = boxes(True) or boxes(False)
+    return kept, ink, scale, rx0, ry0, rx1, ry1
 
+
+def detect_content_box_scan(bgr: np.ndarray, region: tuple[float, float, float, float] | None = None):
+    """Content-box detection for a scanned/rasterised page. `bgr` is the full-resolution page
+    raster (as it would come off a scanner/renderer). Returns (x0, y0, x1, y1) in `bgr`'s own
+    pixel coordinates. `region`, if given, scopes detection to that pixel sub-rectangle."""
+    kept, _, scale, rx0, ry0, rx1, ry1 = _content_components_scan(bgr, region)
     if not kept:
         return rx0, ry0, rx1, ry1
 
@@ -128,6 +132,104 @@ def detect_content_box_scan(bgr: np.ndarray, region: tuple[float, float, float, 
     by1 = max(b[1] + b[3] for b in kept)
 
     return (rx0 + bx0 / scale, ry0 + by0 / scale, rx0 + bx1 / scale, ry0 + by1 / scale)
+
+
+def content_box_scan_coverage(bgr: np.ndarray, region: tuple[float, float, float, float] | None = None):
+    """Same box as detect_content_box_scan, plus what fraction of the box's rows/columns
+    actually contain ink pixels — catches pages where a couple of isolated marks produce a
+    big, mostly-empty union box."""
+    kept, ink, scale, rx0, ry0, rx1, ry1 = _content_components_scan(bgr, region)
+    if not kept:
+        return rx0, ry0, rx1, ry1, 0.0, 0.0
+
+    bx0 = min(b[0] for b in kept)
+    by0 = min(b[1] for b in kept)
+    bx1 = max(b[0] + b[2] for b in kept)
+    by1 = max(b[1] + b[3] for b in kept)
+
+    region_ink = ink[by0:by1, bx0:bx1] > 0
+    y_cov = float(np.count_nonzero(region_ink.any(axis=1))) / max(1, by1 - by0)
+    x_cov = float(np.count_nonzero(region_ink.any(axis=0))) / max(1, bx1 - bx0)
+
+    return (rx0 + bx0 / scale, ry0 + by0 / scale, rx0 + bx1 / scale, ry0 + by1 / scale, x_cov, y_cov)
+
+
+PATCH_GRID_COLS = 8
+PATCH_GRID_ROWS = 12
+
+
+def patch_fill_ratio_boxes(boxes: list, box: tuple[float, float, float, float]) -> float:
+    """Fraction of a PATCH_GRID_COLS x PATCH_GRID_ROWS grid over `box` touched by at least
+    one of `boxes` (each a (x0, y0, x1, y1, ...) tuple — PDF word boxes, image regions, or
+    both mixed together) — computed straight from PDF metadata, no rasterisation. A patch
+    spanning a text line plus its normal leading still counts as occupied, so inter-line
+    spacing is never mistaken for empty space; only genuinely unused regions (dead margins,
+    blank paragraphs, half-empty pages) show up as empty patches."""
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    if bw <= 0 or bh <= 0:
+        return 0.0
+
+    occupied = set()
+    for b in boxes:
+        bx0, by0, bx1, by1 = max(b[0], x0), max(b[1], y0), min(b[2], x1), min(b[3], y1)
+        if bx1 <= bx0 or by1 <= by0:
+            continue
+        c0 = int((bx0 - x0) / bw * PATCH_GRID_COLS)
+        c1 = int((bx1 - x0) / bw * PATCH_GRID_COLS - 1e-9)
+        r0 = int((by0 - y0) / bh * PATCH_GRID_ROWS)
+        r1 = int((by1 - y0) / bh * PATCH_GRID_ROWS - 1e-9)
+        for r in range(max(0, r0), min(PATCH_GRID_ROWS - 1, r1) + 1):
+            for c in range(max(0, c0), min(PATCH_GRID_COLS - 1, c1) + 1):
+                occupied.add((r, c))
+    return len(occupied) / (PATCH_GRID_ROWS * PATCH_GRID_COLS)
+
+
+STROKE_SCALE_FRAC = 0.006
+MAX_THICK_INK_FRAC = 0.15
+
+
+def classify_patches_scan(bgr: np.ndarray, box: tuple[float, float, float, float],
+                           dark_thresh: int = 180, min_dark_frac: float = 0.01) -> tuple[int, int, int]:
+    """Classifies every grid patch over `box` as empty / photo / text in one pass, returning
+    (n_empty, n_photo, n_text). A patch is empty if it has no meaningful dark-pixel content.
+    Otherwise it's classified by ink thickness via distance transform: text/line-art strokes
+    are thin (a pixel deep inside the ink is still close to a background edge), photographs
+    are large continuous-tone blobs (many ink pixels sit far from any edge). The thickness
+    threshold scales with the image's own resolution (not a fixed pixel count), so it stays
+    correct across sources at very different DPI — a fixed absolute or edge-density-ratio
+    threshold misclassifies dense text as "photo" once strokes get physically wider at high
+    DPI (the interior of a thick stroke has more non-edge ink pixels)."""
+    x0, y0, x1, y1 = [round(v) for v in box]
+    bw, bh = x1 - x0, y1 - y0
+    if bw <= 0 or bh <= 0:
+        return (PATCH_GRID_ROWS * PATCH_GRID_COLS, 0, 0)
+
+    gray = cv2.cvtColor(bgr[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    ink = (gray < dark_thresh).astype(np.uint8)
+    dist = cv2.distanceTransform(ink, cv2.DIST_L2, 3)
+    stroke_thresh = max(1.0, max(bgr.shape[:2]) * STROKE_SCALE_FRAC)
+    thick = dist > stroke_thresh
+
+    n_empty = n_photo = n_text = 0
+    for r in range(PATCH_GRID_ROWS):
+        py0, py1 = round(r * bh / PATCH_GRID_ROWS), round((r + 1) * bh / PATCH_GRID_ROWS)
+        for c in range(PATCH_GRID_COLS):
+            px0, px1 = round(c * bw / PATCH_GRID_COLS), round((c + 1) * bw / PATCH_GRID_COLS)
+            patch_ink = ink[py0:py1, px0:px1]
+            if patch_ink.size == 0:
+                n_empty += 1
+                continue
+            dark = patch_ink.mean()
+            if dark <= min_dark_frac:
+                n_empty += 1
+                continue
+            thick_frac = thick[py0:py1, px0:px1].sum() / max(1, patch_ink.sum())
+            if thick_frac <= MAX_THICK_INK_FRAC:
+                n_text += 1
+            else:
+                n_photo += 1
+    return n_empty, n_photo, n_text
 
 
 def arxiv_sidebar_bbox(page) -> tuple[float, float, float, float] | None:
@@ -147,6 +249,25 @@ def arxiv_sidebar_bbox(page) -> tuple[float, float, float, float] | None:
     return x0, y0, x1, y1
 
 
+def oceanofpdf_watermark_bboxes(page) -> list[tuple[float, float, float, float]]:
+    """Bounding box(es) of "OceanofPDF.com" watermark blocks injected into pirated book
+    PDFs (often the only thing on an otherwise blank page). Used to blank them out of the
+    raster BEFORE rendering, the same way arxiv_sidebar_bbox strips the arXiv sidebar."""
+    words = page.get_text("words")
+    blocks = {w[5] for w in words if "oceanofpdf" in w[4].lower()}
+    if not blocks:
+        return []
+    out = []
+    for block_no in blocks:
+        block_words = [w for w in words if w[5] == block_no]
+        x0 = min(w[0] for w in block_words)
+        y0 = min(w[1] for w in block_words)
+        x1 = max(w[2] for w in block_words)
+        y1 = max(w[3] for w in block_words)
+        out.append((x0, y0, x1, y1))
+    return out
+
+
 def detect_text_box_pdf(page) -> tuple[float, float, float, float] | None:
     """Content-box detection for a native (text-layer) PDF page, via PyMuPDF word boxes —
     equivalent to loader.ts's detect_text_box but without the clip-path/justification-run
@@ -156,13 +277,18 @@ def detect_text_box_pdf(page) -> tuple[float, float, float, float] | None:
     union — arXiv's injected vertical sidebar identifier, not part of the paper's actual text
     body. Callers should also blank it out of the raster via arxiv_sidebar_bbox before
     rendering, so it's excluded from the image, not just from this box."""
+    box, _ = _text_box_pdf_words(page)
+    return box
+
+
+def _text_box_pdf_words(page):
     words = page.get_text("words")
-    arxiv_blocks = {w[5] for w in words if "arxiv:" in w[4].lower()}
-    words = [w for w in words if w[5] not in arxiv_blocks]
+    drop_blocks = {w[5] for w in words if "arxiv:" in w[4].lower() or "oceanofpdf" in w[4].lower()}
+    words = [w for w in words if w[5] not in drop_blocks]
     if not words:
-        return None
+        return None, None
     x0 = min(w[0] for w in words)
     y0 = min(w[1] for w in words)
     x1 = max(w[2] for w in words)
     y1 = max(w[3] for w in words)
-    return x0, y0, x1, y1
+    return (x0, y0, x1, y1), words

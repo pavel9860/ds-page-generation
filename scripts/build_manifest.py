@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import csv
 import glob
 import hashlib
@@ -15,8 +16,8 @@ sys.stdout.reconfigure(line_buffering=True)
 import fitz
 
 sys.path.insert(0, os.path.dirname(__file__))
-from build_textures import text_layout_params  # noqa: E402
-from text_extract import clean_plain_text_blob, extract_pdf_page_text, load_cached_pages  # noqa: E402
+from build_textures import collect_wrapped, predict_fill_ok, required_chars, text_layout_params  # noqa: E402
+from text_extract import clean_plain_text_blob, load_cached_pages  # noqa: E402
 from text_fonts import missing_glyph_ratio  # noqa: E402
 
 MAX_MISSING_GLYPH_RATIO = 0.01
@@ -73,6 +74,10 @@ class Row:
     seed: int = 0
     note: str = ""
 
+    def __post_init__(self) -> None:
+        if not self.seed:
+            self.seed = stable_seed(self.file, str(self.page))
+
 
 ROWS: list[Row] = []
 
@@ -115,54 +120,64 @@ def lang_from_texts_filename(base: str) -> str:
 
 def add_pdf_pages_textaware(category: str, source_dataset: str, pdf_path: str, lang_fn) -> tuple[int, int]:
     rel = os.path.relpath(pdf_path, L)
-    cached_pages = load_cached_pages(pdf_path, L)
-    doc = None
-    if cached_pages is None:
-        try:
-            doc = fitz.open(pdf_path)
-        except Exception as e:
-            print(f"  [skip, unopenable] {rel}: {e}")
-            return 0, 0
     lang = lang_fn(os.path.basename(pdf_path)) if callable(lang_fn) else lang_fn
+    cached_pages = load_cached_pages(pdf_path, L)
+    if cached_pages is None:
+        return 0, add_pdf_all_pages(category, source_dataset, pdf_path, lang)
+
     n_text = n_native = 0
-    page_count = len(cached_pages) if cached_pages is not None else doc.page_count
-    for p in range(page_count):
-        if cached_pages is not None:
-            text = cached_pages[p]
-        else:
-            try:
-                text = extract_pdf_page_text(doc[p])
-            except Exception:
-                text = ""
+    for p, text in enumerate(cached_pages):
         seed = stable_seed(rel, str(p))
         ok = len(text) >= MIN_TEXT_CHARS
         if ok:
-            rng = random.Random(seed)
-            layout = text_layout_params(rng, lang)
+            layout = text_layout_params(random.Random(seed), lang)
             ok = missing_glyph_ratio(text, layout["font_path"], layout["font_index"]) <= MAX_MISSING_GLYPH_RATIO
+        if ok:
+            min_chars = required_chars(layout)
+            available = collect_wrapped(len(cached_pages), p, min_chars, lambda i: cached_pages[i])
+            ok = len(available) >= min_chars
         if ok:
             ROWS.append(Row(category, source_dataset, "text_extracted", rel, p, lang, seed=seed))
             n_text += 1
-        else:
-            ROWS.append(Row(category, source_dataset, "pdf", rel, p, lang))
+        elif safe_fill_ok("pdf", pdf_path, p):
+            ROWS.append(Row(category, source_dataset, "pdf", rel, p, lang, seed=seed))
             n_native += 1
-    if doc is not None:
-        doc.close()
     return n_text, n_native
 
 
-def add_pdf_all_pages(category: str, source_dataset: str, pdf_path: str, lang: str) -> int:
+def safe_fill_ok(fmt: str, path: str, page: int) -> bool:
+    try:
+        return predict_fill_ok(fmt, path, page)
+    except Exception as e:
+        print(f"  [skip, detection failed] {path} page {page}: {e}")
+        return False
+
+
+def add_pdf_all_pages(category: str, source_dataset: str, pdf_path: str, lang: str, limit: int = -1) -> int:
     rel = os.path.relpath(pdf_path, L)
     try:
-        doc = fitz.open(pdf_path)
+        n = fitz.open(pdf_path).page_count
     except Exception as e:
         print(f"  [skip, unopenable] {rel}: {e}")
         return 0
-    n = doc.page_count
-    doc.close()
+    kept = 0
     for p in range(n):
-        ROWS.append(Row(category, source_dataset, "pdf", rel, p, lang))
-    return n
+        if kept == limit:
+            break
+        seed = stable_seed(rel, str(p))
+        if safe_fill_ok("pdf", pdf_path, p):
+            ROWS.append(Row(category, source_dataset, "pdf", rel, p, lang, seed=seed))
+            kept += 1
+    return kept
+
+
+def add_image_row(category: str, source_dataset: str, path: str, lang: str, note: str = "") -> bool:
+    rel = os.path.relpath(path, L)
+    seed = stable_seed(rel, "0")
+    ok = safe_fill_ok("image", path, 0)
+    if ok:
+        ROWS.append(Row(category, source_dataset, "image", rel, 0, lang, seed=seed, note=note))
+    return ok
 
 
 def timed(label: str, fn) -> None:
@@ -172,57 +187,40 @@ def timed(label: str, fn) -> None:
     print(f"  [{time.time()-t0:.1f}s]")
 
 
-def build_scientific_paper() -> None:
-    n = 0
-    for f in sorted(glob.glob(f"{L}/scientific_paper/arxiv_pdfs/*.pdf")):
-        n += add_pdf_all_pages("scientific_paper", "scientific_paper", f, "en")
-    print(f"  {n} pages")
+PDF_SOURCES = [
+    ("scientific_paper", "scientific_paper", "scientific_paper/arxiv_pdfs/*.pdf", "en"),
+    ("business_form_memo_letter", "Forms", "Forms/**/*.pdf", "en"),
+    ("dictionary", "dictionares", "dictionares/*.pdf", "multi"),
+]
+
+
+def build_pdf_sources() -> None:
+    for category, source_dataset, pattern, lang in PDF_SOURCES:
+        n = 0
+        for f in sorted(glob.glob(f"{L}/{pattern}", recursive=True)):
+            n += add_pdf_all_pages(category, source_dataset, f, lang)
+        print(f"  {source_dataset}: {n} pages")
 
 
 def build_commonforms() -> None:
-    n = 0
-    for f in sorted(glob.glob(f"{L}/commonforms_val_subset/*.png")):
-        rel = os.path.relpath(f, L)
-        ROWS.append(Row("business_form_memo_letter", "commonforms_val_subset", "image", rel, 0, "und"))
-        n += 1
+    n = sum(add_image_row("business_form_memo_letter", "commonforms_val_subset", f, "und")
+            for f in sorted(glob.glob(f"{L}/commonforms_val_subset/*.png")))
     print(f"  {n} pages")
 
 
 def build_xfund_funsd() -> None:
-    n = 0
     xfund_dir = f"{L}/XFUND and FUNSD"
-    for f in sorted(glob.glob(f"{xfund_dir}/*.train/*.jpg")) + sorted(glob.glob(f"{xfund_dir}/*.val/*.jpg")):
-        rel = os.path.relpath(f, L)
-        lang = os.path.basename(os.path.dirname(f)).split(".")[0]
-        ROWS.append(Row("business_form_memo_letter", "XFUND_FUNSD", "image", rel, 0, lang))
-        n += 1
+    files = sorted(glob.glob(f"{xfund_dir}/*.train/*.jpg")) + sorted(glob.glob(f"{xfund_dir}/*.val/*.jpg"))
+    n = sum(add_image_row("business_form_memo_letter", "XFUND_FUNSD", f,
+                           os.path.basename(os.path.dirname(f)).split(".")[0]) for f in files)
     print(f"  {n} pages")
-
-
-def build_forms() -> None:
-    n_text = n_native = 0
-    files = sorted(glob.glob(f"{L}/Forms/**/*.pdf", recursive=True))
-    for i, f in enumerate(files, 1):
-        t, n = add_pdf_pages_textaware("business_form_memo_letter", "Forms", f, "en")
-        n_text += t; n_native += n
-        if i % 25 == 0:
-            print(f"    [{i}/{len(files)}]")
-    print(f"  {n_text} text_extracted + {n_native} native pages")
 
 
 def build_handwriting() -> None:
     n = 0
     for f in sorted(glob.glob(f"{L}/IAM Handwriting forms/*.png")):
-        rel = os.path.relpath(f, L)
-        ROWS.append(Row("handwriting", "IAM_Handwriting_forms", "image", rel, 0, "en"))
+        ROWS.append(Row("handwriting", "IAM_Handwriting_forms", "image", os.path.relpath(f, L), 0, "en"))
         n += 1
-    print(f"  {n} pages")
-
-
-def build_dictionary() -> None:
-    n = 0
-    for f in sorted(glob.glob(f"{L}/dictionares/*.pdf")):
-        n += add_pdf_all_pages("dictionary", "dictionares", f, "multi")
     print(f"  {n} pages")
 
 
@@ -243,31 +241,23 @@ def build_code_listing() -> None:
 
 
 def build_doclaynet() -> None:
-    counts: dict[str, int] = {}
+    counts: collections.Counter = collections.Counter()
     for doc_category, cat in DOCLAYNET_CATEGORY_MAP.items():
         for f in sorted(glob.glob(f"{L}/DocLayNet-v1.2/{doc_category}/*.png")):
-            rel = os.path.relpath(f, L)
-            ROWS.append(Row(cat, "DocLayNet-v1.2", "image", rel, 0, "en", note=f"doc_category={doc_category}"))
-            counts[cat] = counts.get(cat, 0) + 1
+            if add_image_row(cat, "DocLayNet-v1.2", f, "en", note=f"doc_category={doc_category}"):
+                counts[cat] += 1
     for cat, n in sorted(counts.items()):
         print(f"  {cat}: {n} pages")
 
 
-def build_books_technical() -> None:
-    n_text = n_native = 0
-    for f in sorted(glob.glob(f"{L}/books/technical/*.pdf")):
-        t, n = add_pdf_pages_textaware("books_technical", "books/technical", f, lang_from_books_filename)
-        n_text += t; n_native += n
-    print(f"  {n_text} text_extracted + {n_native} native pages")
-
-
-def build_books_nontechnical() -> None:
+def build_books() -> None:
     n_text = n_native = 0
     for f in sorted(glob.glob(f"{L}/books/*/*.pdf")):
         topic = os.path.basename(os.path.dirname(f))
-        if topic in ("technical", "Texts"):
+        if topic == "Texts":
             continue
-        t, n = add_pdf_pages_textaware("books_nontechnical", f"books/{topic}", f, lang_from_books_filename)
+        category = "books_technical" if topic == "technical" else "books_nontechnical"
+        t, n = add_pdf_pages_textaware(category, f"books/{topic}", f, lang_from_books_filename)
         n_text += t; n_native += n
     print(f"  {n_text} text_extracted + {n_native} native pages")
 
@@ -281,8 +271,7 @@ def load_texts_files() -> list[str]:
 
 def paginate_text_file(path: str) -> list[str]:
     with open(path, encoding="utf-8", errors="ignore") as fh:
-        raw = fh.read()
-    paras = clean_plain_text_blob(raw).split("\n\n")
+        paras = clean_plain_text_blob(fh.read()).split("\n\n")
     pages: list[str] = []
     cur: list[str] = []
     cur_len = 0
@@ -305,8 +294,7 @@ def build_texts_and_newspapers(remainder: int) -> None:
         pages = paginate_text_file(f)
         texts_cache[rel] = pages
         lang = lang_from_texts_filename(os.path.basename(f))
-        for p in range(len(pages)):
-            texts_pages.append((rel, p, lang))
+        texts_pages += [(rel, p, lang) for p in range(len(pages))]
     texts_pages.sort(key=lambda t: (t[1], t[0]))
 
     print(f"Texts/ pagination done, {len(texts_pages)} candidate pages")
@@ -314,8 +302,7 @@ def build_texts_and_newspapers(remainder: int) -> None:
     n_texts = n_skipped = 0
     for rel, p, lang in texts_pages[:texts_target]:
         seed = stable_seed(rel, str(p))
-        rng = random.Random(seed)
-        layout = text_layout_params(rng, lang)
+        layout = text_layout_params(random.Random(seed), lang)
         if missing_glyph_ratio(texts_cache[rel][p], layout["font_path"], layout["font_index"]) > MAX_MISSING_GLYPH_RATIO:
             n_skipped += 1
             continue
@@ -331,17 +318,7 @@ def build_texts_and_newspapers(remainder: int) -> None:
     for f in newspaper_files:
         if n_news >= leftover:
             break
-        rel = os.path.relpath(f, L)
-        try:
-            doc = fitz.open(f)
-        except Exception:
-            continue
-        n = doc.page_count
-        doc.close()
-        take = min(n, leftover - n_news)
-        for p in range(take):
-            ROWS.append(Row("newspaper_magazine", "Pdf", "pdf", rel, p, "und"))
-        n_news += take
+        n_news += add_pdf_all_pages("newspaper_magazine", "Pdf", f, "und", limit=leftover - n_news)
     print(f"  {n_news} pages")
 
 
@@ -355,32 +332,21 @@ def write_manifest() -> None:
             w.writerow([i, r.category, r.source_dataset, r.fmt, r.file, r.page, r.lang, r.seed, r.note])
     print(f"wrote {OUT_CSV}")
 
-    totals: dict[str, int] = {}
-    for r in ROWS:
-        totals[r.category] = totals.get(r.category, 0) + 1
-    print("\nper-category totals:")
-    for cat, n in sorted(totals.items(), key=lambda t: -t[1]):
-        print(f"  {cat:28s} {n:7d}")
-
-    fmt_totals: dict[str, int] = {}
-    for r in ROWS:
-        fmt_totals[r.fmt] = fmt_totals.get(r.fmt, 0) + 1
-    print("\nper-format totals:")
-    for fmt, n in sorted(fmt_totals.items(), key=lambda t: -t[1]):
-        print(f"  {fmt:16s} {n:7d}")
+    for label, counts in [("category", collections.Counter(r.category for r in ROWS)),
+                           ("format", collections.Counter(r.fmt for r in ROWS))]:
+        print(f"\nper-{label} totals:")
+        for k, n in counts.most_common():
+            print(f"  {k:28s} {n:7d}")
 
 
 def main() -> None:
-    timed("scientific_paper", build_scientific_paper)
+    timed("pdf sources (scientific_paper, Forms, dictionary)", build_pdf_sources)
     timed("business_form_memo_letter (commonforms_val_subset)", build_commonforms)
     timed("business_form_memo_letter (XFUND + FUNSD)", build_xfund_funsd)
-    timed("business_form_memo_letter (Forms)", build_forms)
     timed("handwriting", build_handwriting)
-    timed("dictionary", build_dictionary)
     timed("code_listing", build_code_listing)
     timed("DocLayNet-v1.2", build_doclaynet)
-    timed("books_technical", build_books_technical)
-    timed("books_nontechnical", build_books_nontechnical)
+    timed("books", build_books)
 
     remainder = TOTAL_TARGET - len(ROWS)
     print(f"\nfixed categories total: {len(ROWS)}; remainder: {remainder}")

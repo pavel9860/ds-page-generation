@@ -1,15 +1,76 @@
 import os
 
 import fitz
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 from text_extract import clean_plain_text_blob, join_pages, split_pages
+from text_fonts import SCRIPT_FONTS
 
 L = "/run/media/me/D/ML_DS/UVTM/Layouts"
 RENDER_LONG_EDGE = 1600
 TEXTS_CHARS_PER_PAGE = 1800
 
 _texts_pages_cache: dict[str, list[str]] = {}
+
+CJK_RANGES = ((0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0xF900, 0xFAFF), (0x3000, 0x303F))
+
+
+def _is_cjk(ch: str) -> bool:
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in CJK_RANGES)
+
+
+def _patch_broken_cjk_glyphs(img: Image.Image, page, zoom: float) -> None:
+    """Some PDFs (bad OCR/pirate conversions) map CJK text through a Latin-only font
+    subset under Identity-H encoding: character extraction works, but the font has no
+    glyph outlines to draw, so the page renders with invisible CJK text. Detect any CJK
+    characters via the text layer and redraw them with a real CJK font at their recorded
+    position — fixes the page instead of discarding it."""
+    raw = page.get_text("rawdict")
+    spans = [span
+             for block in raw.get("blocks", [])
+             for line in block.get("lines", [])
+             for span in line.get("spans", [])
+             if any(_is_cjk(ch["c"]) for ch in span.get("chars", []))]
+    if not spans:
+        return
+
+    # The PDF's own per-character advance widths are corrupted too (the broken font's
+    # width table reports each CJK char far narrower than it actually draws), so trusting
+    # per-character x positions guarantees overlap no matter which font draws them. Instead,
+    # anchor once at the span's start and lay every character out using our own font's
+    # natural advance.
+    font_path, font_index = SCRIPT_FONTS["zh"]
+    draw = ImageDraw.Draw(img)
+    font_cache: dict[int, ImageFont.FreeTypeFont] = {}
+    for span in spans:
+        size = max(6, round(span["size"] * zoom))
+        font = font_cache.get(size)
+        if font is None:
+            font = ImageFont.truetype(font_path, size, index=font_index)
+            font_cache[size] = font
+
+        sx0, sy0, sx1, sy1 = [v * zoom for v in span["bbox"]]
+        draw.rectangle([sx0, sy0, sx1, sy1], fill=(255, 255, 255))
+
+        x = span["chars"][0]["origin"][0] * zoom
+        y = span["chars"][0]["origin"][1] * zoom
+        for ch in span["chars"]:
+            draw.text((x, y), ch["c"], font=font, fill=(0, 0, 0), anchor="ls")
+            x += font.getlength(ch["c"])
+
+
+def _render_pdf_page(path: str, page_idx: int, long_edge: int) -> Image.Image:
+    doc = fitz.open(path)
+    page = doc[page_idx]
+    rect = page.rect
+    zoom = (long_edge + 1) / max(rect.width, rect.height)
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+    mode = "RGB" if pix.n < 4 else "RGBA"
+    img = Image.frombytes(mode, (pix.width, pix.height), pix.samples).convert("RGB")
+    _patch_broken_cjk_glyphs(img, page, zoom)
+    doc.close()
+    return img
 
 
 def render_pdf_page(path: str, page_idx: int) -> Image.Image:
@@ -21,6 +82,7 @@ def render_pdf_page(path: str, page_idx: int) -> Image.Image:
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
     mode = "RGB" if pix.n < 4 else "RGBA"
     img = Image.frombytes(mode, (pix.width, pix.height), pix.samples).convert("RGB")
+    _patch_broken_cjk_glyphs(img, page, zoom)
     doc.close()
     return img
 
