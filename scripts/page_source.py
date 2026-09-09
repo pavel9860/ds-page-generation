@@ -21,11 +21,6 @@ def _is_cjk(ch: str) -> bool:
 
 
 def _patch_broken_cjk_glyphs(img: Image.Image, page, zoom: float) -> None:
-    """Some PDFs (bad OCR/pirate conversions) map CJK text through a Latin-only font
-    subset under Identity-H encoding: character extraction works, but the font has no
-    glyph outlines to draw, so the page renders with invisible CJK text. Detect any CJK
-    characters via the text layer and redraw them with a real CJK font at their recorded
-    position — fixes the page instead of discarding it."""
     raw = page.get_text("rawdict")
     spans = [span
              for block in raw.get("blocks", [])
@@ -35,11 +30,6 @@ def _patch_broken_cjk_glyphs(img: Image.Image, page, zoom: float) -> None:
     if not spans:
         return
 
-    # The PDF's own per-character advance widths are corrupted too (the broken font's
-    # width table reports each CJK char far narrower than it actually draws), so trusting
-    # per-character x positions guarantees overlap no matter which font draws them. Instead,
-    # anchor once at the span's start and lay every character out using our own font's
-    # natural advance.
     font_path, font_index = SCRIPT_FONTS["zh"]
     draw = ImageDraw.Draw(img)
     font_cache: dict[int, ImageFont.FreeTypeFont] = {}
@@ -60,11 +50,13 @@ def _patch_broken_cjk_glyphs(img: Image.Image, page, zoom: float) -> None:
             x += font.getlength(ch["c"])
 
 
-def _render_pdf_page(path: str, page_idx: int, long_edge: int) -> Image.Image:
+def _render_pdf_page(path: str, page_idx: int, long_edge: int, min_short_edge: int = 0) -> Image.Image:
     doc = fitz.open(path)
     page = doc[page_idx]
     rect = page.rect
     zoom = (long_edge + 1) / max(rect.width, rect.height)
+    if min_short_edge:
+        zoom = max(zoom, min_short_edge / min(rect.width, rect.height))
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
     mode = "RGB" if pix.n < 4 else "RGBA"
     img = Image.frombytes(mode, (pix.width, pix.height), pix.samples).convert("RGB")
@@ -74,17 +66,7 @@ def _render_pdf_page(path: str, page_idx: int, long_edge: int) -> Image.Image:
 
 
 def render_pdf_page(path: str, page_idx: int) -> Image.Image:
-    doc = fitz.open(path)
-    page = doc[page_idx]
-    rect = page.rect
-    zoom = max((RENDER_LONG_EDGE + 1) / max(rect.width, rect.height),
-               1030 / min(rect.width, rect.height))
-    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-    mode = "RGB" if pix.n < 4 else "RGBA"
-    img = Image.frombytes(mode, (pix.width, pix.height), pix.samples).convert("RGB")
-    _patch_broken_cjk_glyphs(img, page, zoom)
-    doc.close()
-    return img
+    return _render_pdf_page(path, page_idx, RENDER_LONG_EDGE, min_short_edge=1030)
 
 
 def _paginate(cleaned: str) -> list[str]:

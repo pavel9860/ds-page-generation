@@ -52,11 +52,6 @@ def render_source_raster(row: dict) -> Image.Image:
 
 def _axis_layout(b0: float, b1: float, dim: float, side: float, m_lo: float, m_hi: float,
                   rng: random.Random) -> tuple[float, float, float]:
-    """Returns (margin_lo_px, content_src_start, content_len): content_len source pixels
-    starting at content_src_start get placed in the canvas starting at margin_lo_px, so the
-    margin on both sides of that placed content is always exactly m_lo*side / m_hi*side —
-    padded with extra slack if the content is smaller than the margin-reserved span, or
-    cropped to that span (never touching the reserved margins) if it's bigger."""
     content_span = side * (1 - m_lo - m_hi)
     if dim <= content_span:
         slack = content_span - dim
@@ -92,6 +87,18 @@ def _margin_limited_box(content_box: tuple[float, float, float, float],
     return (m_left * page_w, m_top * page_h, page_w - m_right * page_w, page_h - m_bottom * page_h)
 
 
+def _scan_fill_ok(bgr: np.ndarray, check_photo: bool) -> bool:
+    h, w = bgr.shape[:2]
+    measure_box = _margin_limited_box(detect_content_box_scan(bgr), w, h)
+    n_empty, n_photo, n_text = classify_patches_scan(bgr, measure_box)
+    n_occupied = n_photo + n_text
+    if n_occupied / (n_empty + n_occupied) < MIN_PATCH_FILL_SCAN:
+        return False
+    if not check_photo:
+        return True
+    return (n_photo / n_occupied if n_occupied else 0.0) < MAX_PHOTO_PATCH_FRACTION
+
+
 def predict_fill_ok(fmt: str, path: str, page: int) -> bool:
     if fmt == "pdf":
         doc = fitz.open(path)
@@ -106,26 +113,13 @@ def predict_fill_ok(fmt: str, path: str, page: int) -> bool:
             measure_box = _margin_limited_box(content_box, page_w, page_h)
             return patch_fill_ratio_boxes(boxes, measure_box) >= MIN_PATCH_FILL_PDF
 
-        # No text layer (scanned page) — only path that needs an actual raster.
         img = _render_pdf_page(path, page, 400)
         bgr = np.array(img)[:, :, ::-1].copy()
-        page_h, page_w = bgr.shape[:2]
-        content_box = detect_content_box_scan(bgr)
-        measure_box = _margin_limited_box(content_box, page_w, page_h)
-        n_empty, n_photo, n_text = classify_patches_scan(bgr, measure_box)
-        return (n_photo + n_text) / (n_empty + n_photo + n_text) >= MIN_PATCH_FILL_SCAN
+        return _scan_fill_ok(bgr, check_photo=False)
 
     img = Image.open(path).convert("RGB")
     bgr = np.array(img)[:, :, ::-1].copy()
-
-    page_h, page_w = bgr.shape[:2]
-    content_box = detect_content_box_scan(bgr)
-    measure_box = _margin_limited_box(content_box, page_w, page_h)
-    n_empty, n_photo, n_text = classify_patches_scan(bgr, measure_box)
-    n_occupied = n_photo + n_text
-    if n_occupied / (n_empty + n_occupied) < MIN_PATCH_FILL_SCAN:
-        return False
-    return (n_photo / n_occupied if n_occupied else 0.0) < MAX_PHOTO_PATCH_FRACTION
+    return _scan_fill_ok(bgr, check_photo=True)
 
 
 def make_image_texture(row: dict, rng: random.Random) -> Image.Image:
