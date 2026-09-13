@@ -10,6 +10,7 @@ steeply foreshortened but unoccluded point is still visible in a real
 photo, so masking it out would remove real, valid points. The only
 legitimate exclusion is genuine self-occlusion (render.py's bridging check).
 """
+import cv2
 import numpy as np
 
 from . import config as cfg
@@ -178,6 +179,31 @@ def make_surface(rng, span, ppmm, severity=1.0, add_creases=None):
         out += undul['A'] * np.sin(2 * np.pi * (undul['fx'] * U + undul['fy'] * V) + undul['ph'])
         return out
     return z
+
+
+def _resample_rows_by_arclength(P, n_out):
+    """Resample each row of P (rows, hi, 3) to n_out points equally spaced
+    in cumulative 3D arc length along the row, via cv2.remap."""
+    d = np.linalg.norm(np.diff(P, axis=1), axis=-1)
+    s = np.concatenate([np.zeros((P.shape[0], 1)), np.cumsum(d, axis=1)], axis=1)
+    s_out = np.linspace(0, s[:, -1], n_out, axis=1)
+    idx = np.stack([np.interp(s_out[i], s[i], np.arange(s.shape[1])) for i in range(s.shape[0])])
+    rows_y = np.repeat(np.arange(P.shape[0])[:, None], n_out, axis=1).astype(np.float32)
+    return cv2.remap(P.astype(np.float32), idx.astype(np.float32), rows_y, cv2.INTER_LINEAR)
+
+
+def isometric_mesh(zf, mm_w, mm_h, n, upsample=4):
+    """XYZ mesh with true 3D arc-length spacing, replacing the regular-XY
+    Monge patch (X=U, Y=V, Z=zf(U,V)), which stretches wherever it bends.
+    Samples zf on a fine regular grid, then resamples rows then columns to
+    n points each, equally spaced in cumulative arc length."""
+    u = np.linspace(0, mm_w, n * upsample)
+    v = np.linspace(0, mm_h, n * upsample)
+    U, V = np.meshgrid(u, v)
+    P = np.stack([U, V, zf(U, V)], axis=-1)
+    rows = _resample_rows_by_arclength(P, n)
+    cols = _resample_rows_by_arclength(rows.transpose(1, 0, 2), n)
+    return cols[..., 0], cols[..., 1], cols[..., 2]
 
 
 def surface_normal(zf, U, V, eps=0.3):

@@ -174,10 +174,13 @@ def _pick_font(rng, font_files: tuple, font_px: int, chars, tries: int = 5):
 
 def render_flat_text(text: str, rng, page_px: int, page_mm: float, font_files: tuple,
                      font_pt_range=cfg.TEXT_FONT_PT_RANGE, margin_mm=cfg.TEXT_MARGIN_MM,
-                     line_spacing_range=cfg.TEXT_LINE_SPACING_RANGE) -> np.ndarray:
+                     line_spacing_range=cfg.TEXT_LINE_SPACING_RANGE,
+                     add_old_creases: bool = True) -> np.ndarray:
     """-> float32 (page_px, page_px) in [INK, PAPER]. Single-column, no
     kerning. Same tone convention and print defects (old-crease ink smear,
-    fiber/grain noise) as texture.render_grid_texture."""
+    fiber/grain noise) as texture.render_grid_texture. `add_old_creases`:
+    the 2D print-stage old-crease ink-smear defect; False skips it
+    entirely (changes the rng draw sequence vs. the flag being on)."""
     px_per_mm = page_px / page_mm
     pt = rng.uniform(*font_pt_range)
     font_px = max(4, round(pt * 0.3528 * px_per_mm))   # 1pt = 0.3528mm
@@ -249,7 +252,7 @@ def render_flat_text(text: str, rng, page_px: int, page_mm: float, font_files: t
 
     tex = cfg.INK + (cfg.PAPER - cfg.INK) * (page.astype(np.float32) / 255.0)
 
-    old_creases = make_old_creases(rng, page_mm)
+    old_creases = make_old_creases(rng, page_mm) if add_old_creases else []
     if old_creases:
         mx, my = np.meshgrid(np.arange(w, dtype=np.float32) / px_per_mm,
                              np.arange(h, dtype=np.float32) / px_per_mm)

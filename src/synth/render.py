@@ -124,8 +124,10 @@ def _diffuse_blob(out_size, rng, size_px, sharp=False, center=None):
 
 def _local_blur(img, out_size, rng, blur_scale=1.0):
     """A local smudge (isotropic blob, e.g. thumb print) -- distinct from
-    _camera_shake below, which is directional and whole-frame."""
-    if rng.random() >= cfg.LOCAL_BLUR_PROB:
+    _camera_shake below, which is directional and whole-frame. blur_scale<=0
+    means "no blur", not GaussianBlur(sigma=0) (which OpenCV rejects when
+    ksize is also unset)."""
+    if blur_scale <= 0 or rng.random() >= cfg.LOCAL_BLUR_PROB:
         return img
     region = _diffuse_blob(out_size, rng, rng.uniform(*cfg.LOCAL_BLUR_SIZE_PX))
     sigma = rng.uniform(*cfg.LOCAL_BLUR_SIGMA) * blur_scale
@@ -135,8 +137,10 @@ def _local_blur(img, out_size, rng, blur_scale=1.0):
 
 def _camera_shake(img, rng, blur_scale=1.0):
     """Whole-frame directional motion blur -- a real hand-shake PSF is a
-    short streak hitting every pixel, unlike the local smudge above."""
-    if rng.random() >= cfg.CAMERA_SHAKE_PROB:
+    short streak hitting every pixel, unlike the local smudge above.
+    blur_scale<=0 means "no blur" (the kernel-length floor below would
+    otherwise still apply a minimum 3px streak)."""
+    if blur_scale <= 0 or rng.random() >= cfg.CAMERA_SHAKE_PROB:
         return img
     length = max(int(round(rng.uniform(*cfg.CAMERA_SHAKE_LENGTH_PX) * blur_scale)), 3)
     angle = rng.uniform(*cfg.CAMERA_SHAKE_ANGLE_DEG)

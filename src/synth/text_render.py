@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 from . import config as cfg
-from .geometry import make_surface, project, retry_camera, rotation_matrix
+from .geometry import isometric_mesh, make_surface, project, retry_camera, rotation_matrix
 from .newton_cpu import newton_uv_invert as _newton_uv_invert_generic
 from .render import CAP_DEG, emulate_photo
 from .text_texture import render_flat_text, sample_snippet
@@ -92,17 +92,17 @@ def _downsample_masked(arrs: list, mask: np.ndarray, out_n: int) -> tuple:
     return out, m_ds > 0.999
 
 
-def _build_maps(U: np.ndarray, V: np.ndarray, Z: np.ndarray, page: np.ndarray, uv_size: int) -> tuple:
-    """(uv_map, map3d), both (uv_size, uv_size, C) float32, photo-pixel
-    indexed, NaN off-page. uv_map: [0,1] flat-texture coords (C=2). map3d:
-    (U, V, Z) mm surface coords (C=3). U/V/Z/page are the full-resolution
-    Newton inverse (accurate to <0.5px, see newton_uv_invert) -- downsampled
-    here, not re-solved at uv_size (camera intrinsics are fit to out_size)."""
-    (Uds, Vds, Zds), valid = _downsample_masked([U, V, Z], page, uv_size)
+def _build_maps(U: np.ndarray, V: np.ndarray, page: np.ndarray, zf, uv_size: int) -> tuple:
+    """uv_map: (uv_size, uv_size, 2) float32, photo-pixel indexed, [0,1]
+    flat-texture coords, NaN off-page (downsampled from the full-res Newton
+    inverse). map3d: (uv_size, uv_size, 3) float32, the page's own isometric
+    mesh (arc-length spacing, not photo-pixel indexed) -- ground truth for
+    the physical 3D shape, independent of camera/photo pixels."""
+    (Uds, Vds), valid = _downsample_masked([U, V], page, uv_size)
     uv_map = np.stack([Uds / PAGE_MM, Vds / PAGE_MM], axis=-1).astype(np.float32)
-    map3d = np.stack([Uds, Vds, Zds], axis=-1).astype(np.float32)
     uv_map[~valid] = np.nan
-    map3d[~valid] = np.nan
+    X, Y, Z = isometric_mesh(zf, PAGE_MM, PAGE_MM, uv_size)
+    map3d = np.stack([X, Y, Z], axis=-1).astype(np.float32)
     return uv_map, map3d
 
 
@@ -144,7 +144,7 @@ def render_text_raw(seed, corpus_paths, font_files, out_size=cfg.TEXT_CANVAS, uv
     mapx, mapy = (U * PPMM).astype(np.float32), (V * PPMM).astype(np.float32)
     img = cv2.remap(tex, mapx, mapy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
 
-    uv_map, map3d = _build_maps(U, V, zf(U, V), page, uv_size)
+    uv_map, map3d = _build_maps(U, V, page, zf, uv_size)
     return img, depth, page, cam, zf, uv_map, tex, map3d
 
 
