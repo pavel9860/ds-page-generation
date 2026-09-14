@@ -201,9 +201,10 @@ def isometric_mesh(zf, mm_w, mm_h, n, upsample=4):
     v = np.linspace(0, mm_h, n * upsample)
     U, V = np.meshgrid(u, v)
     P = np.stack([U, V, zf(U, V)], axis=-1)
-    rows = _resample_rows_by_arclength(P, n)
-    cols = _resample_rows_by_arclength(rows.transpose(1, 0, 2), n)
-    return cols[..., 0], cols[..., 1], cols[..., 2]
+    rows = _resample_rows_by_arclength(P, n)                      # (v, u_resampled, 3)
+    cols = _resample_rows_by_arclength(rows.transpose(1, 0, 2), n)  # (u_resampled, v_resampled, 3)
+    out = cols.transpose(1, 0, 2)                                  # (v_resampled, u_resampled, 3)
+    return out[..., 0], out[..., 1], out[..., 2]
 
 
 def surface_normal(zf, U, V, eps=0.3):
