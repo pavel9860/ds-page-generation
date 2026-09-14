@@ -75,19 +75,21 @@ def _flat_to_photo_map(zf, cam, n):
 
 
 def _build_maps(cam, zf, uv_size: int, out_size: int) -> tuple:
-    """Both flat-page indexed (the page's own isometric mesh, arc-length
-    spacing -- same (uv_size, uv_size) grid nodes for both, so uv_map[i,j]
-    and map3d[i,j] describe the same physical point): map3d: (uv_size,
-    uv_size, 3) float32 (X, Y, Z) mm surface coords -- ground truth 3D
+    """map3d: (uv_size, uv_size, 3) float32 (X, Y, Z) mm surface coords --
+    the page's own isometric mesh (arc-length spacing) -- ground truth 3D
     shape, independent of the camera. uv_map: (uv_size, uv_size, 2)
-    float32, [0,1] photo-pixel coords of where that same mesh point
-    projects to in the warped/photo image -- dense, no off-page masking
-    (every flat-page node gets a value, even if it lands outside the photo
-    frame or is self-occluded there; unlike the old photo-pixel-indexed
-    scatter, this never drops nodes to NaN)."""
+    float32, [0,1] photo-pixel coords -- projected from the REGULAR flat
+    mm grid (_flat_grid, same indexing as the flat-page raster itself, NOT
+    the arc-length mesh above: uv_size index (i,j) must line up with
+    flat_page pixel (i,j) resized to uv_size, since it's used to gather
+    photo pixels back into flat-raster layout -- using the arc-length grid
+    here instead measurably warps that reconstruction, since arc length
+    only equals chord length on an unbent page). Dense, no off-page
+    masking (every flat-page node gets a value, even where it lands
+    outside the photo frame or is self-occluded there)."""
     X, Y, Z = isometric_mesh(zf, PAGE_MM, PAGE_MM, uv_size)
     map3d = np.stack([X, Y, Z], axis=-1).astype(np.float32)
-    px, py, _ = project(X, Y, Z, cam)
+    mu, mv, px, py = _flat_to_photo_map(zf, cam, uv_size)
     uv_map = np.stack([px / out_size, py / out_size], axis=-1).astype(np.float32)
     return uv_map, map3d
 
