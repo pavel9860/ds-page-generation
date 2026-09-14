@@ -66,43 +66,29 @@ def _camera_for_surface(rng, zf, out_size, n=cfg.CAMERA_RESAMPLE_N, az_tries=cfg
 
 
 def _flat_to_photo_map(zf, cam, n):
-    """Regular (n,n) flat-UV grid (mm) projected into photo-pixel space.
-    Shared by uv_map construction (forward: photo pixel -> flat UV,
-    scattered) and backward rectification (flat pixel -> photo pixel,
-    gathered) -- same underlying projection, opposite consumption."""
+    """Regular (n,n) flat-UV grid (mm) projected into photo-pixel space --
+    used by rectify_backward (flat pixel -> photo pixel, gathered)."""
     mu, mv = _flat_grid(n)
     mz = zf(mu, mv)
     px, py, _ = project(mu, mv, mz, cam)
     return mu, mv, px, py
 
 
-def _downsample_masked(arrs: list, mask: np.ndarray, out_n: int) -> tuple:
-    """Mask-aware area-average downsample (unpremultiplied alpha: weight by
-    mask, resize, divide back out) of same-shape arrays to (out_n, out_n).
-    Not a nearest-cell scatter of a coarse lattice -- averages the accurate
-    per-pixel field, so output values aren't artifically snapped to any
-    lattice spacing."""
-    m = mask.astype(np.float32)
-    m_ds = cv2.resize(m, (out_n, out_n), interpolation=cv2.INTER_AREA)
-    out = []
-    for a in arrs:
-        a_ds = cv2.resize((a * mask).astype(np.float32), (out_n, out_n), interpolation=cv2.INTER_AREA)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            out.append(a_ds / m_ds)
-    return out, m_ds > 0.999
-
-
-def _build_maps(U: np.ndarray, V: np.ndarray, page: np.ndarray, zf, uv_size: int) -> tuple:
-    """uv_map: (uv_size, uv_size, 2) float32, photo-pixel indexed, [0,1]
-    flat-texture coords, NaN off-page (downsampled from the full-res Newton
-    inverse). map3d: (uv_size, uv_size, 3) float32, the page's own isometric
-    mesh (arc-length spacing, not photo-pixel indexed) -- ground truth for
-    the physical 3D shape, independent of camera/photo pixels."""
-    (Uds, Vds), valid = _downsample_masked([U, V], page, uv_size)
-    uv_map = np.stack([Uds / PAGE_MM, Vds / PAGE_MM], axis=-1).astype(np.float32)
-    uv_map[~valid] = np.nan
+def _build_maps(cam, zf, uv_size: int, out_size: int) -> tuple:
+    """Both flat-page indexed (the page's own isometric mesh, arc-length
+    spacing -- same (uv_size, uv_size) grid nodes for both, so uv_map[i,j]
+    and map3d[i,j] describe the same physical point): map3d: (uv_size,
+    uv_size, 3) float32 (X, Y, Z) mm surface coords -- ground truth 3D
+    shape, independent of the camera. uv_map: (uv_size, uv_size, 2)
+    float32, [0,1] photo-pixel coords of where that same mesh point
+    projects to in the warped/photo image -- dense, no off-page masking
+    (every flat-page node gets a value, even if it lands outside the photo
+    frame or is self-occluded there; unlike the old photo-pixel-indexed
+    scatter, this never drops nodes to NaN)."""
     X, Y, Z = isometric_mesh(zf, PAGE_MM, PAGE_MM, uv_size)
     map3d = np.stack([X, Y, Z], axis=-1).astype(np.float32)
+    px, py, _ = project(X, Y, Z, cam)
+    uv_map = np.stack([px / out_size, py / out_size], axis=-1).astype(np.float32)
     return uv_map, map3d
 
 
@@ -121,9 +107,10 @@ def rectify_backward(zf, cam, rgb_hr, out_size, page_px=PAGE_PX, bg_value=cfg.TE
 def render_text_raw(seed, corpus_paths, font_files, out_size=cfg.TEXT_CANVAS, uv_size=cfg.TEXT_UV_SIZE,
                     flat_tex=None, add_creases=None):
     """One text-page sample: (img, depth, page, cam, zf, uv_map, flat_tex)
-    at CPU resolution `out_size`. uv_map: (uv_size, uv_size, 2) float32 in
-    [0,1] flat-texture coords, NaN where off-page. flat_tex: the source
-    flat page (post rotate-aug, pre-warp), float32 (PAGE_PX, PAGE_PX).
+    at CPU resolution `out_size`. uv_map: (uv_size, uv_size, 2) float32,
+    flat-page indexed (see _build_maps), [0,1] photo-pixel coords -- dense,
+    no off-page NaNs. flat_tex: the source flat page (post rotate-aug,
+    pre-warp), float32 (PAGE_PX, PAGE_PX).
     `flat_tex`: if given (float32, PAGE_PX x PAGE_PX, INK/PAPER-scaled
     reflectance), used as the flat page instead of synthesizing one with
     render_flat_text -- corpus_paths/font_files are then ignored.
@@ -147,7 +134,7 @@ def render_text_raw(seed, corpus_paths, font_files, out_size=cfg.TEXT_CANVAS, uv
     mapx, mapy = (U * PPMM).astype(np.float32), (V * PPMM).astype(np.float32)
     img = cv2.remap(tex, mapx, mapy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
 
-    uv_map, map3d = _build_maps(U, V, page, zf, uv_size)
+    uv_map, map3d = _build_maps(cam, zf, uv_size, out_size)
     return img, depth, page, cam, zf, uv_map, tex, map3d
 
 
@@ -156,8 +143,8 @@ def generate_text(seed, corpus_paths, font_files, out_size=cfg.TEXT_CANVAS, uv_s
     """render_text_raw + stage-4 photo emulation. Returns (photo_hr,
     photo_lowres, uv_map, flat_page, cam, zf, map3d); cam/zf are for
     diagnostics (rectify_backward, quiver visualization). map3d: (uv_size,
-    uv_size, 3) float32 (U, V, Z) mm surface coords, NaN off-page.
-    `flat_tex`: see render_text_raw."""
+    uv_size, 3) float32 (X, Y, Z) mm surface coords, flat-page indexed,
+    dense (see _build_maps). `flat_tex`: see render_text_raw."""
     img, depth, page, cam, zf, uv_map, tex, map3d = render_text_raw(seed, corpus_paths, font_files,
                                                                       out_size, uv_size, flat_tex)
     rng = np.random.default_rng(seed * cfg.EXPORT_SEED_MULT + 3)

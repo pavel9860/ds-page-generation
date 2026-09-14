@@ -10,8 +10,10 @@ forced off below. Mirrors the input dataset's own train/test/val split (by
 directory) rather than re-splitting. One .npz per sample:
   original : (1024,1024) uint8     -- the source flat page, unmodified
   warped   : (1024,1024,3) uint8   -- warped page (stage 4, no shading)
-  uv       : (256,256,2) float16   -- [0,1] flat-texture coords, NaN off-page
-  map3d    : (256,256,3) float16   -- (U,V,Z) mm surface coords, NaN off-page
+  uv       : (256,256,2) float16   -- flat-page indexed, [0,1] photo-pixel
+                                       coords, dense (no off-page masking)
+  map3d    : (256,256,3) float16   -- flat-page indexed, (X,Y,Z) mm surface
+                                       coords, dense (no off-page masking)
 
 Run (from repo root):
     .venv/bin/python src/tools/export_uv_from_images.py from-images \\
