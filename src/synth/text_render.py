@@ -119,17 +119,20 @@ def rectify_backward(zf, cam, rgb_hr, out_size, page_px=PAGE_PX, bg_value=cfg.TE
 
 
 def render_text_raw(seed, corpus_paths, font_files, out_size=cfg.TEXT_CANVAS, uv_size=cfg.TEXT_UV_SIZE,
-                    flat_tex=None):
+                    flat_tex=None, add_creases=None):
     """One text-page sample: (img, depth, page, cam, zf, uv_map, flat_tex)
     at CPU resolution `out_size`. uv_map: (uv_size, uv_size, 2) float32 in
     [0,1] flat-texture coords, NaN where off-page. flat_tex: the source
     flat page (post rotate-aug, pre-warp), float32 (PAGE_PX, PAGE_PX).
     `flat_tex`: if given (float32, PAGE_PX x PAGE_PX, INK/PAPER-scaled
     reflectance), used as the flat page instead of synthesizing one with
-    render_flat_text -- corpus_paths/font_files are then ignored."""
+    render_flat_text -- corpus_paths/font_files are then ignored.
+    `add_creases`: forwarded to make_surface -- the 3D crease/fold/bend
+    network on the page's own height field (None draws it internally at
+    CREASE_CLUSTER_PROB, same as before; False disables it entirely)."""
     rng = np.random.default_rng(seed)
     severity = rng.uniform(*cfg.SEVERITY_RANGE)
-    zf = make_surface(rng, span=PAGE_MM, ppmm=PPMM, severity=severity)
+    zf = make_surface(rng, span=PAGE_MM, ppmm=PPMM, severity=severity, add_creases=add_creases)
     cam = _camera_for_surface(rng, zf, out_size)
 
     if flat_tex is not None:

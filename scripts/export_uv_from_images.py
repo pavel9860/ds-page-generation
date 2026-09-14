@@ -199,7 +199,7 @@ def _make_triptych(flat_u8: np.ndarray, warped_rgb: np.ndarray, dewarped_rgb: np
 
 
 def _render_text_sample(seed, text, font_files, font_pt_range, shade_enabled, add_old_creases,
-                        blur_scale, lowres_px, flat_tex=None):
+                        blur_scale, lowres_px, flat_tex=None, add_3d_creases=None):
     """Shared by _one_overfit and _one_pdf_page: render_flat_text -> the
     text_render warp+photo pipeline -> flat/warped/dewarped + maps. `text`
     is used as-is; render_flat_text itself crops it to whatever fits the
@@ -207,7 +207,9 @@ def _render_text_sample(seed, text, font_files, font_pt_range, shade_enabled, ad
     pipeline's snippet handling. `flat_tex`: if given (float32, PAGE_PX x
     PAGE_PX, INK/PAPER-scaled), used as the flat page directly instead of
     synthesizing one with render_flat_text -- `text`/font_pt_range/
-    add_old_creases are then ignored (e.g. an actual rasterized PDF page)."""
+    add_old_creases are then ignored (e.g. an actual rasterized PDF page).
+    `add_3d_creases`: forwarded to render_text_raw/make_surface (None:
+    drawn internally at CREASE_CLUSTER_PROB; False: disabled)."""
     from src.synth import config as cfg
     from src.synth.render import emulate_photo
     from src.synth.text_render import PAGE_MM, PAGE_PX, render_text_raw, rectify_backward
@@ -220,7 +222,7 @@ def _render_text_sample(seed, text, font_files, font_pt_range, shade_enabled, ad
     tex = flat_tex
 
     img, depth, page, cam, zf, uv_map, tex, map3d = render_text_raw(
-        seed, corpus_paths=None, font_files=font_files, flat_tex=tex)
+        seed, corpus_paths=None, font_files=font_files, flat_tex=tex, add_creases=add_3d_creases)
 
     rng2 = np.random.default_rng(seed * cfg.EXPORT_SEED_MULT + 3)
     warped, _ = emulate_photo(img, depth, page, cam, cfg.TEXT_CANVAS, rng2, bg_value=cfg.TEXT_BG_GRAY,
@@ -247,13 +249,13 @@ def _save_sample(stem, out_dir, vis_dir, flat_page, flat_page_lowres, warped, de
 
 def _one_overfit(job):
     (idx, group, seed, corpus_paths, font_files, font_pt_range, out_dir, vis_dir,
-     shade_enabled, add_old_creases, blur_scale, lowres_px) = job
+     shade_enabled, add_old_creases, blur_scale, lowres_px, add_3d_creases) = job
     from src.synth.text_texture import sample_snippet
 
     rng = np.random.default_rng(seed)
     snippet = sample_snippet(corpus_paths, rng)
     sample = _render_text_sample(seed, snippet, font_files, font_pt_range, shade_enabled,
-                                 add_old_creases, blur_scale, lowres_px)
+                                 add_old_creases, blur_scale, lowres_px, add_3d_creases=add_3d_creases)
     stem = f"{idx:03d}_{group}_{seed}"
     _save_sample(stem, out_dir, vis_dir, *sample)
     return stem
@@ -282,11 +284,12 @@ def _pdf_first_page_tex(pdf_path: str, page_px: int, zoom: float = 3.0) -> np.nd
 
 def _one_pdf_page(job):
     (idx, pdf_path, font_files, font_pt_range, out_dir, vis_dir,
-     shade_enabled, add_old_creases, blur_scale, lowres_px, seed) = job
+     shade_enabled, add_old_creases, blur_scale, lowres_px, seed, add_3d_creases) = job
     from src.synth.text_render import PAGE_PX
     flat_tex = _pdf_first_page_tex(pdf_path, PAGE_PX)
     sample = _render_text_sample(seed, None, font_files, font_pt_range, shade_enabled,
-                                 add_old_creases, blur_scale, lowres_px, flat_tex=flat_tex)
+                                 add_old_creases, blur_scale, lowres_px, flat_tex=flat_tex,
+                                 add_3d_creases=add_3d_creases)
     stem = f"{idx:03d}_{Path(pdf_path).stem}"
     _save_sample(stem, out_dir, vis_dir, *sample)
     return stem
@@ -294,7 +297,8 @@ def _one_pdf_page(job):
 
 def main_overfit(texts_dir, out_root, n, seed0, workers, font_pt_min, font_pt_max,
                  shade_enabled=True, add_old_creases=True, tag=None, blur_scale=None,
-                 out_dir=None, vis_dir=None, lowres_px=cfg.TEXT_LOWRES_PX, uniform_corpus=False):
+                 out_dir=None, vis_dir=None, lowres_px=cfg.TEXT_LOWRES_PX, uniform_corpus=False,
+                 add_3d_creases=None):
     tag = tag if tag is not None else str(n)
     out_dir = Path(out_dir) if out_dir is not None else Path(out_root) / f"overfitting_set_{tag}"
     vis_dir = Path(vis_dir) if vis_dir is not None else Path(out_root) / f"overfit_{tag}_vis"
@@ -317,7 +321,7 @@ def main_overfit(texts_dir, out_root, n, seed0, workers, font_pt_min, font_pt_ma
             for _ in range(count):
                 jobs.append((idx, group, seed0 + idx, groups[group], font_files,
                             font_pt_range, out_dir, vis_dir, shade_enabled, add_old_creases,
-                            blur_scale, lowres_px))
+                            blur_scale, lowres_px, add_3d_creases))
                 idx += 1
 
         t0 = time.time()
@@ -333,7 +337,7 @@ def main_overfit(texts_dir, out_root, n, seed0, workers, font_pt_min, font_pt_ma
 
 def main_pdf_pages(pdf_dir, data_dir, vis_dir, n, seed0, workers, font_pt_min, font_pt_max,
                    shade_enabled=True, add_old_creases=True, blur_scale=None,
-                   lowres_px=cfg.TEXT_LOWRES_PX):
+                   lowres_px=cfg.TEXT_LOWRES_PX, add_3d_creases=None):
     """The first `n` PDFs (sorted by filename) under pdf_dir, one sample
     each -- each sample's flat page is that PDF's own first page,
     rasterized and cropped to its real content (0 margin, 100% fill), not
@@ -355,7 +359,7 @@ def main_pdf_pages(pdf_dir, data_dir, vis_dir, n, seed0, workers, font_pt_min, f
     cfg.TEXT_FILL_FRAC_RANGE = (1.0, 1.0)
     try:
         jobs = [(idx, p, None, font_pt_range, out_dir, vis_dir,
-                shade_enabled, add_old_creases, blur_scale, lowres_px, seed0 + idx)
+                shade_enabled, add_old_creases, blur_scale, lowres_px, seed0 + idx, add_3d_creases)
                for idx, p in enumerate(pdf_paths)]
 
         t0 = time.time()
@@ -404,6 +408,9 @@ if __name__ == "__main__":
                       help="sample books uniformly across the whole corpus (no en/eu/cyr "
                            "stratification) -- matches the lang/font/font-size distribution "
                            "of the original from-scratch renders (e.g. 100k_1024_1024_v2.0.2)")
+    p_of.add_argument("--no_3d_creases", action="store_true",
+                      help="disable the 3D crease/fold/bend network on the page's height field "
+                           "(default: drawn internally at CREASE_CLUSTER_PROB)")
 
     p_pdf = sub.add_parser("pdf-pages")
     p_pdf.add_argument("--pdf_dir", required=True, help="dir of *.pdf; first `n` by filename are used")
@@ -422,6 +429,9 @@ if __name__ == "__main__":
                             "(default: cfg.TEXT_BLUR_SCALE)")
     p_pdf.add_argument("--lowres_px", type=int, default=cfg.TEXT_LOWRES_PX,
                        help="side of the low-res flat page saved as 'original_lowres' in each .npz")
+    p_pdf.add_argument("--no_3d_creases", action="store_true",
+                       help="disable the 3D crease/fold/bend network on the page's height field "
+                            "(default: drawn internally at CREASE_CLUSTER_PROB)")
 
     args = ap.parse_args()
     if args.cmd == "from-images":
@@ -432,9 +442,11 @@ if __name__ == "__main__":
                      shade_enabled=not args.no_shade, add_old_creases=not args.no_creases,
                      tag=args.tag, blur_scale=args.blur_scale,
                      out_dir=args.data_dir, vis_dir=args.vis_dir, lowres_px=args.lowres_px,
-                     uniform_corpus=args.uniform_corpus)
+                     uniform_corpus=args.uniform_corpus,
+                     add_3d_creases=(False if args.no_3d_creases else None))
     else:
         main_pdf_pages(args.pdf_dir, args.data_dir, args.vis_dir, args.n, args.seed0, args.workers,
                       args.font_pt_min, args.font_pt_max,
                       shade_enabled=not args.no_shade, add_old_creases=not args.no_creases,
-                      blur_scale=args.blur_scale, lowres_px=args.lowres_px)
+                      blur_scale=args.blur_scale, lowres_px=args.lowres_px,
+                      add_3d_creases=(False if args.no_3d_creases else None))
