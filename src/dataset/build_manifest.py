@@ -51,10 +51,9 @@ def _page_indices(page_count: int, cap: int = PAGES_PER_PDF_CAP) -> list:
 # per-page processing, shared by pdf and image sources
 # ---------------------------------------------------------------------------
 
-def _process_gray(gray: np.ndarray, rng, allow_deskew: bool = False):
+def _process_gray(gray: np.ndarray, rng):
     from src.dataset.content_filter import has_enough_content
     from src.dataset.crop import select_crop_1024
-    from src.dataset.deskew import estimate_deskew_angle, needs_deskew, rotate_full_res
 
     if gray.shape[1] > gray.shape[0]:
         gray = cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)
@@ -63,61 +62,116 @@ def _process_gray(gray: np.ndarray, rng, allow_deskew: bool = False):
     if not keep:
         return None
 
-    angle = 0.0
-    did_deskew = False
-    if allow_deskew:
-        angle = estimate_deskew_angle(gray)
-        if needs_deskew(angle):
-            gray = rotate_full_res(gray, angle, fill_value=255)
-            bbox, content_frac, keep = has_enough_content(gray)
-            if not keep:
-                return None
-            did_deskew = True
-        else:
-            angle = 0.0
-
     crop = select_crop_1024(gray, rng, bbox=bbox)
     if crop is None:
         return None
-    return dict(content_frac=round(content_frac, 5), needs_deskew=did_deskew,
-               deskew_angle_deg=round(angle, 3), used_h=gray.shape[0], used_w=gray.shape[1],
-               crop_size=1024, **crop)
+    return dict(content_frac=round(content_frac, 5), needs_deskew=False, deskew_angle_deg=0.0,
+               used_h=gray.shape[0], used_w=gray.shape[1], crop_size=1024, **crop)
 
 
-def _pdf_gray_pages(pdf_path: str, page_indices, zoom=RASTER_ZOOM):
-    import fitz
-    out = []
-    with fitz.open(pdf_path) as doc:
-        for pi in page_indices:
-            if pi >= doc.page_count:
-                continue
-            page = doc[pi]
-            has_text = bool(page.get_text().strip())
-            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), colorspace=fitz.csGRAY, alpha=False)
-            gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
-            out.append((pi, gray, not has_text))
-    return out
+def _pdf_text_blocks_px(page, zoom: float) -> list:
+    return [(b[0] * zoom, b[1] * zoom, b[2] * zoom, b[3] * zoom)
+           for b in page.get_text("blocks") if b[6] == 0]
+
+
+def _occupancy(blocks: list, width: int, height: int, x_off: float = 0.0,
+              y_off: float = 0.0, scale: float = 1.0) -> np.ndarray:
+    mask = np.zeros((height, width), dtype=bool)
+    for x0, y0, x1, y1 in blocks:
+        gx0 = max(0, int((x0 - x_off) * scale))
+        gy0 = max(0, int((y0 - y_off) * scale))
+        gx1 = min(width, int(np.ceil((x1 - x_off) * scale)))
+        gy1 = min(height, int(np.ceil((y1 - y_off) * scale)))
+        if gx1 > gx0 and gy1 > gy0:
+            mask[gy0:gy1, gx0:gx1] = True
+    return mask
+
+
+def _pdf_text_page_info(page, rng, zoom: float = RASTER_ZOOM):
+    """Content bbox + crop window from the page's own text-block
+    coordinates -- no get_pixmap() call, so a born-digital page with a
+    real text layer never gets rasterized during manifest building.
+    None for a landscape page (falls back to the raster path)."""
+    from src.dataset.content_filter import MAX_MARGIN_FRAC, MIN_CONTENT_AREA_FRAC, _bbox_from_mask
+    from src.dataset.crop import CROP_SIZE, PATCH_CONTENT_MIN_FRAC, PATCH_GRID, _Y_STRIDE, _patch_coverage_at
+
+    pw_pt, ph_pt = page.rect.width, page.rect.height
+    if pw_pt > ph_pt:
+        return None
+    used_w, used_h = round(pw_pt * zoom), round(ph_pt * zoom)
+    blocks = _pdf_text_blocks_px(page, zoom)
+    if not blocks:
+        return None
+
+    coarse_scale = min(1.0, 512 / max(used_w, used_h))
+    cw, ch = max(1, round(used_w * coarse_scale)), max(1, round(used_h * coarse_scale))
+    coarse_mask = _occupancy(blocks, cw, ch, scale=coarse_scale)
+    bbox = _bbox_from_mask(coarse_mask)
+    if bbox is None:
+        return None
+    y0, y1, x0, x1 = bbox
+    inv = 1.0 / coarse_scale
+    by0, by1 = int(y0 * inv), min(used_h - 1, int(y1 * inv) + 1)
+    bx0, bx1 = int(x0 * inv), min(used_w - 1, int(x1 * inv) + 1)
+    bbox_h, bbox_w = by1 - by0 + 1, bx1 - bx0 + 1
+
+    h_margin = 1.0 - bbox_h / used_h
+    w_margin = 1.0 - bbox_w / used_w
+    area_frac = (bbox_h * bbox_w) / (used_h * used_w)
+    if area_frac < MIN_CONTENT_AREA_FRAC or h_margin > MAX_MARGIN_FRAC or w_margin > MAX_MARGIN_FRAC:
+        return None
+
+    size = CROP_SIZE
+    strip_scale = size / bbox_w
+    sh = max(1, round(bbox_h * strip_scale))
+    if sh < size:
+        return None
+    strip_mask = _occupancy(blocks, size, sh, x_off=bx0, y_off=by0, scale=strip_scale)
+    integral = cv2.integral(strip_mask.astype(np.uint8))
+    max_y0 = sh - size
+    candidates = list(range(0, max_y0 + 1, _Y_STRIDE))
+    if candidates[-1] != max_y0:
+        candidates.append(max_y0)
+    qualifying = [y for y in candidates
+                 if _patch_coverage_at(integral, y, size, PATCH_GRID) >= PATCH_CONTENT_MIN_FRAC]
+    if not qualifying:
+        return None
+
+    return dict(content_frac=round(float(coarse_mask.mean()), 5), needs_deskew=False,
+               deskew_angle_deg=0.0, used_h=used_h, used_w=used_w, crop_size=size,
+               bbox_y0=by0, bbox_x0=bx0, bbox_h=bbox_h, bbox_w=bbox_w,
+               crop_y0=int(rng.choice(qualifying)))
 
 
 def _job_pdf(args, all_pages: bool = False):
+    import fitz
     pdf_path, page_count_hint, language, category, seed = args
     rng = np.random.default_rng(seed)
     try:
-        import fitz
-        with fitz.open(pdf_path) as doc:
-            page_indices = list(range(doc.page_count)) if all_pages else _page_indices(doc.page_count)
+        doc = fitz.open(pdf_path)
+        page_indices = list(range(doc.page_count)) if all_pages else _page_indices(doc.page_count)
     except Exception:
         return []
     recs = []
     try:
-        for pi, gray, allow_deskew in _pdf_gray_pages(pdf_path, page_indices):
-            info = _process_gray(gray, rng, allow_deskew=allow_deskew)
+        for pi in page_indices:
+            if pi >= doc.page_count:
+                continue
+            page = doc[pi]
+            info = page.get_text().strip() and _pdf_text_page_info(page, rng)
+            if not info:
+                pix = page.get_pixmap(matrix=fitz.Matrix(RASTER_ZOOM, RASTER_ZOOM),
+                                      colorspace=fitz.csGRAY, alpha=False)
+                gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
+                info = _process_gray(gray, rng)
             if info is None:
                 continue
             recs.append(dict(source_path=pdf_path, page_index=pi, language=language,
                              category=category, kind="raster", **info))
     except Exception:
         return recs
+    finally:
+        doc.close()
     return recs
 
 
@@ -131,7 +185,7 @@ def _job_image(args):
     gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         return []
-    info = _process_gray(gray, rng, allow_deskew=True)
+    info = _process_gray(gray, rng)
     if info is None:
         return []
     return [dict(source_path=image_path, page_index=0, language=language,
