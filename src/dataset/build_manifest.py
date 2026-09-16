@@ -52,9 +52,10 @@ def _page_indices(page_count: int, cap: int = PAGES_PER_PDF_CAP) -> list:
 # per-page processing, shared by pdf and image sources
 # ---------------------------------------------------------------------------
 
-def _process_gray(gray: np.ndarray, rng):
+def _process_gray(gray: np.ndarray, rng, allow_deskew: bool = False):
     from src.dataset.content_filter import has_enough_content
     from src.dataset.crop import select_crop_1024
+    from src.dataset.deskew import estimate_deskew_angle, needs_deskew, rotate_full_res
 
     if gray.shape[1] > gray.shape[0]:
         gray = cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)
@@ -63,11 +64,25 @@ def _process_gray(gray: np.ndarray, rng):
     if not keep:
         return None
 
+    angle = 0.0
+    did_deskew = False
+    if allow_deskew:
+        angle = estimate_deskew_angle(gray)
+        if needs_deskew(angle):
+            gray = rotate_full_res(gray, angle, fill_value=255)
+            bbox, content_frac, keep = has_enough_content(gray)
+            if not keep:
+                return None
+            did_deskew = True
+        else:
+            angle = 0.0
+
     crop = select_crop_1024(gray, rng, bbox=bbox)
     if crop is None:
         return None
-    return dict(content_frac=round(content_frac, 5), needs_deskew=False, deskew_angle_deg=0.0,
-               used_h=gray.shape[0], used_w=gray.shape[1], crop_size=1024, **crop)
+    return dict(content_frac=round(content_frac, 5), needs_deskew=did_deskew,
+               deskew_angle_deg=round(angle, 3), used_h=gray.shape[0], used_w=gray.shape[1],
+               crop_size=1024, **crop)
 
 
 _CYR_RE = re.compile("[Ѐ-ӿ]")
@@ -82,25 +97,27 @@ def _pdf_gray_pages(pdf_path: str, page_indices, zoom=RASTER_ZOOM):
         for pi in page_indices:
             if pi >= doc.page_count:
                 continue
-            pix = doc[pi].get_pixmap(matrix=fitz.Matrix(zoom, zoom), colorspace=fitz.csGRAY, alpha=False)
+            page = doc[pi]
+            has_text = bool(page.get_text().strip())
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), colorspace=fitz.csGRAY, alpha=False)
             gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
-            out.append((pi, gray))
+            out.append((pi, gray, not has_text))
     return out
 
 
-def _job_pdf(args):
+def _job_pdf(args, all_pages: bool = False):
     pdf_path, page_count_hint, language, category, seed = args
     rng = np.random.default_rng(seed)
     try:
         import fitz
         with fitz.open(pdf_path) as doc:
-            page_indices = _page_indices(doc.page_count)
+            page_indices = list(range(doc.page_count)) if all_pages else _page_indices(doc.page_count)
     except Exception:
         return []
     recs = []
     try:
-        for pi, gray in _pdf_gray_pages(pdf_path, page_indices):
-            info = _process_gray(gray, rng)
+        for pi, gray, allow_deskew in _pdf_gray_pages(pdf_path, page_indices):
+            info = _process_gray(gray, rng, allow_deskew=allow_deskew)
             if info is None:
                 continue
             recs.append(dict(source_path=pdf_path, page_index=pi, language=language,
@@ -110,13 +127,17 @@ def _job_pdf(args):
     return recs
 
 
+def _job_pdf_all(args):
+    return _job_pdf(args, all_pages=True)
+
+
 def _job_image(args):
     image_path, language, category, seed = args
     rng = np.random.default_rng(seed)
     gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         return []
-    info = _process_gray(gray, rng)
+    info = _process_gray(gray, rng, allow_deskew=True)
     if info is None:
         return []
     return [dict(source_path=image_path, page_index=0, language=language,
@@ -279,8 +300,8 @@ def main(out_path: str, n: int, workers: int, limit_files: int = None):
     lang_counts = {}
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as out_f:
-        _run_group("corpus_pdf", corpus_pdf_jobs, _job_pdf, workers, out_f, kept, n, t0, lang_counts)
-        _run_group("overflow_pdf", overflow_pdf_jobs, _job_pdf, workers, out_f, kept, n, t0, lang_counts)
+        _run_group("corpus_pdf", corpus_pdf_jobs, _job_pdf_all, workers, out_f, kept, n, t0, lang_counts)
+        _run_group("overflow_pdf", overflow_pdf_jobs, _job_pdf_all, workers, out_f, kept, n, t0, lang_counts)
         _run_group("overflow_img", overflow_img_jobs, _job_image, workers, out_f, kept, n, t0, lang_counts)
         _run_group("pdf_png_en", pdf_png_jobs, _job_image, workers, out_f, kept, n, t0, lang_counts)
         _run_group("xfund_funsd", xfund_funsd_jobs, _job_image, workers, out_f, kept, n, t0, lang_counts)
