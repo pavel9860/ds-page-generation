@@ -44,10 +44,12 @@ def render_book_text_page(source_path: str, text_seed: int) -> np.ndarray:
     return gray
 
 
-def materialize_page(entry: dict):
-    """-> uint8 (1024,1024) grayscale, or None if the stored crop no
-    longer fits after a 90-degree rotation (never a smaller-than-1024
-    array)."""
+def materialize_page(entry: dict) -> np.ndarray:
+    """-> uint8 (1024,1024) grayscale. All keep/reject filtering already
+    happened at manifest-build time; crop_from_bbox here always succeeds
+    (it's the exact procedure that was validated then). Rotation/deskew
+    apply to that already-square crop, not the full page, so they can
+    never change its shape -- no fit check needed."""
     if entry["kind"] == "book_text":
         return render_book_text_page(entry["source_path"], entry["text_seed"])
 
@@ -65,15 +67,15 @@ def materialize_page(entry: dict):
         gray = cv2.resize(gray, (used_w, used_h),
                           interpolation=cv2.INTER_AREA if (h * w) > (used_h * used_w) else cv2.INTER_LINEAR)
 
-    # Stage 1: 90-degree sideways-text rotation, if detected.
-    if is_sideways(gray):
-        gray = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-    # Stage 2: deskew, computed independently on whatever stage 1 produced.
-    if entry["needs_deskew"]:
-        angle = estimate_deskew_angle(gray)
-        if needs_deskew(angle):
-            gray = rotate_full_res(gray, angle, fill_value=255)
-
-    return crop_from_bbox(gray, entry["bbox_y0"], entry["bbox_x0"], entry["bbox_h"], entry["bbox_w"],
+    page = crop_from_bbox(gray, entry["bbox_y0"], entry["bbox_x0"], entry["bbox_h"], entry["bbox_w"],
                           entry["crop_y0"], size=entry["crop_size"])
+
+    if is_sideways(page):
+        page = cv2.rotate(page, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+    if entry["needs_deskew"]:
+        angle = estimate_deskew_angle(page)
+        if needs_deskew(angle):
+            page = rotate_full_res(page, angle, fill_value=255)
+
+    return page
