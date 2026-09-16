@@ -41,6 +41,10 @@ def _load_metadata(meta_path: str) -> dict:
     return idx
 
 
+def _seed(path: str) -> int:
+    return hash(path) & 0xFFFFFFFF
+
+
 def _page_indices(page_count: int, cap: int = PAGES_PER_PDF_CAP) -> list:
     if page_count <= cap:
         return list(range(page_count))
@@ -194,24 +198,24 @@ def _corpus_pdf_jobs(meta_idx: dict):
             m = meta_idx.get(p)
             language = m["language"] if m else "unknown"
             category = m.get("category") if m else None
-            jobs.append((p, m.get("pages") if m else None, language, category, hash(p) & 0xFFFFFFFF))
+            jobs.append((p, m.get("pages") if m else None, language, category, _seed(p)))
     return jobs
 
 
 def _corpus_overflow_jobs():
     pdf_jobs, img_jobs = [], []
     for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus_overflow", "Images", "*.png"))):
-        img_jobs.append((p, "unknown", None, hash(p) & 0xFFFFFFFF))
+        img_jobs.append((p, "unknown", None, _seed(p)))
     for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus_overflow", "pdf", "*"))):
         if p.lower().endswith(".pdf"):
-            pdf_jobs.append((p, None, "unknown", None, hash(p) & 0xFFFFFFFF))
+            pdf_jobs.append((p, None, "unknown", None, _seed(p)))
         elif p.lower().endswith(".png"):
-            img_jobs.append((p, "unknown", None, hash(p) & 0xFFFFFFFF))
+            img_jobs.append((p, "unknown", None, _seed(p)))
     return pdf_jobs, img_jobs
 
 
 def _pdf_png_jobs():
-    return [(p, "en", None, hash(p) & 0xFFFFFFFF)
+    return [(p, "en", None, _seed(p))
            for p in sorted(glob.glob(os.path.join(LAYOUTS, "Pdf", "*.png")))]
 
 
@@ -222,12 +226,12 @@ def _xfund_funsd_jobs():
     jobs = []
     for p in sorted(glob.glob(os.path.join(root, "*", "*.png"))):
         lang = os.path.basename(os.path.dirname(p)).split(".")[0]
-        jobs.append((p, lang, "form", hash(p) & 0xFFFFFFFF))
+        jobs.append((p, lang, "form", _seed(p)))
     return jobs
 
 
 def _arxiv_jobs():
-    return [(p, None, "en", "scientific_paper", hash(p) & 0xFFFFFFFF)
+    return [(p, None, "en", "scientific_paper", _seed(p))
            for p in sorted(glob.glob(os.path.join(LAYOUTS, "scientific_paper", "arxiv_pdfs", "*.pdf")))]
 
 
@@ -319,33 +323,27 @@ SCIENTIFIC_PAPER_QUOTA_FRAC = 0.02
 
 def main(out_path: str, n: int, workers: int, limit_files: int = None):
     meta_idx = _load_metadata(os.path.join(LAYOUTS, "corpus", "metadata.jsonl"))
-    corpus_pdf_jobs = _corpus_pdf_jobs(meta_idx)
     overflow_pdf_jobs, overflow_img_jobs = _corpus_overflow_jobs()
-    pdf_png_jobs = _pdf_png_jobs()
-    xfund_funsd_jobs = _xfund_funsd_jobs()
-    arxiv_jobs = _arxiv_jobs()
-
+    groups = [
+        ("corpus_pdf", _corpus_pdf_jobs(meta_idx), _job_pdf_all),
+        ("overflow_pdf", overflow_pdf_jobs, _job_pdf_all),
+        ("overflow_img", overflow_img_jobs, _job_image),
+        ("pdf_png_en", _pdf_png_jobs(), _job_image),
+        ("xfund_funsd", _xfund_funsd_jobs(), _job_image),
+        ("arxiv_en", _arxiv_jobs(), _job_pdf),
+    ]
     if limit_files:
-        corpus_pdf_jobs = corpus_pdf_jobs[:limit_files]
-        overflow_pdf_jobs = overflow_pdf_jobs[:limit_files]
-        overflow_img_jobs = overflow_img_jobs[:limit_files]
-        pdf_png_jobs = pdf_png_jobs[:limit_files]
-        xfund_funsd_jobs = xfund_funsd_jobs[:limit_files]
-        arxiv_jobs = arxiv_jobs[:limit_files]
+        groups = [(name, jobs[:limit_files], fn) for name, jobs, fn in groups]
 
     kept = [0]
     t0 = time.time()
     lang_counts = {}
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as out_f:
-        _run_group("corpus_pdf", corpus_pdf_jobs, _job_pdf_all, workers, out_f, kept, n, t0, lang_counts)
-        _run_group("overflow_pdf", overflow_pdf_jobs, _job_pdf_all, workers, out_f, kept, n, t0, lang_counts)
-        _run_group("overflow_img", overflow_img_jobs, _job_image, workers, out_f, kept, n, t0, lang_counts)
-        _run_group("pdf_png_en", pdf_png_jobs, _job_image, workers, out_f, kept, n, t0, lang_counts)
-        _run_group("xfund_funsd", xfund_funsd_jobs, _job_image, workers, out_f, kept, n, t0, lang_counts)
-
-        arxiv_quota_target = min(n, kept[0] + round(n * SCIENTIFIC_PAPER_QUOTA_FRAC))
-        _run_group("arxiv_en", arxiv_jobs, _job_pdf, workers, out_f, kept, arxiv_quota_target, t0, lang_counts)
+        for name, jobs, fn in groups:
+            target = (min(n, kept[0] + round(n * SCIENTIFIC_PAPER_QUOTA_FRAC))
+                     if name == "arxiv_en" else n)
+            _run_group(name, jobs, fn, workers, out_f, kept, target, t0, lang_counts)
 
         if kept[0] < n and not limit_files:
             filler_jobs = _build_filler_jobs(lang_counts, round((n - kept[0]) * 1.2), seed0=12345)
