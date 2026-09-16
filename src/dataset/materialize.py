@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from src.dataset.crop import crop_from_bbox
-from src.dataset.deskew import rotate_full_res
+from src.dataset.deskew import estimate_deskew_angle, needs_deskew, rotate_full_res
 
 
 def _rasterize_pdf_page(source_path: str, page_index: int):
@@ -64,7 +64,9 @@ def materialize_page(entry: dict) -> np.ndarray:
                           interpolation=cv2.INTER_AREA if (h * w) > (used_h * used_w) else cv2.INTER_LINEAR)
 
     if entry["needs_deskew"]:
-        gray = rotate_full_res(gray, entry["deskew_angle_deg"], fill_value=255)
+        angle = estimate_deskew_angle(gray)
+        if needs_deskew(angle):
+            gray = rotate_full_res(gray, angle, fill_value=255)
 
     return crop_from_bbox(gray, entry["bbox_y0"], entry["bbox_x0"], entry["bbox_h"], entry["bbox_w"],
                           entry["crop_y0"], size=entry["crop_size"])

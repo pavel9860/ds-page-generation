@@ -1,5 +1,5 @@
 """Fields: source_path, page_index, language, category, content_frac,
-needs_deskew, deskew_angle_deg, used_h, used_w, bbox_y0, bbox_x0, bbox_h,
+needs_deskew, used_h, used_w, bbox_y0, bbox_x0, bbox_h,
 bbox_w, crop_y0, crop_size, kind.
 
 Run:
@@ -65,7 +65,7 @@ def _process_gray(gray: np.ndarray, rng):
     crop = select_crop_1024(gray, rng, bbox=bbox)
     if crop is None:
         return None
-    return dict(content_frac=round(content_frac, 5), needs_deskew=False, deskew_angle_deg=0.0,
+    return dict(content_frac=round(content_frac, 5), needs_deskew=True,
                used_h=gray.shape[0], used_w=gray.shape[1], crop_size=1024, **crop)
 
 
@@ -130,7 +130,7 @@ def _pdf_text_page_info(page, rng, zoom: float = RASTER_ZOOM):
         return None
 
     return dict(content_frac=round(float(coarse_mask.mean()), 5), needs_deskew=False,
-               deskew_angle_deg=0.0, used_h=used_h, used_w=used_w, crop_size=size,
+               used_h=used_h, used_w=used_w, crop_size=size,
                bbox_y0=by0, bbox_x0=bx0, bbox_h=bbox_h, bbox_w=bbox_w, crop_y0=crop_y0)
 
 
@@ -282,7 +282,7 @@ def _job_book_text(args):
 
     txt_path, bucket, seed = args
     return [dict(source_path=txt_path, page_index=0, language=bucket, category="book_filler",
-               kind="book_text", content_frac=None, needs_deskew=False, deskew_angle_deg=0.0,
+               kind="book_text", content_frac=None, needs_deskew=False,
                used_h=cfg.TEXT_PAGE_PX, used_w=cfg.TEXT_PAGE_PX, crop_y0=0, crop_x0=0,
                crop_size=cfg.TEXT_PAGE_PX, text_seed=seed)]
 
