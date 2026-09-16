@@ -31,6 +31,21 @@ _TRUSTED_FAMILY_TOKENS = (
 )
 _REQUIRED_CODEPOINTS = tuple(ord(c) for c in "AaZz09АаЯяЁёΑαωω")
 
+# Script-specific families the corpus needs (CJK, Arabic/Persian, Hebrew,
+# Thai) that don't carry Latin+Cyrillic+Greek, checked against their own
+# script's codepoints instead of _REQUIRED_CODEPOINTS.
+_SCRIPT_FONT_GROUPS = (
+    (_TRUSTED_FAMILY_TOKENS, _REQUIRED_CODEPOINTS),
+    (("notosanscjk", "notoserifcjk", "sourcehansans", "sourcehanserif", "droidsansfallback", "wqy"),
+     tuple(ord(c) for c in "汉字你好一二三四五")),
+    (("notosansarabic", "notonaskharabic", "notokufiarabic"),
+     tuple(ord(c) for c in "ابجدهوزح")),
+    (("notosanshebrew", "notoserifhebrew"),
+     tuple(ord(c) for c in "אבגדהוזח")),
+    (("notosansthai", "notoserifthai", "notoloopedthai"),
+     tuple(ord(c) for c in "กขคงจฉช")),
+)
+
 
 _CMAP_CACHE = {}
 
@@ -46,23 +61,26 @@ def _font_cmap(path: str) -> set:
     return cmap
 
 
-def _covers_scripts(path: str) -> bool:
+def _covers_group(path: str, tokens: tuple, codepoints: tuple) -> bool:
     name = os.path.basename(path).lower()
-    if not any(tok in name for tok in _TRUSTED_FAMILY_TOKENS):
+    if not any(tok in name for tok in tokens):
         return False
     cmap = _font_cmap(path)
-    return all(cp in cmap for cp in _REQUIRED_CODEPOINTS)
+    return all(cp in cmap for cp in codepoints)
 
 
 def find_fonts() -> tuple:
-    """Only .ttf files from known general-purpose families, verified via
-    real cmap to cover Latin, Cyrillic, and Greek (the scripts the
-    corpus actually uses)."""
+    """.ttf/.ttc/.otf files from known families, verified via real cmap
+    against each family group's own script (Latin+Cyrillic+Greek for the
+    general body-text families, CJK/Arabic/Hebrew/Thai for their own
+    dedicated families)."""
     candidates = sorted(p for d in _FONT_DIRS if os.path.isdir(d)
-                        for p in glob.glob(f"{d}/**/*.ttf", recursive=True))
-    found = tuple(p for p in candidates if _covers_scripts(p))
+                        for ext in ("ttf", "ttc", "otf")
+                        for p in glob.glob(f"{d}/**/*.{ext}", recursive=True))
+    found = tuple(p for p in candidates
+                 if any(_covers_group(p, tokens, cps) for tokens, cps in _SCRIPT_FONT_GROUPS))
     if not found:
-        raise FileNotFoundError(f"no Latin+Cyrillic+Greek .ttf fonts found under {_FONT_DIRS}")
+        raise FileNotFoundError(f"no supported fonts found under {_FONT_DIRS}")
     return found
 
 
@@ -155,21 +173,18 @@ def _glyph(font, font_key, ch):
     return entry
 
 
-def _pick_font(rng, font_files: tuple, font_px: int, chars, tries: int = 5):
-    """Random font, verified via real cmap to cover every distinct char
+def _pick_font(rng, font_files: tuple, font_px: int, chars):
+    """Random font among those whose real cmap covers every distinct char
     in this page's text -- find_fonts' probe codepoints don't guarantee
-    coverage of every individual character (rare glyph gaps), so check
-    the actual text and retry rather than risk a missing glyph."""
+    coverage of every individual character (rare glyph gaps), and a script
+    a handful of fonts support (CJK, Arabic, Hebrew, Thai) would almost
+    never turn up under blind random retries against the whole (mostly
+    Latin/Cyrillic/Greek) pool."""
     codepoints = {ord(c) for c in chars}
-    font = font_path = None
-    for _ in range(min(tries, len(font_files))):
-        font_path = font_files[rng.integers(0, len(font_files))]
-        if codepoints <= _font_cmap(font_path):
-            font = ImageFont.truetype(font_path, font_px)
-            break
-    if font is None:
-        font = ImageFont.truetype(font_path, font_px)
-    return font, font_path
+    covering = [p for p in font_files if codepoints <= _font_cmap(p)]
+    pool = covering or font_files
+    font_path = pool[rng.integers(0, len(pool))]
+    return ImageFont.truetype(font_path, font_px), font_path
 
 
 def render_flat_text(text: str, rng, page_px: int, page_mm: float, font_files: tuple,

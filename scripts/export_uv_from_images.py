@@ -1,7 +1,7 @@
 """Bulk UV/3D-map dataset export. Two subcommands:
 
 `from-images` (original): sourced from the pre-rendered flat text-page
-matrices (lossless grayscale, matrices/*.npz -- not the lossy .jpg) --
+matrices (lossless grayscale, matrices/*.npz) --
 reuses the text_render.py warp pipeline (camera + surface bend) with the
 source matrix substituted in place of render_flat_text's output. 2D
 print-stage creases/noise and stage-4 shading are skipped: creases/noise
@@ -13,11 +13,6 @@ directory) rather than re-splitting. One .npz per sample:
   uv       : (256,256,2) float16   -- [0,1] flat-texture coords, NaN off-page
   map3d    : (256,256,3) float16   -- (X,Y,Z) mm surface coords, the page's
                                        own isometric mesh (dense, no masking)
-
-Run (from repo root):
-    .venv/bin/python src/tools/export_uv_from_images.py from-images \\
-        /run/media/me/D/ML_DS/UVTM/TextPages/100k_1024_1024_v2.0.2 \\
-        /run/media/me/D/ML_DS/UVTM/TextPages/uv_pages_100k_1mp_v.2.0.0
 
 `overfit` (new): a small fixed-size set rendered from scratch -- 100% frame
 fill, zero page margin, usual font-size range, split evenly across three
@@ -38,24 +33,6 @@ Run (from repo root):
         --out_dir /run/media/me/D/ML_DS/UVTM/Layouts/test \\
         --n 65
 
-`pdf-pages` (new): one sample per PDF, sourced from the first `n` PDFs
-(sorted by filename) under --pdf_dir -- each sample's flat page is that
-PDF's own first page, rasterized with PyMuPDF and cropped to its actual
-content bounding box (0 margin, fills the full page_px square) -- the real
-page pixels (forms, graphics, whatever text layer it has or doesn't), not
-resynthesized/re-flowed text (a page's real text-layer word count can be
-far too small to fill a page on its own, e.g. a scanned form -- but the
-page itself is still fully "full" of real content). No font rendering, no
-old-crease ink smear (there's no synthetic print stage to add it to); add
-old_creases/font args are unused here. Same .npz schema and triptych
-visualization as `overfit`.
-
-Run (from repo root):
-    .venv/bin/python src/tools/export_uv_from_images.py pdf-pages \\
-        --pdf_dir /run/media/me/D/ML_DS/UVTM/Layouts/test/corpus_overflow/pdf \\
-        --data_dir /run/media/me/D/ML_DS/UVTM/TextPages/64_full_page_v2.1.0 \\
-        --vis_dir /run/media/me/D/ML_DS/UVTM/TextPages/64_full_page_v2.1.0_vis \\
-        --n 64 --no_shade --no_creases --blur_scale 0
 """
 import argparse
 import glob
@@ -128,11 +105,6 @@ def main(matrices_root, out_dir, workers):
                      f"eta={(len(jobs) - done) / (done / el) / 60:.1f}min", flush=True)
     print(f"done: n={len(jobs)} wall={time.time() - t0:.0f}s", flush=True)
 
-
-# ---------------------------------------------------------------------------
-# overfit: from-scratch small set, 100% fill / 0 margin, 3 language groups,
-# npz export + flat|warped|dewarped visualization.
-# ---------------------------------------------------------------------------
 
 _STOP_EN = set("the and of to in is was that he she it with as for on at by "
               "an be this his her they were are not".split())
@@ -275,10 +247,11 @@ def _pdf_first_page_tex(pdf_path: str, page_px: int, zoom: float = 3.0) -> np.nd
         pix = doc[0].get_pixmap(matrix=fitz.Matrix(zoom, zoom), colorspace=fitz.csGRAY, alpha=False)
         gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
 
-    mask = gray < 250
-    if mask.any():
-        ys, xs = np.where(mask)
-        gray = gray[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    from src.dataset.content_filter import _bbox_from_mask, _content_mask
+    bbox = _bbox_from_mask(_content_mask(gray))
+    if bbox is not None:
+        y0, y1, x0, x1 = bbox
+        gray = gray[y0:y1 + 1, x0:x1 + 1]
     resized = cv2.resize(gray, (page_px, page_px), interpolation=cv2.INTER_AREA)
     return cfg.INK + (cfg.PAPER - cfg.INK) * (resized.astype(np.float32) / 255.0)
 
