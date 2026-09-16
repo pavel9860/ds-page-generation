@@ -8,50 +8,25 @@ Run:
 """
 import argparse
 import json
-import time
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import cv2
 import numpy as np
 
-from src.dataset.materialize import materialize_page
-
-_OUT_DIR = None
+from src.dataset.export_common import run_export
 
 
-def _init(out_dir):
-    cv2.setNumThreads(1)
-    global _OUT_DIR
-    _OUT_DIR = Path(out_dir)
-
-
-def _one(args):
-    idx, entry = args
-    page = materialize_page(entry)
-    np.savez_compressed(_OUT_DIR / f"{idx:06d}.npz", page=page)
-    return idx
+def _save_npz(out_dir: Path, idx: int, page: np.ndarray):
+    np.savez_compressed(out_dir / f"{idx:06d}.npz", page=page)
 
 
 def main(manifest_path: str, out_dir: str, workers: int):
     out_dir_p = Path(out_dir)
-    out_dir_p.mkdir(parents=True, exist_ok=True)
     with open(manifest_path, encoding="utf-8") as f:
         entries = [json.loads(line) for line in f]
     jobs = [(idx, entry) for idx, entry in enumerate(entries)
            if not (out_dir_p / f"{idx:06d}.npz").exists()]
     print(f"n={len(entries)} already_done={len(entries) - len(jobs)} remaining={len(jobs)}", flush=True)
-
-    t0 = time.time()
-    done = 0
-    with ProcessPoolExecutor(max_workers=workers, initializer=_init, initargs=(out_dir,)) as pool:
-        for _ in pool.map(_one, jobs, chunksize=8):
-            done += 1
-            if done % 2000 == 0:
-                el = time.time() - t0
-                print(f"{done}/{len(jobs)} elapsed={el:.0f}s rate={done / el:.1f}/s "
-                     f"eta={(len(jobs) - done) / (done / el) / 60:.1f}min", flush=True)
-    print(f"done: n={len(entries)} wall={time.time() - t0:.0f}s -> {out_dir}", flush=True)
+    run_export(jobs, out_dir, workers, _save_npz)
 
 
 if __name__ == "__main__":

@@ -9,47 +9,27 @@ Run:
 """
 import argparse
 import json
-import time
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from src.dataset.materialize import materialize_page
-
-_OUT_DIR = None
+from src.dataset.export_common import run_export
 
 
-def _init(out_dir):
-    cv2.setNumThreads(1)
-    global _OUT_DIR
-    _OUT_DIR = Path(out_dir)
-
-
-def _one(args):
-    idx, entry = args
-    page = materialize_page(entry)
-    cv2.imwrite(str(_OUT_DIR / f"{idx:05d}.jpg"), page)
-    return idx
+def _save_jpg(out_dir: Path, idx: int, page: np.ndarray):
+    cv2.imwrite(str(out_dir / f"{idx:05d}.jpg"), page)
 
 
 def main(manifest_path: str, out_dir: str, n: int, seed: int, workers: int):
-    out_dir_p = Path(out_dir)
-    out_dir_p.mkdir(parents=True, exist_ok=True)
     with open(manifest_path, encoding="utf-8") as f:
         entries = [json.loads(line) for line in f]
 
     rng = np.random.default_rng(seed)
     sample_idx = rng.choice(len(entries), size=min(n, len(entries)), replace=False)
-    sampled = [entries[i] for i in sample_idx]
-    print(f"sampling {len(sampled)}/{len(entries)}", flush=True)
-
-    t0 = time.time()
-    with ProcessPoolExecutor(max_workers=workers, initializer=_init, initargs=(out_dir,)) as pool:
-        for _ in pool.map(_one, enumerate(sampled), chunksize=4):
-            pass
-    print(f"done: n={len(sampled)} wall={time.time() - t0:.0f}s -> {out_dir}", flush=True)
+    jobs = list(enumerate(entries[i] for i in sample_idx))
+    print(f"sampling {len(jobs)}/{len(entries)}", flush=True)
+    run_export(jobs, out_dir, workers, _save_jpg, chunksize=4, log_every=0)
 
 
 if __name__ == "__main__":
