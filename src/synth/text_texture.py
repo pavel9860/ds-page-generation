@@ -286,13 +286,21 @@ def render_flat_text(text: str, rng, page_px: int, page_mm: float, font_files: t
     foy = np.empty(n_max, dtype=np.int64)
     fgw = np.empty(n_max, dtype=np.int64)
     fgh = np.empty(n_max, dtype=np.int64)
+    align = rng.choice(("left", "right", "justify"))
     n = 0
     y = margin
     for ln in lines:
-        x = float(margin)
+        n_words = len(ln)
+        natural_w = sum(g[2] for _, glyphs in ln for g in glyphs) + space_w * max(0, n_words - 1)
+        if align == "right":
+            x, gap = float(max_x - natural_w), space_w
+        elif align == "justify" and n_words > 1 and natural_w < max_line_w:
+            x, gap = float(margin), space_w + (max_line_w - natural_w) / (n_words - 1)
+        else:
+            x, gap = float(margin), space_w
         for i, (word, glyphs) in enumerate(ln):
             if i > 0:
-                x += space_w
+                x += gap
             for arr, (ox, oy), advance in glyphs:
                 if arr.size:
                     arrs[n] = arr

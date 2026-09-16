@@ -12,8 +12,9 @@ _tex_from_matrix themselves.
 import cv2
 import numpy as np
 
-from src.dataset.crop import crop_from_bbox
-from src.dataset.deskew import estimate_deskew_angle, needs_deskew, rotate_full_res
+from src.dataset.content_filter import has_enough_content
+from src.dataset.crop import crop_from_bbox, select_crop_1024
+from src.dataset.deskew import estimate_deskew_angle, is_sideways, needs_deskew, rotate_full_res
 
 
 def _rasterize_pdf_page(source_path: str, page_index: int):
@@ -63,10 +64,20 @@ def materialize_page(entry: dict) -> np.ndarray:
         gray = cv2.resize(gray, (used_w, used_h),
                           interpolation=cv2.INTER_AREA if (h * w) > (used_h * used_w) else cv2.INTER_LINEAR)
 
+    bbox_y0, bbox_x0 = entry["bbox_y0"], entry["bbox_x0"]
+    bbox_h, bbox_w, crop_y0 = entry["bbox_h"], entry["bbox_w"], entry["crop_y0"]
+
     if entry["needs_deskew"]:
+        if is_sideways(gray):
+            gray = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            bbox, _, keep = has_enough_content(gray)
+            fresh = keep and select_crop_1024(gray, np.random.default_rng(0), bbox=bbox)
+            if fresh:
+                bbox_y0, bbox_x0, bbox_h, bbox_w, crop_y0 = (
+                    fresh["bbox_y0"], fresh["bbox_x0"], fresh["bbox_h"], fresh["bbox_w"], fresh["crop_y0"])
+
         angle = estimate_deskew_angle(gray)
         if needs_deskew(angle):
             gray = rotate_full_res(gray, angle, fill_value=255)
 
-    return crop_from_bbox(gray, entry["bbox_y0"], entry["bbox_x0"], entry["bbox_h"], entry["bbox_w"],
-                          entry["crop_y0"], size=entry["crop_size"])
+    return crop_from_bbox(gray, bbox_y0, bbox_x0, bbox_h, bbox_w, crop_y0, size=entry["crop_size"])

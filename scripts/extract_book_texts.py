@@ -2,13 +2,6 @@
 classification pass — see docs/manifest_notes.md, "Round 3") and persists it as one .txt file
 per book, mirrored into the same topic subdirs under books/Texts/.
 
-Why persist at all: build_manifest.py previously re-ran extract_pdf_page_text() on every PDF
-page on every single build (by design, to keep the CSV small and rendering reproducible from
-just file+page+seed) — correct for final rendering, but wasteful for the build step itself,
-which re-does the same PDF parsing/cleaning from scratch each time just to measure page-text
-length and font coverage. Caching it here lets build_manifest.py read a flat .txt instead.
-
-One .txt per book, pages joined with text_extract.PAGE_BREAK so per-page structure round-trips.
 """
 import glob
 import os

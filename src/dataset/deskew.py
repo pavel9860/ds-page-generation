@@ -12,9 +12,11 @@ import numpy as np
 _DOWNSCALE_PX = 800
 _MAX_DEG = 15.0
 _COARSE_STEP = 1.0
+_N_STRIPS = 5
 # Below this we treat the page as already flat -- skip the warpAffine call
-# (and the noise it would otherwise add) entirely.
-_SKIP_ANGLE_DEG = 0.15
+# (and the noise it would otherwise add) entirely. Well above the coarse
+# search's own step so a single stray strip can't pass it on noise alone.
+_SKIP_ANGLE_DEG = 0.5
 
 
 def _row_variance_at_angle(bw: np.ndarray, angle_deg: float) -> float:
@@ -26,14 +28,7 @@ def _row_variance_at_angle(bw: np.ndarray, angle_deg: float) -> float:
     return float(row_sums.var())
 
 
-def estimate_deskew_angle(gray: np.ndarray, downscale_px: int = _DOWNSCALE_PX,
-                          max_deg: float = _MAX_DEG) -> float:
-    """gray: uint8 2D. -> angle in degrees (rotate by +angle to deskew)."""
-    scale = min(1.0, downscale_px / max(gray.shape))
-    small = (cv2.resize(gray, (round(gray.shape[1] * scale), round(gray.shape[0] * scale)),
-                        interpolation=cv2.INTER_AREA) if scale < 1.0 else gray)
-    _, bw = cv2.threshold(small, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
+def _best_angle(bw: np.ndarray, max_deg: float) -> float:
     best_angle, best_var = 0.0, -1.0
     a = -max_deg
     while a <= max_deg + 1e-9:
@@ -51,8 +46,43 @@ def estimate_deskew_angle(gray: np.ndarray, downscale_px: int = _DOWNSCALE_PX,
     return best_angle
 
 
+def estimate_deskew_angle(gray: np.ndarray, downscale_px: int = _DOWNSCALE_PX,
+                          max_deg: float = _MAX_DEG, n_strips: int = _N_STRIPS) -> float:
+    """gray: uint8 2D. -> angle in degrees (rotate by +angle to deskew),
+    the median of independent per-strip estimates -- a single region's
+    spurious peak (a table border, a stray mark) skews the whole-page
+    variance metric, but can't move the median of several strips."""
+    scale = min(1.0, downscale_px / max(gray.shape))
+    small = (cv2.resize(gray, (round(gray.shape[1] * scale), round(gray.shape[0] * scale)),
+                        interpolation=cv2.INTER_AREA) if scale < 1.0 else gray)
+    _, bw = cv2.threshold(small, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    h = bw.shape[0]
+    strip_h = max(1, h // n_strips)
+    angles = [_best_angle(bw[i * strip_h:min(h, (i + 1) * strip_h)], max_deg)
+             for i in range(n_strips)]
+    return float(np.median(angles))
+
+
 def needs_deskew(angle_deg: float) -> bool:
     return abs(angle_deg) >= _SKIP_ANGLE_DEG
+
+
+_SIDEWAYS_VAR_RATIO = 1.5
+
+
+def is_sideways(gray: np.ndarray) -> bool:
+    """True if the page's real text lines read vertically (a sideways
+    scan) -- checked at page-building time only, not manifest-build time,
+    since a 90-degree rotation moves content far enough that any bbox/crop
+    computed before it would no longer apply."""
+    scale = min(1.0, _DOWNSCALE_PX / max(gray.shape))
+    small = (cv2.resize(gray, (round(gray.shape[1] * scale), round(gray.shape[0] * scale)),
+                        interpolation=cv2.INTER_AREA) if scale < 1.0 else gray)
+    _, bw = cv2.threshold(small, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    var0 = _row_variance_at_angle(bw, 0.0)
+    var90 = _row_variance_at_angle(cv2.rotate(bw, cv2.ROTATE_90_COUNTERCLOCKWISE), 0.0)
+    return var90 > var0 * _SIDEWAYS_VAR_RATIO
 
 
 def rotate_full_res(img: np.ndarray, angle_deg: float, fill_value: int) -> np.ndarray:

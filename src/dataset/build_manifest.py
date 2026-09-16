@@ -74,8 +74,11 @@ def _process_gray(gray: np.ndarray, rng):
 
 
 def _pdf_text_blocks_px(page, zoom: float) -> list:
-    return [(b[0] * zoom, b[1] * zoom, b[2] * zoom, b[3] * zoom)
-           for b in page.get_text("blocks") if b[6] == 0]
+    """Word-level boxes, not paragraph-level "blocks" -- a block's own
+    bbox spans its full line height/spacing and reads as much denser
+    content than it visually is, letting sparse pages clear the patch-
+    coverage bar that the pixel-based raster path would reject them on."""
+    return [(w[0] * zoom, w[1] * zoom, w[2] * zoom, w[3] * zoom) for w in page.get_text("words")]
 
 
 def _occupancy(blocks: list, width: int, height: int, x_off: float = 0.0,
@@ -138,6 +141,18 @@ def _pdf_text_page_info(page, rng, zoom: float = RASTER_ZOOM):
                bbox_y0=by0, bbox_x0=bx0, bbox_h=bbox_h, bbox_w=bbox_w, crop_y0=crop_y0)
 
 
+def _pdf_page_is_scan(page) -> bool:
+    """A page with a real text layer can still be a scanned image with an
+    OCR text overlay -- its own text bbox says nothing about visual skew
+    in that case, so it needs the raster/deskew path, not the vector one."""
+    from scripts.text_extract import DOMINANT_IMAGE_AREA_FRAC
+    page_area = page.rect.width * page.rect.height
+    if not page_area:
+        return False
+    return any((info["bbox"][2] - info["bbox"][0]) * (info["bbox"][3] - info["bbox"][1]) / page_area
+              > DOMINANT_IMAGE_AREA_FRAC for info in page.get_image_info())
+
+
 def _job_pdf(args, all_pages: bool = False):
     import fitz
     pdf_path, page_count_hint, language, category, seed = args
@@ -153,7 +168,8 @@ def _job_pdf(args, all_pages: bool = False):
             if pi >= doc.page_count:
                 continue
             page = doc[pi]
-            info = page.get_text().strip() and _pdf_text_page_info(page, rng)
+            has_text = bool(page.get_text().strip())
+            info = has_text and not _pdf_page_is_scan(page) and _pdf_text_page_info(page, rng)
             if not info:
                 pix = page.get_pixmap(matrix=fitz.Matrix(RASTER_ZOOM, RASTER_ZOOM),
                                       colorspace=fitz.csGRAY, alpha=False)
