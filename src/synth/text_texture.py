@@ -128,14 +128,27 @@ def _max_words_for_page(page_px=cfg.TEXT_PAGE_PX, page_mm=cfg.TEXT_PAGE_MM,
 
 
 _SNIPPET_WORD_BUDGET = _max_words_for_page()
+_SNIPPET_CHAR_BUDGET = _SNIPPET_WORD_BUDGET * 6.5   # matches _max_words_for_page's own avg_word_chars+1
 
 
-def sample_snippet(paths, rng, n_words=_SNIPPET_WORD_BUDGET) -> str:
-    """n_words is an upper bound -- the layout stops at the bottom margin
+def sample_snippet(paths, rng, char_budget: float = _SNIPPET_CHAR_BUDGET) -> str:
+    """char_budget is an upper bound in characters, not word count -- a
+    script whose "words" are much shorter or longer than the ~5.5-char
+    English assumption _max_words_for_page uses (e.g. single-character
+    CJK tokens from a per-character-spaced source file) still gets enough
+    real content to fill a page. The layout stops at the bottom margin
     regardless of how much text is supplied."""
     words = _words(paths[rng.integers(0, len(paths))])
-    start = int(rng.integers(0, max(1, len(words) - n_words)))
-    return " ".join(words[start:start + n_words])
+    if not words:
+        return ""
+    start = int(rng.integers(0, len(words)))
+    chunk, total = [], 0
+    for w in words[start:]:
+        chunk.append(w)
+        total += len(w) + 1
+        if total >= char_budget:
+            break
+    return " ".join(chunk)
 
 
 @njit(cache=True)
