@@ -67,15 +67,18 @@ def materialize_page(entry: dict) -> np.ndarray:
     bbox_y0, bbox_x0 = entry["bbox_y0"], entry["bbox_x0"]
     bbox_h, bbox_w, crop_y0 = entry["bbox_h"], entry["bbox_w"], entry["crop_y0"]
 
-    if entry["needs_deskew"]:
-        if is_sideways(gray):
-            gray = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            bbox, _, keep = has_enough_content(gray)
-            fresh = keep and select_crop_1024(gray, np.random.default_rng(0), bbox=bbox)
-            if fresh:
-                bbox_y0, bbox_x0, bbox_h, bbox_w, crop_y0 = (
-                    fresh["bbox_y0"], fresh["bbox_x0"], fresh["bbox_h"], fresh["bbox_w"], fresh["crop_y0"])
+    if is_sideways(gray):
+        rotated = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        bbox, _, keep = has_enough_content(rotated)
+        fresh = keep and select_crop_1024(rotated, np.random.default_rng(0), bbox=bbox)
+        if fresh:
+            gray = rotated
+            bbox_y0, bbox_x0, bbox_h, bbox_w, crop_y0 = (
+                fresh["bbox_y0"], fresh["bbox_x0"], fresh["bbox_h"], fresh["bbox_w"], fresh["crop_y0"])
+        # else: the rotation guess didn't hold up under its own crop
+        # check -- keep the un-rotated gray and the manifest's own bbox
 
+    if entry["needs_deskew"]:
         angle = estimate_deskew_angle(gray)
         if needs_deskew(angle):
             gray = rotate_full_res(gray, angle, fill_value=255)

@@ -68,7 +68,7 @@ def needs_deskew(angle_deg: float) -> bool:
     return abs(angle_deg) >= _SKIP_ANGLE_DEG
 
 
-_SIDEWAYS_VAR_RATIO = 1.5
+_SIDEWAYS_VAR_RATIO = 3.0
 
 
 def is_sideways(gray: np.ndarray) -> bool:
