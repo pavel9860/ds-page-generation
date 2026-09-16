@@ -17,6 +17,10 @@ _N_STRIPS = 5
 # (and the noise it would otherwise add) entirely. Well above the coarse
 # search's own step so a single stray strip can't pass it on noise alone.
 _SKIP_ANGLE_DEG = 0.5
+# Above this the estimate is treated as a false detection (unrelated
+# structure dominating the variance metric, not real page skew) and
+# dropped rather than applied.
+_MAX_APPLIED_DEG = 10.0
 
 
 def _row_variance_at_angle(bw: np.ndarray, angle_deg: float) -> float:
@@ -65,7 +69,7 @@ def estimate_deskew_angle(gray: np.ndarray, downscale_px: int = _DOWNSCALE_PX,
 
 
 def needs_deskew(angle_deg: float) -> bool:
-    return abs(angle_deg) >= _SKIP_ANGLE_DEG
+    return _SKIP_ANGLE_DEG <= abs(angle_deg) <= _MAX_APPLIED_DEG
 
 
 _SIDEWAYS_VAR_RATIO = 3.0
