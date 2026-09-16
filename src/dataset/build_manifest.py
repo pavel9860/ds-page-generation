@@ -21,6 +21,12 @@ LAYOUTS = "/run/media/me/D/ML_DS/UVTM/Layouts"
 PAGES_PER_PDF_CAP = 3
 RASTER_ZOOM = 2.0
 
+EXCLUDED_PAGES = {
+    (f"{LAYOUTS}/Pdf/6HPMFPOTKN7J772QGZBHKGKYSNEYTF3I_p87.png", 0),
+    (f"{LAYOUTS}/corpus/forms_bulk/64b3012ead024750.pdf", 6),
+    (f"{LAYOUTS}/corpus/forms_bulk/9e3e89ed7d9dac2a.pdf", 1),
+}
+
 
 def _init():
     cv2.setNumThreads(1)
@@ -165,7 +171,7 @@ def _job_pdf(args, all_pages: bool = False):
     recs = []
     try:
         for pi in page_indices:
-            if pi >= doc.page_count:
+            if pi >= doc.page_count or (pdf_path, pi) in EXCLUDED_PAGES:
                 continue
             page = doc[pi]
             has_text = bool(page.get_text().strip())
@@ -192,6 +198,8 @@ def _job_pdf_all(args):
 
 def _job_image(args):
     image_path, language, category, seed = args
+    if (image_path, 0) in EXCLUDED_PAGES:
+        return []
     rng = np.random.default_rng(seed)
     gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
