@@ -166,14 +166,26 @@ def _glyph(font, font_key, ch):
     return entry
 
 
+def _font_family_key(path: str) -> str:
+    """Family name ignoring weight/width/style suffixes, so a family
+    shipping dozens of weight x width files (Noto Sans's ~70+ variants)
+    doesn't drown out a family with only one or two (Times, Arial) under
+    uniform-random selection."""
+    return os.path.basename(path).split("-")[0].split(",")[0].lower()
+
+
 def _pick_font(rng, font_files: tuple, font_px: int, chars):
-    """Random font among those whose real cmap covers every distinct char
-    in this page's text -- find_fonts' probe codepoints don't guarantee
-    coverage of every individual character (rare glyph gaps), and a script
-    a handful of fonts support (CJK, Arabic, Hebrew, Thai, ...) would
-    almost never turn up under blind random retries against the whole
-    (mostly Latin/Cyrillic/Greek) pool. If no font covers every char (e.g.
-    text mixing scripts, or stray presentation-form codepoints outside a
+    """Random family, then random file within it, among those whose real
+    cmap covers every distinct char in this page's text -- find_fonts'
+    probe codepoints don't guarantee coverage of every individual
+    character (rare glyph gaps), and a script a handful of fonts support
+    (CJK, Arabic, Hebrew, Thai, ...) would almost never turn up under
+    blind random retries against the whole (mostly Latin/Cyrillic/Greek)
+    pool. Selecting by family first also keeps a family's weight/width
+    variants (thin, condensed, black, ...) from being over- or
+    under-represented relative to single-style families just because it
+    happens to ship more files. If no font covers every char (e.g. text
+    mixing scripts, or stray presentation-form codepoints outside a
     script font's base cmap), fall back to whichever font(s) cover the
     most of them -- not a uniformly random font from the whole pool, which
     could be entirely unrelated to the text's actual script."""
@@ -185,7 +197,14 @@ def _pick_font(rng, font_files: tuple, font_px: int, chars):
         scored = [(len(codepoints & _font_cmap(p)), p) for p in font_files]
         best_score = max(s for s, _ in scored)
         pool = [p for s, p in scored if s == best_score]
-    font_path = pool[rng.integers(0, len(pool))]
+
+    families = {}
+    for p in pool:
+        families.setdefault(_font_family_key(p), []).append(p)
+    family_keys = sorted(families)
+    chosen_family = family_keys[rng.integers(0, len(family_keys))]
+    family_files = families[chosen_family]
+    font_path = family_files[rng.integers(0, len(family_files))]
     return ImageFont.truetype(font_path, font_px), font_path
 
 
