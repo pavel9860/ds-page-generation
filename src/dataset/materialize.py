@@ -36,7 +36,7 @@ def render_book_text_page(source_path: str, text_seed: int) -> np.ndarray:
     snippet = sample_snippet([source_path], rng)
     font_files = find_fonts()
     tex = render_flat_text(snippet, rng, cfg.TEXT_PAGE_PX, cfg.TEXT_PAGE_MM, font_files,
-                           margin_mm=0.0, add_old_creases=False)
+                           margin_mm=0.0, add_old_creases=False, add_noise=False)
     page01 = (tex - cfg.INK) / (cfg.PAPER - cfg.INK)
     gray = np.clip(page01 * 255.0, 0, 255).astype(np.uint8)
     if gray.shape != (1024, 1024):

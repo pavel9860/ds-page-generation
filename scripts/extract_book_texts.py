@@ -18,12 +18,15 @@ import time
 import fitz  # PyMuPDF
 
 sys.path.insert(0, os.path.dirname(__file__))
-from text_extract import extract_pdf_page_text, join_pages
+from text_extract import extract_pdf_page_text, is_degenerate_repetition, join_pages
 
 L = "/run/media/me/D/ML_DS/UVTM/Layouts"
 BOOKS = f"{L}/books"
 OUT_ROOT = f"{BOOKS}/Texts"
 SKIP_TOPICS = {"Texts"}   # the pre-existing parallel-translation corpus itself, not a book topic
+
+
+UNCATEGORIZED = "uncategorized"   # topic for *.pdf placed directly under books/, no subfolder
 
 
 def main() -> None:
@@ -32,8 +35,9 @@ def main() -> None:
     print(f"topics: {topics}")
 
     n_books = n_pages_total = n_failed = 0
-    for topic in topics:
-        pdfs = sorted(glob.glob(f"{BOOKS}/{topic}/*.pdf"))
+    for topic in topics + [UNCATEGORIZED]:
+        pdfs = (sorted(glob.glob(f"{BOOKS}/*.pdf")) if topic == UNCATEGORIZED
+               else sorted(glob.glob(f"{BOOKS}/{topic}/*.pdf")))
         if not pdfs:
             continue
         out_dir = os.path.join(OUT_ROOT, topic)
@@ -50,6 +54,12 @@ def main() -> None:
             except Exception as e:
                 print(f"  [FAILED] {topic}/{base}: {e}", file=sys.stderr)
                 n_failed += 1
+                continue
+            if is_degenerate_repetition(join_pages(pages)):
+                print(f"  [DEGENERATE] {topic}/{base}: repeated content, dropped", file=sys.stderr)
+                n_failed += 1
+                if os.path.exists(out_path):
+                    os.remove(out_path)
                 continue
             with open(out_path, "w", encoding="utf-8") as fh:
                 fh.write(join_pages(pages))

@@ -93,7 +93,27 @@ def clean_plain_text_blob(raw: str) -> str:
     return "\n\n".join(p for p in cleaned if p and not _is_watermark_paragraph(p))
 
 
+REPEAT_WINDOW_CHARS = 80
+MAX_REPEAT_FRAC = 0.5
+
+
+def is_degenerate_repetition(text: str, window_chars: int = REPEAT_WINDOW_CHARS,
+                             max_repeat_frac: float = MAX_REPEAT_FRAC) -> bool:
+    """True if one chunk of text (e.g. a mis-extracted repeated watermark
+    or header line) covers most of the extracted text -- valid characters
+    throughout, so CONTROL_CHAR_CORRUPTION_RATIO doesn't catch it."""
+    flat = text.replace("\n", " ")
+    windows = [flat[i:i + window_chars] for i in range(0, len(flat) - window_chars, window_chars)]
+    if len(windows) < 4:
+        return False
+    from collections import Counter
+    most_common_count = Counter(windows).most_common(1)[0][1]
+    return most_common_count / len(windows) > max_repeat_frac
+
+
 def extract_pdf_page_text(page) -> str:
+    if page.get_images(full=False):
+        return ""
     blocks = page.get_text("blocks")
     raw_total = sum(len(b[4]) for b in blocks if b[6] == 0)
     control_total = sum(len(CONTROL_CHAR_RE.findall(b[4])) for b in blocks if b[6] == 0)

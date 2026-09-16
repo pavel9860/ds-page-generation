@@ -165,7 +165,12 @@ def _arxiv_jobs():
 # ---------------------------------------------------------------------------
 
 def _book_txt_paths():
-    return sorted(glob.glob(os.path.join(LAYOUTS, "books", "Texts", "**", "*.txt"), recursive=True))
+    """Excludes files too short to fill a page -- same word-count bar
+    text_texture.load_corpus already uses, applied here too since the
+    filler pool is built independently of that function."""
+    from src.synth.text_texture import _words, _SNIPPET_WORD_BUDGET
+    paths = sorted(glob.glob(os.path.join(LAYOUTS, "books", "Texts", "**", "*.txt"), recursive=True))
+    return [p for p in paths if len(_words(p)) >= _SNIPPET_WORD_BUDGET]
 
 
 def _classify_book_language(path: str) -> str:
@@ -201,25 +206,14 @@ def _build_filler_jobs(target_lang_counts: dict, n_needed: int, seed0: int):
     return jobs
 
 
-BOOK_TEXT_SEED_TRIES = 4
-
-
 def _job_book_text(args):
     from src.synth import config as cfg
-    from src.dataset.content_filter import has_enough_content
-    from src.dataset.materialize import render_book_text_page
 
     txt_path, bucket, seed = args
-    for attempt in range(BOOK_TEXT_SEED_TRIES):
-        text_seed = seed + attempt * 7919
-        gray = render_book_text_page(txt_path, text_seed)
-        _, content_frac, keep = has_enough_content(gray)
-        if keep:
-            return [dict(source_path=txt_path, page_index=0, language=bucket, category="book_filler",
-                        kind="book_text", content_frac=round(content_frac, 5), needs_deskew=False,
-                        deskew_angle_deg=0.0, used_h=cfg.TEXT_PAGE_PX, used_w=cfg.TEXT_PAGE_PX,
-                        crop_y0=0, crop_x0=0, crop_size=cfg.TEXT_PAGE_PX, text_seed=text_seed)]
-    return []
+    return [dict(source_path=txt_path, page_index=0, language=bucket, category="book_filler",
+               kind="book_text", content_frac=None, needs_deskew=False, deskew_angle_deg=0.0,
+               used_h=cfg.TEXT_PAGE_PX, used_w=cfg.TEXT_PAGE_PX, crop_y0=0, crop_x0=0,
+               crop_size=cfg.TEXT_PAGE_PX, text_seed=seed)]
 
 
 # ---------------------------------------------------------------------------

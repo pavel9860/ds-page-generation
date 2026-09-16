@@ -3,6 +3,7 @@ Feeds the same camera/UV/photo pipeline as texture.py's grid ink, via a
 different flat texture."""
 import glob
 import os
+from functools import lru_cache
 
 import cv2
 import numpy as np
@@ -30,21 +31,7 @@ _TRUSTED_FAMILY_TOKENS = (
     "arial", "times", "verdana", "tahoma", "calibri", "cambria", "georgia", "consolas", "ubuntu",
 )
 _REQUIRED_CODEPOINTS = tuple(ord(c) for c in "AaZz09АаЯяЁёΑαωω")
-
-# Script-specific families the corpus needs (CJK, Arabic/Persian, Hebrew,
-# Thai) that don't carry Latin+Cyrillic+Greek, checked against their own
-# script's codepoints instead of _REQUIRED_CODEPOINTS.
-_SCRIPT_FONT_GROUPS = (
-    (_TRUSTED_FAMILY_TOKENS, _REQUIRED_CODEPOINTS),
-    (("notosanscjk", "notoserifcjk", "sourcehansans", "sourcehanserif", "droidsansfallback", "wqy"),
-     tuple(ord(c) for c in "汉字你好一二三四五")),
-    (("notosansarabic", "notonaskharabic", "notokufiarabic"),
-     tuple(ord(c) for c in "ابجدهوزح")),
-    (("notosanshebrew", "notoserifhebrew"),
-     tuple(ord(c) for c in "אבגדהוזח")),
-    (("notosansthai", "notoserifthai", "notoloopedthai"),
-     tuple(ord(c) for c in "กขคงจฉช")),
-)
+_MIN_SCRIPT_CMAP_SIZE = 40
 
 
 _CMAP_CACHE = {}
@@ -61,24 +48,34 @@ def _font_cmap(path: str) -> set:
     return cmap
 
 
-def _covers_group(path: str, tokens: tuple, codepoints: tuple) -> bool:
+def _is_general_font(path: str) -> bool:
     name = os.path.basename(path).lower()
-    if not any(tok in name for tok in tokens):
+    if not any(tok in name for tok in _TRUSTED_FAMILY_TOKENS):
         return False
     cmap = _font_cmap(path)
-    return all(cp in cmap for cp in codepoints)
+    return all(cp in cmap for cp in _REQUIRED_CODEPOINTS)
 
 
+def _is_script_font(path: str) -> bool:
+    """Any Noto Sans/Serif script-specific family (Bengali, Devanagari,
+    Arabic, CJK, ...) with real, non-trivial glyph coverage -- accepted
+    without hand-listing every script, since _pick_font checks actual
+    text codepoints against each font's own cmap at render time."""
+    name = os.path.basename(path).lower()
+    if not (name.startswith("notosans") or name.startswith("notoserif")):
+        return False
+    return len(_font_cmap(path)) >= _MIN_SCRIPT_CMAP_SIZE
+
+
+@lru_cache(maxsize=1)
 def find_fonts() -> tuple:
-    """.ttf/.ttc/.otf files from known families, verified via real cmap
-    against each family group's own script (Latin+Cyrillic+Greek for the
-    general body-text families, CJK/Arabic/Hebrew/Thai for their own
-    dedicated families)."""
+    """.ttf/.ttc/.otf files from known families, verified via real cmap:
+    Latin+Cyrillic+Greek for the general body-text families, any other
+    real glyph coverage for Noto Sans/Serif's script-specific families."""
     candidates = sorted(p for d in _FONT_DIRS if os.path.isdir(d)
                         for ext in ("ttf", "ttc", "otf")
                         for p in glob.glob(f"{d}/**/*.{ext}", recursive=True))
-    found = tuple(p for p in candidates
-                 if any(_covers_group(p, tokens, cps) for tokens, cps in _SCRIPT_FONT_GROUPS))
+    found = tuple(p for p in candidates if _is_general_font(p) or _is_script_font(p))
     if not found:
         raise FileNotFoundError(f"no supported fonts found under {_FONT_DIRS}")
     return found
@@ -106,15 +103,11 @@ def _has_letters(word: str) -> bool:
     return any(c.isalpha() for c in word)
 
 
-_WORDS_CACHE = {}
-
-
+@lru_cache(maxsize=32)
 def _words(path):
-    if path not in _WORDS_CACHE:
-        with open(path, encoding="utf-8", errors="ignore") as f:
-            raw = f.read().split()
-        _WORDS_CACHE[path] = [w for w in raw if _has_letters(w)]
-    return _WORDS_CACHE[path]
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        raw = f.read().split()
+    return [w for w in raw if _has_letters(w)]
 
 
 def _max_words_for_page(page_px=cfg.TEXT_PAGE_PX, page_mm=cfg.TEXT_PAGE_MM,
@@ -177,25 +170,56 @@ def _pick_font(rng, font_files: tuple, font_px: int, chars):
     """Random font among those whose real cmap covers every distinct char
     in this page's text -- find_fonts' probe codepoints don't guarantee
     coverage of every individual character (rare glyph gaps), and a script
-    a handful of fonts support (CJK, Arabic, Hebrew, Thai) would almost
-    never turn up under blind random retries against the whole (mostly
-    Latin/Cyrillic/Greek) pool."""
+    a handful of fonts support (CJK, Arabic, Hebrew, Thai, ...) would
+    almost never turn up under blind random retries against the whole
+    (mostly Latin/Cyrillic/Greek) pool. If no font covers every char (e.g.
+    text mixing scripts, or stray presentation-form codepoints outside a
+    script font's base cmap), fall back to whichever font(s) cover the
+    most of them -- not a uniformly random font from the whole pool, which
+    could be entirely unrelated to the text's actual script."""
     codepoints = {ord(c) for c in chars}
     covering = [p for p in font_files if codepoints <= _font_cmap(p)]
-    pool = covering or font_files
+    if covering:
+        pool = covering
+    else:
+        scored = [(len(codepoints & _font_cmap(p)), p) for p in font_files]
+        best_score = max(s for s, _ in scored)
+        pool = [p for s, p in scored if s == best_score]
     font_path = pool[rng.integers(0, len(pool))]
     return ImageFont.truetype(font_path, font_px), font_path
+
+
+def _wrap_pieces(word: str, glyphs: list, max_w: float):
+    """A whitespace-delimited token, split into pieces each narrower than
+    max_w -- passes a normal word through unchanged, but breaks an
+    unspaced-script token (a whole CJK/Thai/etc. line or paragraph
+    collapsed into one `.split()` token) into character-level chunks so it
+    still wraps across multiple lines instead of overflowing/clipping."""
+    if sum(g[2] for g in glyphs) <= max_w:
+        yield word, glyphs
+        return
+    buf_chars, buf_glyphs, buf_w = [], [], 0.0
+    for ch, g in zip(word, glyphs):
+        if buf_glyphs and buf_w + g[2] > max_w:
+            yield "".join(buf_chars), buf_glyphs
+            buf_chars, buf_glyphs, buf_w = [], [], 0.0
+        buf_chars.append(ch)
+        buf_glyphs.append(g)
+        buf_w += g[2]
+    if buf_glyphs:
+        yield "".join(buf_chars), buf_glyphs
 
 
 def render_flat_text(text: str, rng, page_px: int, page_mm: float, font_files: tuple,
                      font_pt_range=cfg.TEXT_FONT_PT_RANGE, margin_mm=cfg.TEXT_MARGIN_MM,
                      line_spacing_range=cfg.TEXT_LINE_SPACING_RANGE,
-                     add_old_creases: bool = True) -> np.ndarray:
+                     add_old_creases: bool = True, add_noise: bool = True) -> np.ndarray:
     """-> float32 (page_px, page_px) in [INK, PAPER]. Single-column, no
     kerning. Same tone convention and print defects (old-crease ink smear,
     fiber/grain noise) as texture.render_grid_texture. `add_old_creases`:
     the 2D print-stage old-crease ink-smear defect; False skips it
-    entirely (changes the rng draw sequence vs. the flag being on)."""
+    entirely (changes the rng draw sequence vs. the flag being on).
+    `add_noise`: fiber/grain paper-texture noise; False skips it."""
     px_per_mm = page_px / page_mm
     pt = rng.uniform(*font_pt_range)
     font_px = max(4, round(pt * 0.3528 * px_per_mm))   # 1pt = 0.3528mm
@@ -209,23 +233,29 @@ def render_flat_text(text: str, rng, page_px: int, page_mm: float, font_files: t
     w = h = page_px
     y = margin
     max_x, max_y = w - margin, h - margin
+    max_line_w = max_x - margin
     lines, line, line_w = [], [], 0.0
+    done = False
     for word in text.split():
+        if done:
+            break
         glyphs = [_glyph(font, font_key, ch) for ch in word]
-        word_w = sum(g[2] for g in glyphs)
-        new_w = line_w + (space_w if line else 0.0) + word_w
-        if new_w > (max_x - margin):
-            lines.append(line)
-            y += line_h
-            line = [(word, glyphs)]
-            line_w = word_w
-            if y + line_h > max_y:
-                line = []
-                break
-        else:
-            line.append((word, glyphs))
-            line_w = new_w
-    if line and y + line_h <= max_y:
+        for piece_word, piece_glyphs in _wrap_pieces(word, glyphs, max_line_w):
+            piece_w = sum(g[2] for g in piece_glyphs)
+            new_w = line_w + (space_w if line else 0.0) + piece_w
+            if new_w > max_line_w:
+                lines.append(line)
+                y += line_h
+                line = [(piece_word, piece_glyphs)]
+                line_w = piece_w
+                if y + line_h > max_y:
+                    line = []
+                    done = True
+                    break
+            else:
+                line.append((piece_word, piece_glyphs))
+                line_w = new_w
+    if not done and line and y + line_h <= max_y:
         lines.append(line)
 
     page = np.full((h, w), 255, dtype=np.uint8)
@@ -278,8 +308,9 @@ def render_flat_text(text: str, rng, page_px: int, page_mm: float, font_files: t
             blend = np.maximum(blend, _old_crease_field(c, mx, my))
         tex = tex * (1 - blend) + blurred * blend
 
-    fib = cv2.GaussianBlur(rng.standard_normal(tex.shape, dtype=np.float32), (0, 0),
-                           cfg.NOISE_FIB_BLUR_SIGMA)
-    grain = rng.standard_normal(tex.shape, dtype=np.float32)
-    tex = tex + cfg.NOISE_FIB_AMP * fib + cfg.NOISE_GRAIN_AMP * grain
+    if add_noise:
+        fib = cv2.GaussianBlur(rng.standard_normal(tex.shape, dtype=np.float32), (0, 0),
+                               cfg.NOISE_FIB_BLUR_SIGMA)
+        grain = rng.standard_normal(tex.shape, dtype=np.float32)
+        tex = tex + cfg.NOISE_FIB_AMP * fib + cfg.NOISE_GRAIN_AMP * grain
     return np.clip(tex, 0, 1).astype(np.float32)
