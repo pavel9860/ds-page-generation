@@ -67,6 +67,7 @@ def materialize_page(entry: dict) -> np.ndarray:
     bbox_y0, bbox_x0 = entry["bbox_y0"], entry["bbox_x0"]
     bbox_h, bbox_w, crop_y0 = entry["bbox_h"], entry["bbox_w"], entry["crop_y0"]
 
+    # Stage 1: 90-degree sideways-text rotation, if detected.
     if is_sideways(gray):
         rotated = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
         bbox, _, keep = has_enough_content(rotated)
@@ -78,6 +79,7 @@ def materialize_page(entry: dict) -> np.ndarray:
         # else: the rotation guess didn't hold up under its own crop
         # check -- keep the un-rotated gray and the manifest's own bbox
 
+    # Stage 2: deskew, computed independently on whatever stage 1 produced.
     if entry["needs_deskew"]:
         angle = estimate_deskew_angle(gray)
         if needs_deskew(angle):
