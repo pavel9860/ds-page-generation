@@ -34,9 +34,17 @@ def _bbox_strip(gray: np.ndarray, bbox, size: int) -> np.ndarray:
 
 
 def crop_from_bbox(gray: np.ndarray, bbox_y0: int, bbox_x0: int, bbox_h: int, bbox_w: int,
-                   crop_y0: int, size: int = CROP_SIZE) -> np.ndarray:
+                   crop_y0: int, size: int = CROP_SIZE):
+    """None if bbox_y0/x0/h/w no longer fit gray (its geometry changed
+    since the bbox was computed, e.g. a 90-degree rotation) or the
+    resulting strip is shorter than size -- never a truncated, smaller-
+    than-size array."""
+    if bbox_y0 + bbox_h > gray.shape[0] or bbox_x0 + bbox_w > gray.shape[1]:
+        return None
     bbox = (bbox_y0, bbox_y0 + bbox_h - 1, bbox_x0, bbox_x0 + bbox_w - 1)
     strip = _bbox_strip(gray, bbox, size)
+    if strip.shape[0] < crop_y0 + size:
+        return None
     return strip[crop_y0:crop_y0 + size, 0:size]
 
 

@@ -12,8 +12,7 @@ _tex_from_matrix themselves.
 import cv2
 import numpy as np
 
-from src.dataset.content_filter import has_enough_content
-from src.dataset.crop import crop_from_bbox, select_crop_1024
+from src.dataset.crop import crop_from_bbox
 from src.dataset.deskew import estimate_deskew_angle, is_sideways, needs_deskew, rotate_full_res
 
 
@@ -45,8 +44,10 @@ def render_book_text_page(source_path: str, text_seed: int) -> np.ndarray:
     return gray
 
 
-def materialize_page(entry: dict) -> np.ndarray:
-    """-> uint8 (1024,1024) grayscale."""
+def materialize_page(entry: dict):
+    """-> uint8 (1024,1024) grayscale, or None if the stored crop no
+    longer fits after a 90-degree rotation (never a smaller-than-1024
+    array)."""
     if entry["kind"] == "book_text":
         return render_book_text_page(entry["source_path"], entry["text_seed"])
 
@@ -64,20 +65,9 @@ def materialize_page(entry: dict) -> np.ndarray:
         gray = cv2.resize(gray, (used_w, used_h),
                           interpolation=cv2.INTER_AREA if (h * w) > (used_h * used_w) else cv2.INTER_LINEAR)
 
-    bbox_y0, bbox_x0 = entry["bbox_y0"], entry["bbox_x0"]
-    bbox_h, bbox_w, crop_y0 = entry["bbox_h"], entry["bbox_w"], entry["crop_y0"]
-
     # Stage 1: 90-degree sideways-text rotation, if detected.
     if is_sideways(gray):
-        rotated = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        bbox, _, keep = has_enough_content(rotated)
-        fresh = keep and select_crop_1024(rotated, np.random.default_rng(0), bbox=bbox)
-        if fresh:
-            gray = rotated
-            bbox_y0, bbox_x0, bbox_h, bbox_w, crop_y0 = (
-                fresh["bbox_y0"], fresh["bbox_x0"], fresh["bbox_h"], fresh["bbox_w"], fresh["crop_y0"])
-        # else: the rotation guess didn't hold up under its own crop
-        # check -- keep the un-rotated gray and the manifest's own bbox
+        gray = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
     # Stage 2: deskew, computed independently on whatever stage 1 produced.
     if entry["needs_deskew"]:
@@ -85,4 +75,5 @@ def materialize_page(entry: dict) -> np.ndarray:
         if needs_deskew(angle):
             gray = rotate_full_res(gray, angle, fill_value=255)
 
-    return crop_from_bbox(gray, bbox_y0, bbox_x0, bbox_h, bbox_w, crop_y0, size=entry["crop_size"])
+    return crop_from_bbox(gray, entry["bbox_y0"], entry["bbox_x0"], entry["bbox_h"], entry["bbox_w"],
+                          entry["crop_y0"], size=entry["crop_size"])

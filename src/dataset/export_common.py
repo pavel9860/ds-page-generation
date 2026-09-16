@@ -21,7 +21,10 @@ def _init(out_dir, save_fn):
 
 def _one(args):
     idx, entry = args
-    _SAVE_FN(_OUT_DIR, idx, materialize_page(entry))
+    page = materialize_page(entry)
+    if page is None:
+        return None
+    _SAVE_FN(_OUT_DIR, idx, page)
     return idx
 
 
@@ -29,12 +32,13 @@ def run_export(jobs: list, out_dir: str, workers: int, save_fn, chunksize: int =
                log_every: int = 2000):
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     t0 = time.time()
-    done = 0
+    done = skipped = 0
     with ProcessPoolExecutor(max_workers=workers, initializer=_init, initargs=(out_dir, save_fn)) as pool:
-        for _ in pool.map(_one, jobs, chunksize=chunksize):
+        for result in pool.map(_one, jobs, chunksize=chunksize):
             done += 1
+            skipped += result is None
             if log_every and done % log_every == 0:
                 el = time.time() - t0
                 print(f"{done}/{len(jobs)} elapsed={el:.0f}s rate={done / el:.1f}/s "
                      f"eta={(len(jobs) - done) / (done / el) / 60:.1f}min", flush=True)
-    print(f"done: n={len(jobs)} wall={time.time() - t0:.0f}s -> {out_dir}", flush=True)
+    print(f"done: n={len(jobs)} skipped={skipped} wall={time.time() - t0:.0f}s -> {out_dir}", flush=True)

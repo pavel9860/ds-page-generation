@@ -16,7 +16,7 @@ _N_STRIPS = 5
 # Below this we treat the page as already flat -- skip the warpAffine call
 # (and the noise it would otherwise add) entirely. Well above the coarse
 # search's own step so a single stray strip can't pass it on noise alone.
-_SKIP_ANGLE_DEG = 0.5
+_SKIP_ANGLE_DEG = 0.25
 # Above this the estimate is treated as a false detection (unrelated
 # structure dominating the variance metric, not real page skew) and
 # dropped rather than applied.
