@@ -91,9 +91,12 @@ def _pdf_text_page_info(page, rng, zoom: float = RASTER_ZOOM):
     """Content bbox + crop window from the page's own text-block
     coordinates -- no get_pixmap() call, so a born-digital page with a
     real text layer never gets rasterized during manifest building.
-    None for a landscape page (falls back to the raster path)."""
-    from src.dataset.content_filter import MAX_MARGIN_FRAC, MIN_CONTENT_AREA_FRAC, _bbox_from_mask
-    from src.dataset.crop import CROP_SIZE, PATCH_CONTENT_MIN_FRAC, PATCH_GRID, _Y_STRIDE, _patch_coverage_at
+    None for a landscape page (falls back to the raster path). Shares
+    its keep-check and window search with the pixel-based raster path
+    (content_filter.bbox_keep, crop.select_window_in_mask) -- only the
+    mask source (text-block occupancy vs. BlackHat/TopHat) differs."""
+    from src.dataset.content_filter import _bbox_from_mask, bbox_keep
+    from src.dataset.crop import CROP_SIZE, select_window_in_mask
 
     pw_pt, ph_pt = page.rect.width, page.rect.height
     if pw_pt > ph_pt:
@@ -115,32 +118,20 @@ def _pdf_text_page_info(page, rng, zoom: float = RASTER_ZOOM):
     bx0, bx1 = int(x0 * inv), min(used_w - 1, int(x1 * inv) + 1)
     bbox_h, bbox_w = by1 - by0 + 1, bx1 - bx0 + 1
 
-    h_margin = 1.0 - bbox_h / used_h
-    w_margin = 1.0 - bbox_w / used_w
-    area_frac = (bbox_h * bbox_w) / (used_h * used_w)
-    if area_frac < MIN_CONTENT_AREA_FRAC or h_margin > MAX_MARGIN_FRAC or w_margin > MAX_MARGIN_FRAC:
+    if not bbox_keep((by0, by1, bx0, bx1), used_h, used_w):
         return None
 
     size = CROP_SIZE
     strip_scale = size / bbox_w
     sh = max(1, round(bbox_h * strip_scale))
-    if sh < size:
-        return None
     strip_mask = _occupancy(blocks, size, sh, x_off=bx0, y_off=by0, scale=strip_scale)
-    integral = cv2.integral(strip_mask.astype(np.uint8))
-    max_y0 = sh - size
-    candidates = list(range(0, max_y0 + 1, _Y_STRIDE))
-    if candidates[-1] != max_y0:
-        candidates.append(max_y0)
-    qualifying = [y for y in candidates
-                 if _patch_coverage_at(integral, y, size, PATCH_GRID) >= PATCH_CONTENT_MIN_FRAC]
-    if not qualifying:
+    crop_y0 = select_window_in_mask(strip_mask, rng, size)
+    if crop_y0 is None:
         return None
 
     return dict(content_frac=round(float(coarse_mask.mean()), 5), needs_deskew=False,
                deskew_angle_deg=0.0, used_h=used_h, used_w=used_w, crop_size=size,
-               bbox_y0=by0, bbox_x0=bx0, bbox_h=bbox_h, bbox_w=bbox_w,
-               crop_y0=int(rng.choice(qualifying)))
+               bbox_y0=by0, bbox_x0=bx0, bbox_h=bbox_h, bbox_w=bbox_w, crop_y0=crop_y0)
 
 
 def _job_pdf(args, all_pages: bool = False):

@@ -44,17 +44,25 @@ def content_bbox_fast(gray: np.ndarray):
             int(x0 * inv), min(w - 1, int(x1 * inv) + 1)), content_frac
 
 
+def bbox_keep(bbox, h: int, w: int, min_area_frac: float = MIN_CONTENT_AREA_FRAC,
+             max_margin_frac: float = MAX_MARGIN_FRAC) -> bool:
+    """Margin/area keep-check for a content bbox in an h x w page --
+    shared by any mask source (pixel BlackHat/TopHat, PDF text-block
+    occupancy, ...), not just the raster path below."""
+    y0, y1, x0, x1 = bbox
+    bbox_area_frac = ((y1 - y0 + 1) * (x1 - x0 + 1)) / (h * w)
+    v_margin_frac = 1.0 - (y1 - y0 + 1) / h
+    h_margin_frac = 1.0 - (x1 - x0 + 1) / w
+    return (bbox_area_frac >= min_area_frac and v_margin_frac <= max_margin_frac
+           and h_margin_frac <= max_margin_frac)
+
+
 def has_enough_content(gray: np.ndarray, min_area_frac: float = MIN_CONTENT_AREA_FRAC,
                        max_margin_frac: float = MAX_MARGIN_FRAC,
                        min_content_frac: float = MIN_CONTENT_FRAC):
     bbox, content_frac = content_bbox_fast(gray)
     if bbox is None:
         return None, content_frac, False
-    y0, y1, x0, x1 = bbox
-    h, w = gray.shape
-    bbox_area_frac = ((y1 - y0 + 1) * (x1 - x0 + 1)) / (h * w)
-    v_margin_frac = 1.0 - (y1 - y0 + 1) / h
-    h_margin_frac = 1.0 - (x1 - x0 + 1) / w
-    keep = (bbox_area_frac >= min_area_frac and v_margin_frac <= max_margin_frac
-           and h_margin_frac <= max_margin_frac and content_frac >= min_content_frac)
+    keep = (bbox_keep(bbox, *gray.shape, min_area_frac, max_margin_frac)
+           and content_frac >= min_content_frac)
     return bbox, content_frac, keep

@@ -40,6 +40,27 @@ def crop_from_bbox(gray: np.ndarray, bbox_y0: int, bbox_x0: int, bbox_h: int, bb
     return strip[crop_y0:crop_y0 + size, 0:size]
 
 
+def select_window_in_mask(mask: np.ndarray, rng, size: int = CROP_SIZE,
+                          min_patch_frac: float = PATCH_CONTENT_MIN_FRAC):
+    """Vertical crop offset into a size-wide content-occupancy mask (any
+    source: pixel BlackHat/TopHat, PDF text-block occupancy, ...) whose
+    8x8/10x10 patch grid clears min_patch_frac coverage. None if the mask
+    is shorter than size, or no offset qualifies."""
+    sh = mask.shape[0]
+    if sh < size:
+        return None
+    integral = cv2.integral(mask.astype(np.uint8))
+    max_y0 = sh - size
+    candidates = list(range(0, max_y0 + 1, _Y_STRIDE))
+    if candidates[-1] != max_y0:
+        candidates.append(max_y0)
+    qualifying = [y0 for y0 in candidates
+                 if _patch_coverage_at(integral, y0, size, PATCH_GRID) >= min_patch_frac]
+    if not qualifying:
+        return None
+    return int(rng.choice(qualifying))
+
+
 def select_crop_1024(gray: np.ndarray, rng, bbox=None, size: int = CROP_SIZE,
                      min_patch_frac: float = PATCH_CONTENT_MIN_FRAC):
     if bbox is None:
@@ -49,24 +70,7 @@ def select_crop_1024(gray: np.ndarray, rng, bbox=None, size: int = CROP_SIZE,
     by0, by1, bx0, bx1 = bbox
     bbox_h, bbox_w = by1 - by0 + 1, bx1 - bx0 + 1
     strip = _bbox_strip(gray, bbox, size)
-    sh = strip.shape[0]
-
-    if sh < size:
+    crop_y0 = select_window_in_mask(_content_mask(strip), rng, size, min_patch_frac)
+    if crop_y0 is None:
         return None
-
-    mask = _content_mask(strip)
-    integral = cv2.integral(mask.astype(np.uint8))
-
-    max_y0 = sh - size
-    candidates = list(range(0, max_y0 + 1, _Y_STRIDE))
-    if candidates[-1] != max_y0:
-        candidates.append(max_y0)
-
-    qualifying = []
-    for y0 in candidates:
-        cov = _patch_coverage_at(integral, y0, size, PATCH_GRID)
-        if cov >= min_patch_frac:
-            qualifying.append(y0)
-    if not qualifying:
-        return None
-    return dict(bbox_y0=by0, bbox_x0=bx0, bbox_h=bbox_h, bbox_w=bbox_w, crop_y0=int(rng.choice(qualifying)))
+    return dict(bbox_y0=by0, bbox_x0=bx0, bbox_h=bbox_h, bbox_w=bbox_w, crop_y0=crop_y0)
