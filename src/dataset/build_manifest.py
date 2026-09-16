@@ -10,7 +10,6 @@ import argparse
 import glob
 import json
 import os
-import re
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -83,11 +82,6 @@ def _process_gray(gray: np.ndarray, rng, allow_deskew: bool = False):
     return dict(content_frac=round(content_frac, 5), needs_deskew=did_deskew,
                deskew_angle_deg=round(angle, 3), used_h=gray.shape[0], used_w=gray.shape[1],
                crop_size=1024, **crop)
-
-
-_CYR_RE = re.compile("[Ѐ-ӿ]")
-_STOP_EN = set("the and of to in is was that he she it with as for on at by "
-              "an be this his her they were are not".split())
 
 
 def _pdf_gray_pages(pdf_path: str, page_indices, zoom=RASTER_ZOOM):
@@ -252,16 +246,15 @@ def _job_book_text(args):
 # driver
 # ---------------------------------------------------------------------------
 
-def _run_group(name, jobs, job_fn, workers, out_f, kept, target, t0, lang_counts, returns_list=True):
+def _run_group(name, jobs, job_fn, workers, out_f, kept, target, t0, lang_counts):
     if kept[0] >= target or not jobs:
         print(f"[{name}] skipped ({kept[0]}/{target} already, {len(jobs)} jobs)", flush=True)
         return
     print(f"[{name}] {len(jobs)} jobs", flush=True)
     done = 0
     with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
-        for result in pool.map(job_fn, jobs, chunksize=8):
+        for recs in pool.map(job_fn, jobs, chunksize=8):
             done += 1
-            recs = result if returns_list else [result]
             for rec in recs:
                 if kept[0] >= target:
                     break
