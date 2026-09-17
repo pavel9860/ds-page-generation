@@ -62,14 +62,18 @@ def _apply_uv_mapping(tex, zf, cam, mm_w, mm_h, out_size, ppm):
 
 
 def emulate_photo(img, depth, page, cam, out_size, rng, bg_value=0, blur_scale=1.0,
-                  bad_area_enabled=True, border_jitter_enabled=True, shade_enabled=True):
+                  bad_area_enabled=True, border_jitter_enabled=True, shade_enabled=True,
+                  photometric_enabled=True):
     """Stage 4: shading, defocus, smudge/shake blur, exposure/noise/JPEG.
     `out_size` must be the FINAL image size. `bg_value`: off-page fill
-    color. `blur_scale`: multiplies defocus/smudge/shake strength.
-    `bad_area_enabled`, `border_jitter_enabled`, `shade_enabled`: on for
-    the grid pipeline; text turns off bad_area/border_jitter (no crop-
-    style off-page edge to fake) and can turn off shade. Returns (rgb,
-    bad_area) -- bad_area marks a damaged region whose GT must be dropped."""
+    color. `blur_scale`: multiplies defocus/smudge/shake strength (<=0
+    disables all three). `bad_area_enabled`, `border_jitter_enabled`,
+    `shade_enabled`: on for the grid pipeline; text turns off bad_area/
+    border_jitter (no crop-style off-page edge to fake) and can turn off
+    shade. `photometric_enabled`: exposure/gamma/color-cast/noise/JPEG --
+    off means a plain grayscale->uint8 cast with no camera-photo effects
+    at all (pure geometric rendering). Returns (rgb, bad_area) -- bad_area
+    marks a damaged region whose GT must be dropped."""
     if shade_enabled:
         img = img * _local_shade(depth, out_size, rng)
     off_frac = (~page).mean()
@@ -81,7 +85,11 @@ def emulate_photo(img, depth, page, cam, out_size, rng, bg_value=0, blur_scale=1
     img = _defocus_blur(img, depth, page, cam, rng, blur_scale)
     img = _local_blur(img, out_size, rng, blur_scale)
     img = _camera_shake(img, rng, blur_scale)
-    rgb = _photometric(img, rng)
+    if photometric_enabled:
+        rgb = _photometric(img, rng)
+    else:
+        gray = np.clip(img * 255, 0, 255).astype(np.uint8)
+        rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR) if gray.ndim == 2 else gray
     bad_area = np.zeros((out_size, out_size), bool)
     if bad_area_enabled:
         rgb, bad_area = _bad_area(rgb, depth, out_size, rng)

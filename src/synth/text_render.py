@@ -147,18 +147,25 @@ def render_text_raw(seed, corpus_paths, font_files, out_size=cfg.TEXT_CANVAS, uv
 
 
 def generate_text(seed, corpus_paths, font_files, out_size=cfg.TEXT_CANVAS, uv_size=cfg.TEXT_UV_SIZE,
-                  lowres_px=cfg.TEXT_LOWRES_PX, shade_enabled=True, flat_tex=None):
+                  lowres_px=cfg.TEXT_LOWRES_PX, shade_enabled=True, flat_tex=None,
+                  blur_scale=None, add_creases=None, photometric_enabled=True):
     """render_text_raw + stage-4 photo emulation. Returns (photo_hr,
     photo_lowres, uv_map, flat_page, cam, zf, map3d); cam/zf are for
     diagnostics (rectify_backward, quiver visualization). map3d: (uv_size,
     uv_size, 3) float32 (X, Y, Z) mm surface coords, the page's own
-    isometric mesh (see _build_maps). `flat_tex`: see render_text_raw."""
+    isometric mesh (see _build_maps). `flat_tex`: see render_text_raw.
+    `add_creases`: forwarded to render_text_raw (3D crease network).
+    `blur_scale`: defocus/smudge/shake strength (None: cfg.TEXT_BLUR_SCALE).
+    `photometric_enabled`: see emulate_photo."""
     img, depth, page, cam, zf, uv_map, tex, map3d = render_text_raw(seed, corpus_paths, font_files,
-                                                                      out_size, uv_size, flat_tex)
+                                                                      out_size, uv_size, flat_tex,
+                                                                      add_creases=add_creases)
     rng = np.random.default_rng(seed * cfg.EXPORT_SEED_MULT + 3)
+    blur_scale = cfg.TEXT_BLUR_SCALE if blur_scale is None else blur_scale
     rgb, _ = emulate_photo(img, depth, page, cam, out_size, rng, bg_value=cfg.TEXT_BG_GRAY,
-                           blur_scale=cfg.TEXT_BLUR_SCALE, bad_area_enabled=False,
-                           border_jitter_enabled=False, shade_enabled=shade_enabled)
+                           blur_scale=blur_scale, bad_area_enabled=False,
+                           border_jitter_enabled=False, shade_enabled=shade_enabled,
+                           photometric_enabled=photometric_enabled)
     rgb_lowres = cv2.resize(rgb, (lowres_px, lowres_px), interpolation=cv2.INTER_AREA)
     flat_page = np.clip(tex * 255, 0, 255).astype(np.uint8)
     return rgb, rgb_lowres, uv_map, flat_page, cam, zf, map3d

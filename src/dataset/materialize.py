@@ -61,7 +61,7 @@ def materialize_page(entry: dict) -> np.ndarray:
     else:
         gray = cv2.imread(entry["source_path"], cv2.IMREAD_GRAYSCALE)
 
-    gray = rotate90(gray, entry["rotate90"])
+    gray = rotate90(gray, entry.get("rotate90", 0))
 
     h, w = gray.shape
     if (h, w) != (used_h, used_w):
