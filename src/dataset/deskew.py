@@ -72,21 +72,34 @@ def needs_deskew(angle_deg: float) -> bool:
     return _SKIP_ANGLE_DEG <= abs(angle_deg) <= _MAX_APPLIED_DEG
 
 
-_SIDEWAYS_VAR_RATIO = 3.0
-
-
-def is_sideways(gray: np.ndarray) -> bool:
-    """True if the page's real text lines read vertically (a sideways
-    scan) -- checked at page-building time only, not manifest-build time,
-    since a 90-degree rotation moves content far enough that any bbox/crop
-    computed before it would no longer apply."""
+def detect_rotation(gray: np.ndarray) -> int:
+    """Content-based 90-degree orientation: text lines produce sharp
+    horizontal-band row variance only when the page is actually upright,
+    so picking whichever of (as-is, +90, -90) maximizes it identifies the
+    true orientation directly. Aspect ratio alone can't tell a genuinely
+    landscape document from a portrait page rotated sideways -- that
+    conflation was rotating correctly-oriented landscape pages into
+    sideways ones. Run once at manifest-build time, before bbox/crop
+    selection, since a 90-degree rotation moves content far enough that
+    any bbox/crop computed before it would no longer apply; the decision
+    is stored in the manifest and replayed as-is at page-building time.
+    Returns one of 0, 90, -90 (degrees to rotate clockwise)."""
     scale = min(1.0, _DOWNSCALE_PX / max(gray.shape))
     small = (cv2.resize(gray, (round(gray.shape[1] * scale), round(gray.shape[0] * scale)),
                         interpolation=cv2.INTER_AREA) if scale < 1.0 else gray)
     _, bw = cv2.threshold(small, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    var0 = _row_variance_at_angle(bw, 0.0)
-    var90 = _row_variance_at_angle(cv2.rotate(bw, cv2.ROTATE_90_COUNTERCLOCKWISE), 0.0)
-    return var90 > var0 * _SIDEWAYS_VAR_RATIO
+    candidates = [(_row_variance_at_angle(bw, 0.0), 0),
+                 (_row_variance_at_angle(cv2.rotate(bw, cv2.ROTATE_90_CLOCKWISE), 0.0), 90),
+                 (_row_variance_at_angle(cv2.rotate(bw, cv2.ROTATE_90_COUNTERCLOCKWISE), 0.0), -90)]
+    return max(candidates)[1]
+
+
+def rotate90(gray: np.ndarray, degrees: int) -> np.ndarray:
+    if degrees == 90:
+        return cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)
+    if degrees == -90:
+        return cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    return gray
 
 
 def rotate_full_res(img: np.ndarray, angle_deg: float, fill_value: int) -> np.ndarray:

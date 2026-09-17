@@ -1,5 +1,5 @@
 """Fields: source_path, page_index, language, category, content_frac,
-needs_deskew, used_h, used_w, bbox_y0, bbox_x0, bbox_h,
+needs_deskew, rotate90, used_h, used_w, bbox_y0, bbox_x0, bbox_h,
 bbox_w, crop_y0, crop_size, kind.
 
 Run:
@@ -58,9 +58,10 @@ def _page_indices(page_count: int, rng, cap: int = PAGES_PER_PDF_CAP) -> list:
 def _process_gray(gray: np.ndarray, rng):
     from src.dataset.content_filter import has_enough_content
     from src.dataset.crop import select_crop_1024
+    from src.dataset.deskew import detect_rotation, rotate90
 
-    if gray.shape[1] > gray.shape[0]:
-        gray = cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)
+    rot = detect_rotation(gray)
+    gray = rotate90(gray, rot)
 
     bbox, content_frac, keep = has_enough_content(gray)
     if not keep:
@@ -69,7 +70,7 @@ def _process_gray(gray: np.ndarray, rng):
     crop = select_crop_1024(gray, rng, bbox=bbox)
     if crop is None:
         return None
-    return dict(content_frac=round(content_frac, 5), needs_deskew=True,
+    return dict(content_frac=round(content_frac, 5), needs_deskew=True, rotate90=rot,
                used_h=gray.shape[0], used_w=gray.shape[1], crop_size=1024, **crop)
 
 

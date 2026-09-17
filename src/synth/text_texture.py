@@ -141,9 +141,11 @@ def sample_snippet(paths, rng, char_budget: float = _SNIPPET_CHAR_BUDGET) -> str
     words = _words(paths[rng.integers(0, len(paths))])
     if not words:
         return ""
-    start = int(rng.integers(0, len(words)))
+    n = len(words)
+    start = int(rng.integers(0, n))
     chunk, total = [], 0
-    for w in words[start:]:
+    for i in range(n):
+        w = words[(start + i) % n]
         chunk.append(w)
         total += len(w) + 1
         if total >= char_budget:

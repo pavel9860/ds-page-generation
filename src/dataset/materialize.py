@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from src.dataset.crop import crop_from_bbox
-from src.dataset.deskew import estimate_deskew_angle, is_sideways, needs_deskew, rotate_full_res
+from src.dataset.deskew import estimate_deskew_angle, needs_deskew, rotate90, rotate_full_res
 
 
 def _rasterize_pdf_page(source_path: str, page_index: int):
@@ -45,11 +45,13 @@ def render_book_text_page(source_path: str, text_seed: int) -> np.ndarray:
 
 
 def materialize_page(entry: dict) -> np.ndarray:
-    """-> uint8 (1024,1024) grayscale. All keep/reject filtering already
-    happened at manifest-build time; crop_from_bbox here always succeeds
-    (it's the exact procedure that was validated then). Rotation/deskew
-    apply to that already-square crop, not the full page, so they can
-    never change its shape -- no fit check needed."""
+    """-> uint8 (1024,1024) grayscale. All keep/reject filtering, and the
+    90-degree orientation decision, already happened at manifest-build
+    time on the full page; rotate90 here just replays that decision
+    rather than re-detecting it, since a 90-degree rotation moves content
+    enough that redoing detection after crop_from_bbox (on a much smaller
+    window) is far less reliable. Deskew applies after, to the resulting
+    square crop, so it can never change its shape -- no fit check needed."""
     if entry["kind"] == "book_text":
         return render_book_text_page(entry["source_path"], entry["text_seed"])
 
@@ -59,8 +61,7 @@ def materialize_page(entry: dict) -> np.ndarray:
     else:
         gray = cv2.imread(entry["source_path"], cv2.IMREAD_GRAYSCALE)
 
-    if gray.shape[1] > gray.shape[0]:
-        gray = cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)
+    gray = rotate90(gray, entry["rotate90"])
 
     h, w = gray.shape
     if (h, w) != (used_h, used_w):
@@ -69,9 +70,6 @@ def materialize_page(entry: dict) -> np.ndarray:
 
     page = crop_from_bbox(gray, entry["bbox_y0"], entry["bbox_x0"], entry["bbox_h"], entry["bbox_w"],
                           entry["crop_y0"], size=entry["crop_size"])
-
-    if is_sideways(page):
-        page = cv2.rotate(page, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
     if entry["needs_deskew"]:
         angle = estimate_deskew_angle(page)
