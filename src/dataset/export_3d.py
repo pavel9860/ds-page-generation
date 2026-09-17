@@ -1,5 +1,6 @@
 """Materialize a manifest (src/dataset/build_manifest.py) into one
-flat+3D+UV+warped .npz per page, split into train/val/test dirs.
+flat+3D+UV+warped .npz per page, split into train/val/test dirs, plus a
+flat|warped|dewarped triptych PNG per page for spot-checking.
 Pure geometric rendering: shading/blur/photometric effects/2D-and-3D
 creases all off -- only the page's own bend/fold surface (make_surface's
 BEND_PROB/FOLD_PROB) and the camera projection. Off-page background is
@@ -11,7 +12,8 @@ document never straddle splits, ~96/2/2 by page count.
 Run:
     .venv/bin/python -m src.dataset.export_3d \\
         --manifest /run/media/me/D/ML_DS/UVTM/Layouts/manifest_100k.jsonl \\
-        --out_dir /run/media/me/D/ML_DS/UVTM/Layouts/pages_100k_3d
+        --out_dir /run/media/me/D/ML_DS/UVTM/Layouts/pages_100k_3d \\
+        --vis_dir /run/media/me/D/ML_DS/UVTM/Layouts/pages_100k_3d_vis
 """
 import argparse
 import json
@@ -22,7 +24,9 @@ import numpy as np
 
 from src.dataset.build_manifest import _seed
 from src.dataset.materialize import materialize_page
-from src.synth.text_render import generate_text
+from src.synth import config as cfg
+from src.synth.text_render import PAGE_PX, generate_text, rectify_backward
+from scripts.export_uv_from_images import _make_triptych
 
 SPLIT_FRACS = (("train", 0.96), ("val", 0.02), ("test", 0.02))
 
@@ -56,12 +60,12 @@ def _assign_splits(entries: list) -> list:
 
 
 def _one(args):
-    idx, entry, split, out_dir = args
+    idx, entry, split, out_dir, vis_dir = args
     flat = materialize_page(entry)
     tex = _tex_from_matrix(flat)
     seed = entry.get("text_seed", _seed(entry["source_path"]) + entry.get("page_index", 0))
 
-    rgb, _rgb_lowres, uv_map, _flat_page, _cam, _zf, map3d = generate_text(
+    rgb, _rgb_lowres, uv_map, _flat_page, cam, zf, map3d = generate_text(
         seed, corpus_paths=None, font_files=None, flat_tex=tex,
         shade_enabled=False, blur_scale=0, add_creases=False, photometric_enabled=False)
 
@@ -72,21 +76,29 @@ def _one(args):
         uv=uv_map.astype(np.float16),
         map3d=map3d.astype(np.float16),
     )
+
+    if vis_dir is not None:
+        dewarped = rectify_backward(zf, cam, rgb, cfg.TEXT_CANVAS, page_px=PAGE_PX,
+                                    bg_value=cfg.TEXT_BG_GRAY)
+        cv2.imwrite(str(Path(vis_dir) / split / f"{idx:06d}.png"), _make_triptych(flat, rgb, dewarped))
     return split
 
 
-def main(manifest_path: str, out_dir: str, workers: int):
+def main(manifest_path: str, out_dir: str, workers: int, vis_dir: str = None):
     from concurrent.futures import ProcessPoolExecutor
     import time
 
     out_dir_p = Path(out_dir)
+    vis_dir_p = Path(vis_dir) if vis_dir else None
     with open(manifest_path, encoding="utf-8") as f:
         entries = [json.loads(line) for line in f]
     splits = _assign_splits(entries)
     for name, _ in SPLIT_FRACS:
         (out_dir_p / name).mkdir(parents=True, exist_ok=True)
+        if vis_dir_p is not None:
+            (vis_dir_p / name).mkdir(parents=True, exist_ok=True)
 
-    jobs = [(idx, entry, split, out_dir) for idx, (entry, split) in enumerate(zip(entries, splits))
+    jobs = [(idx, entry, split, out_dir, vis_dir) for idx, (entry, split) in enumerate(zip(entries, splits))
            if not (out_dir_p / split / f"{idx:06d}.npz").exists()]
     counts = {name: splits.count(name) for name, _ in SPLIT_FRACS}
     print(f"n={len(entries)} split_counts={counts} remaining={len(jobs)}", flush=True)
@@ -107,6 +119,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--out_dir", required=True)
+    ap.add_argument("--vis_dir", default=None, help="if given, also save a flat|warped|dewarped PNG per page")
     ap.add_argument("--workers", type=int, default=12)
     args = ap.parse_args()
-    main(args.manifest, args.out_dir, args.workers)
+    main(args.manifest, args.out_dir, args.workers, args.vis_dir)
