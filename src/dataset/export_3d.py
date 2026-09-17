@@ -22,11 +22,17 @@ import numpy as np
 
 from src.dataset.build_manifest import _seed
 from src.dataset.materialize import materialize_page
-from src.synth import config as cfg
 from src.synth.text_render import generate_text
-from scripts.export_uv_from_images import _tex_from_matrix
 
 SPLIT_FRACS = (("train", 0.96), ("val", 0.02), ("test", 0.02))
+
+
+def _tex_from_matrix(gray_u8: np.ndarray) -> np.ndarray:
+    """Raw pixel value as texture, 0..1 -- no INK/PAPER reflectance
+    compression (that's the print-stage "paper-like" toning this export
+    turns off), so a white source pixel warps to true white, not
+    PAPER=0.93 gray."""
+    return gray_u8.astype(np.float32) / 255.0
 
 
 def _init():
