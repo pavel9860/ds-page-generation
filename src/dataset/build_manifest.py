@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 
 LAYOUTS = "/run/media/me/D/ML_DS/UVTM/Layouts"
-PAGES_PER_PDF_CAP = 3
+PAGES_PER_PDF_CAP = 10
 RASTER_ZOOM = 2.0
 
 
@@ -45,10 +45,10 @@ def _seed(path: str) -> int:
     return hash(path) & 0xFFFFFFFF
 
 
-def _page_indices(page_count: int, cap: int = PAGES_PER_PDF_CAP) -> list:
+def _page_indices(page_count: int, rng, cap: int = PAGES_PER_PDF_CAP) -> list:
     if page_count <= cap:
         return list(range(page_count))
-    return sorted({int(round(i * (page_count - 1) / (cap - 1))) for i in range(cap)})
+    return sorted(rng.choice(page_count, size=cap, replace=False).tolist())
 
 
 # ---------------------------------------------------------------------------
@@ -153,13 +153,13 @@ def _pdf_page_is_scan(page) -> bool:
               > DOMINANT_IMAGE_AREA_FRAC for info in page.get_image_info())
 
 
-def _job_pdf(args, all_pages: bool = False):
+def _job_pdf(args):
     import fitz
     pdf_path, page_count_hint, language, category, seed = args
     rng = np.random.default_rng(seed)
     try:
         doc = fitz.open(pdf_path)
-        page_indices = list(range(doc.page_count)) if all_pages else _page_indices(doc.page_count)
+        page_indices = _page_indices(doc.page_count, rng)
     except Exception:
         return []
     recs = []
@@ -186,10 +186,6 @@ def _job_pdf(args, all_pages: bool = False):
     return recs
 
 
-def _job_pdf_all(args):
-    return _job_pdf(args, all_pages=True)
-
-
 def _job_image(args):
     image_path, language, category, seed = args
     rng = np.random.default_rng(seed)
@@ -209,7 +205,7 @@ def _job_image(args):
 
 def _corpus_pdf_jobs(meta_idx: dict):
     jobs = []
-    for sub in ("pdf", "pdf_flat", "scanned", "forms_bulk"):
+    for sub in ("pdf", "scanned", "forms_bulk"):
         for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus", sub, "**", "*.pdf"), recursive=True)):
             m = meta_idx.get(p)
             language = m["language"] if m else "unknown"
@@ -341,8 +337,8 @@ def main(out_path: str, n: int, workers: int, limit_files: int = None):
     meta_idx = _load_metadata(os.path.join(LAYOUTS, "corpus", "metadata.jsonl"))
     overflow_pdf_jobs, overflow_img_jobs = _corpus_overflow_jobs()
     groups = [
-        ("corpus_pdf", _corpus_pdf_jobs(meta_idx), _job_pdf_all),
-        ("overflow_pdf", overflow_pdf_jobs, _job_pdf_all),
+        ("corpus_pdf", _corpus_pdf_jobs(meta_idx), _job_pdf),
+        ("overflow_pdf", overflow_pdf_jobs, _job_pdf),
         ("overflow_img", overflow_img_jobs, _job_image),
         ("pdf_png_en", _pdf_png_jobs(), _job_image),
         ("xfund_funsd", _xfund_funsd_jobs(), _job_image),
