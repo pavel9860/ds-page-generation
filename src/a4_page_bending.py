@@ -22,8 +22,6 @@ RTOL, ATOL = 1e-11, 1e-13
 TOL = 1e-6
 
 # solve_free_arm continuation constants (see elastica_continuation.py, tuned
-# and speed/accuracy swept there): outer q-continuation steps, inner
-# arclength substeps per outer RK4 stage, and final Newton-polish iterations.
 FREE_ARM_N_OUTER = 3
 FREE_ARM_N_INNER = 8
 FREE_ARM_N_POLISH = 1
@@ -65,10 +63,7 @@ def solve_free_arm(theta0: float, z0: float, ell_max: float, q: float = Q,
     """Working solution. Never change it!
     Finds v0 with M(ell_max)=0 by continuation in q from q=0 (where v0=0 is
     the exact trivial root, for any theta0/ell_max), tracking the one branch
-    continuously connected to that anchor. See elastica_continuation.py for
-    the derivation and the speed/accuracy sweep behind the constants above.
-    v0_guess/rtol/atol are accepted for call-site compatibility only; this
-    method needs no seed and integrates its own continuation internally."""
+    continuously connected to that anchor."""
     q_steps = np.linspace(0.0, q, FREE_ARM_N_OUTER + 1)
     v0 = 0.0
     h_q = q / FREE_ARM_N_OUTER

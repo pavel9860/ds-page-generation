@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
@@ -9,6 +11,11 @@ def _rhs3(sp, y, ell, q, d):
     theta, v, _z = y
     shear = q * ell * (1.0 - sp)
     return [ell * v, ell * shear * np.cos(theta) / d, ell * np.sin(theta)]
+
+
+def _rhs3_scalar(sp, theta, v, ell, q, d, r_tip=0.0):
+    shear = q * ell * (1.0 - sp) + r_tip
+    return ell * v, ell * shear * math.cos(theta) / d, ell * math.sin(theta)
 
 
 def _M_end(v0, ell, q, d, theta0):
@@ -173,20 +180,22 @@ def solve_free_arm_fixedstep(theta0: float, ell_max: float, q_target: float,
     return v0, final
 
 
-def _rk4_fixed_3(theta0, v0, ell, q, d, n_steps=60):
+def _rk4_fixed_3(theta0, v0, ell, q, d, n_steps=60, r_tip=0.0):
     h = 1.0 / n_steps
-    y = np.array([theta0, v0, 0.0])
+    theta, v, z = theta0, v0, 0.0
     sp = 0.0
     traj = np.empty((n_steps + 1, 3))
-    traj[0] = y
+    traj[0] = (theta, v, z)
     for i in range(n_steps):
-        k1 = np.array(_rhs3(sp, y, ell, q, d))
-        k2 = np.array(_rhs3(sp + 0.5 * h, y + 0.5 * h * k1, ell, q, d))
-        k3 = np.array(_rhs3(sp + 0.5 * h, y + 0.5 * h * k2, ell, q, d))
-        k4 = np.array(_rhs3(sp + h, y + h * k3, ell, q, d))
-        y = y + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+        k1t, k1v, k1z = _rhs3_scalar(sp, theta, v, ell, q, d, r_tip)
+        k2t, k2v, k2z = _rhs3_scalar(sp + 0.5 * h, theta + 0.5 * h * k1t, v + 0.5 * h * k1v, ell, q, d, r_tip)
+        k3t, k3v, k3z = _rhs3_scalar(sp + 0.5 * h, theta + 0.5 * h * k2t, v + 0.5 * h * k2v, ell, q, d, r_tip)
+        k4t, k4v, k4z = _rhs3_scalar(sp + h, theta + h * k3t, v + h * k3v, ell, q, d, r_tip)
+        theta += (h / 6.0) * (k1t + 2 * k2t + 2 * k3t + k4t)
+        v += (h / 6.0) * (k1v + 2 * k2v + 2 * k3v + k4v)
+        z += (h / 6.0) * (k1z + 2 * k2z + 2 * k3z + k4z)
         sp += h
-        traj[i + 1] = y
+        traj[i + 1] = (theta, v, z)
     return traj
 
 
