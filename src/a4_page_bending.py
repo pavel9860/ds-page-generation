@@ -7,6 +7,8 @@ import numpy as np
 from scipy.integrate import solve_bvp, solve_ivp
 from scipy.optimize import brentq, fsolve, least_squares
 
+from elastica_continuation import _dv0_dq_fixedstep, _rk4_fixed_9
+
 __version__ = "1.0.0"
 
 Q = 0.7848      # distributed weight parameter [N/m per unit width]
@@ -18,6 +20,14 @@ NX, NY = 240, 81
 OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "paper_bend", "a4_page_bending_out")
 RTOL, ATOL = 1e-11, 1e-13
 TOL = 1e-6
+
+# solve_free_arm continuation constants (see elastica_continuation.py, tuned
+# and speed/accuracy swept there): outer q-continuation steps, inner
+# arclength substeps per outer RK4 stage, and final Newton-polish iterations.
+FREE_ARM_N_OUTER = 3
+FREE_ARM_N_INNER = 8
+FREE_ARM_N_POLISH = 1
+FREE_ARM_N_POLISH_STEPS = 20
 
 
 def rhs(sp: float, state: np.ndarray, ell: float, q: float, d: float,
@@ -52,15 +62,26 @@ def _crosses(sol, plane: float, n: int = 4000) -> float | None:
 def solve_free_arm(theta0: float, z0: float, ell_max: float, q: float = Q,
                    d: float = D, v0_guess: float = 0.0,
                    rtol: float = RTOL, atol: float = ATOL) -> dict:
-    v0, info, ier, msg = fsolve(
-        lambda p: [integrate(theta0, p[0], z0, ell_max, q, d, rtol=rtol, atol=atol).y[1, -1]],
-        [v0_guess], xtol=1e-9, full_output=True)
-    if abs(info["fvec"][0]) > TOL:
-        raise RuntimeError(
-            f"solve_free_arm: fsolve did not converge (ier={ier}: {msg.strip()}), "
-            f"theta0={np.degrees(theta0):.4f}deg, ell_max={ell_max*1e3:.2f}mm, "
-            f"v0_guess={v0_guess}, residual={info['fvec'][0]:.3e}")
-    v0 = v0[0]
+    """Working solution. Never change it!
+    Finds v0 with M(ell_max)=0 by continuation in q from q=0 (where v0=0 is
+    the exact trivial root, for any theta0/ell_max), tracking the one branch
+    continuously connected to that anchor. See elastica_continuation.py for
+    the derivation and the speed/accuracy sweep behind the constants above.
+    v0_guess/rtol/atol are accepted for call-site compatibility only; this
+    method needs no seed and integrates its own continuation internally."""
+    q_steps = np.linspace(0.0, q, FREE_ARM_N_OUTER + 1)
+    v0 = 0.0
+    h_q = q / FREE_ARM_N_OUTER
+    for i in range(FREE_ARM_N_OUTER):
+        qq = q_steps[i]
+        k1 = _dv0_dq_fixedstep(qq, v0, ell_max, d, theta0, FREE_ARM_N_INNER)[0]
+        k2 = _dv0_dq_fixedstep(qq + 0.5 * h_q, v0 + 0.5 * h_q * k1, ell_max, d, theta0, FREE_ARM_N_INNER)[0]
+        k3 = _dv0_dq_fixedstep(qq + 0.5 * h_q, v0 + 0.5 * h_q * k2, ell_max, d, theta0, FREE_ARM_N_INNER)[0]
+        k4 = _dv0_dq_fixedstep(qq + h_q, v0 + h_q * k3, ell_max, d, theta0, FREE_ARM_N_INNER)[0]
+        v0 = v0 + (h_q / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+    for _ in range(FREE_ARM_N_POLISH):
+        y = _rk4_fixed_9(theta0, v0, ell_max, q, d, n_steps=FREE_ARM_N_POLISH_STEPS)
+        v0 = v0 - y[1] / y[4]
     return {"branch": "free", "theta0": theta0, "v0": v0, "ell": ell_max,
             "r_tip": 0.0, "sol": integrate(theta0, v0, z0, ell_max, q, d, rtol=rtol, atol=atol)}
 
