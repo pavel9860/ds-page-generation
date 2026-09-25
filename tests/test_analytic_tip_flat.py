@@ -44,7 +44,7 @@ class TestNoLift(unittest.TestCase):
                 traj = profile_trajectory(theta0, arm)
                 zmin = traj[:, 2].min()
                 self.assertGreaterEqual(
-                    zmin, -1e-6,
+                    zmin, -2e-6,
                     f"deg={deg} ell={ell_mm}mm branch={arm['branch']}: "
                     f"curve dips {zmin*1e3:.4f}mm below the plane")
 

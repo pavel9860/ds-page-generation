@@ -4,7 +4,7 @@ import numpy as np
 
 from elastica_continuation import D, _dv0_dq_fixedstep, _rk4_fixed_9
 
-N_OUTER, N_INNER, N_POLISH, N_POLISH_STEPS = 3, 8, 1, 20
+N_OUTER, N_INNER, N_POLISH, N_POLISH_STEPS = 6, 4, 1, 8
 N_STEPS_SP = 30
 
 
@@ -138,7 +138,7 @@ def _rk4_12_flat(theta0, v0, g, q, d, n_steps, r_edge=0.0):
     return y
 
 
-def _newton_step(F_of, state, clamp=lambda s: s, tol=1e-22, n_iter=80):
+def _newton_step(F_of, state, clamp=lambda s: s, tol=1e-22, n_iter=10):
     """Trust-region Gauss-Newton on F_of(state) -> (F, J), minimizing
     ||F||^2. The tip/flat Jacobians are ill-conditioned near a short
     contact segment (frac or r_tip -> 0) or a near-singular 2x2 (small
@@ -180,90 +180,73 @@ def _newton_step(F_of, state, clamp=lambda s: s, tol=1e-22, n_iter=80):
     return state
 
 
+def _bend(th):
+    return 2.17 * math.sin(th) ** 0.69 / (0.25 * (24.0 * th) ** (2.0 / 3.0))
+
+
+def flat_seed(dev, h, q, d):
+    th = abs(dev)
+    G = max(r.real for r in np.roots([1.0, 0.0, 0.0, -24.0 * th, -72.0 * h * (q / d) ** (1.0 / 3.0)])
+            if abs(r.imag) < 1e-9)
+    lc = (d / q) ** (1.0 / 3.0)
+    g = G * lc
+    v0 = -math.copysign(_bend(th) * (G * G / 6.0 + 2.0 * th / G) / lc, dev)
+    return np.array([v0, g, -q * g / 3.0 + 2.0 * d * th / (g * g)])
+
+
+def tip_seed(dev, h, ell, q, d):
+    th = abs(dev)
+    B = -q / (24.0 * d)
+    c = (-th - 3.0 * B * ell ** 3 - h / ell) / (2.0 * ell * ell)
+    v0 = -math.copysign(-_bend(th) * (6.0 * c * ell + 12.0 * B * ell * ell), dev)
+    return np.array([v0, -6.0 * d * c])
+
+
+def free_touches(dev, h, ell, q, d):
+    return h + abs(dev) * ell - q * ell ** 4 / (8.0 * d) < 0.0
+
+
 def solve_arm_analytic(theta0, ell, plane=0.0, flat_theta=0.0, q=0.7848, d=D):
-    """Same continuation as free_v0_fast (N_OUTER RK4 steps in q, one Newton
-    polish), with free/tip/flat switching happening inline inside that one
-    loop -- see case5_solver.solve_arm_fast, which this mirrors exactly
-    except Newton (using the analytic Jacobians from _rk4_9_tip/_rk4_12_flat)
-    replaces least_squares for the tip/flat corrections."""
     min_dev = math.radians(1.0)
     dev = theta0 - flat_theta
     if abs(dev) < min_dev:
         theta0 = flat_theta + (min_dev if dev >= 0 else -min_dev)
 
+    def F_of_flat(state):
+        vv, g, re = state
+        y = _rk4_12_flat(theta0, vv, g, q, d, N_STEPS_SP, r_edge=re)
+        theta1, v1, z1, a1, b1, c1, a2, b2, c2, a3, b3, c3 = y
+        return (np.array([z1 - plane, theta1 - flat_theta, v1]),
+                np.array([[c1, c2, c3], [a1, a2, a3], [b1, b2, b3]]))
+
+    v0, g, r_edge = _newton_step(F_of_flat, flat_seed(theta0 - flat_theta, -plane, q, d))
+    if g <= ell:
+        return {"branch": "flat", "theta0": theta0, "v0": v0, "ell": g, "r_tip": r_edge}
+
+    def F_of_tip(state):
+        vv, rr = state
+        y = _rk4_9_tip(theta0, vv, ell, q, d, N_STEPS_SP, r_tip=rr)
+        theta1, v1, z1, a1, b1, c1, a2, b2, c2 = y
+        return np.array([z1 - plane, v1]), np.array([[c1, c2], [b1, b2]])
+
+    if free_touches(theta0 - flat_theta, -plane, ell, q, d):
+        v0, r_tip = _newton_step(F_of_tip, tip_seed(theta0 - flat_theta, -plane, ell, q, d))
+        return {"branch": "tip", "theta0": theta0, "v0": v0, "ell": ell, "r_tip": r_tip}
+
     q_steps = np.linspace(0.0, q, N_OUTER + 1)
     h_q = q / N_OUTER
-    v0, r_tip, frac, r_edge = 0.0, 0.0, 1.0, 0.0
-    phase = "free"
-
+    v0 = 0.0
     for i in range(N_OUTER):
-        qq = q_steps[i + 1]
+        q0 = q_steps[i]
+        k1 = _dv0_dq_fixedstep(q0, v0, ell, d, theta0, N_INNER)[0]
+        k2 = _dv0_dq_fixedstep(q0 + 0.5 * h_q, v0 + 0.5 * h_q * k1, ell, d, theta0, N_INNER)[0]
+        k3 = _dv0_dq_fixedstep(q0 + 0.5 * h_q, v0 + 0.5 * h_q * k2, ell, d, theta0, N_INNER)[0]
+        k4 = _dv0_dq_fixedstep(q0 + h_q, v0 + h_q * k3, ell, d, theta0, N_INNER)[0]
+        v0 = v0 + (h_q / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+    y = _rk4_fixed_9(theta0, v0, ell, q, d, n_steps=N_POLISH_STEPS)
+    v0 = v0 - y[1] / y[4]
+    if _zmin(theta0, v0, ell, q, d) >= plane - 1e-9:
+        return {"branch": "free", "theta0": theta0, "v0": v0, "ell": ell}
 
-        if phase == "free":
-            q0 = q_steps[i]
-            k1 = _dv0_dq_fixedstep(q0, v0, ell, d, theta0, N_INNER)[0]
-            k2 = _dv0_dq_fixedstep(q0 + 0.5 * h_q, v0 + 0.5 * h_q * k1, ell, d, theta0, N_INNER)[0]
-            k3 = _dv0_dq_fixedstep(q0 + 0.5 * h_q, v0 + 0.5 * h_q * k2, ell, d, theta0, N_INNER)[0]
-            k4 = _dv0_dq_fixedstep(q0 + h_q, v0 + h_q * k3, ell, d, theta0, N_INNER)[0]
-            v0 = v0 + (h_q / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
-            if i == N_OUTER - 1:
-                y = _rk4_fixed_9(theta0, v0, ell, qq, d, n_steps=N_POLISH_STEPS)
-                v0 = v0 - y[1] / y[4]
-
-            if _zmin(theta0, v0, ell, qq, d) < plane - 1e-9:
-                phase = "tip"
-            else:
-                continue
-
-        if phase == "tip":
-            def F_of_tip(state):
-                vv, rr = state
-                y = _rk4_9_tip(theta0, vv, ell, qq, d, N_STEPS_SP, r_tip=rr)
-                theta1, v1, z1, a1, b1, c1, a2, b2, c2 = y
-                return np.array([z1 - plane, v1]), np.array([[c1, c2], [b1, b2]])
-
-            v0, r_tip = _newton_step(F_of_tip, np.array([v0, r_tip]))
-
-            zmin, sp_min = _zmin_loc(theta0, v0, ell, qq, d, r_tip=r_tip, n_steps=N_STEPS_SP)
-            if zmin >= plane - 1e-9:
-                continue
-            phase = "flat"
-            frac = min(max(sp_min, 1e-3), 1.0)
-            r_edge = r_tip
-
-        # frac lives in (0, 1); solving for it directly needs a hard clamp
-        # at the bounds, and once a step lands exactly on a clamped bound
-        # every further trial re-evaluates at that same point -- the gain
-        # ratio the trust region relies on becomes ill-defined and it can
-        # only shrink, stalling. Solving instead for u = logit(frac) makes
-        # frac = sigmoid(u) unconstrained in u: no bound ever exists to
-        # stall against, and du/dfrac's chain rule is exact, not an
-        # approximation. r_edge is the touchdown-point force from
-        # _rk4_12_flat's derivation (v1 is now a residual too).
-        def F_of_flat_u(state):
-            vv, u, re = state
-            ff = 1.0 / (1.0 + math.exp(-u))
-            y = _rk4_12_flat(theta0, vv, ff * ell, qq, d, N_STEPS_SP, r_edge=re)
-            theta1, v1, z1, a1, b1, c1, a2, b2, c2, a3, b3, c3 = y
-            dff_du = ff * (1.0 - ff)
-            return (np.array([z1 - plane, theta1 - flat_theta, v1]),
-                    np.array([[c1, c2 * ell * dff_du, c3],
-                              [a1, a2 * ell * dff_du, a3],
-                              [b1, b2 * ell * dff_du, b3]]))
-
-        frac = min(max(frac, 1e-6), 1.0 - 1e-6)
-        u0 = math.log(frac / (1.0 - frac))
-        v0, u, r_edge = _newton_step(F_of_flat_u, np.array([v0, u0, r_edge]))
-        frac = 1.0 / (1.0 + math.exp(-u))
-
-    if phase == "flat":
-        # r_tip (not r_edge) on purpose: any caller integrating this arm's
-        # curved part (0 to "ell") consumes this exactly like the tip
-        # branch's r_tip -- same shear-equation role, just relocated from
-        # the true tip to the touchdown point. A branch-specific key name
-        # is precisely what let a stale "r_tip"-only caller silently fall
-        # back to 0.0 for flat arms and plot an unsupported, lifted curve.
-        return {"branch": "flat", "v0": v0, "ell": frac * ell, "r_tip": r_edge}
-    if phase == "tip":
-        return {"branch": "tip", "v0": v0, "ell": ell, "r_tip": r_tip}
-    return {"branch": "free", "v0": v0, "ell": ell}
+    v0, r_tip = _newton_step(F_of_tip, tip_seed(theta0 - flat_theta, -plane, ell, q, d))
+    return {"branch": "tip", "theta0": theta0, "v0": v0, "ell": ell, "r_tip": r_tip}
