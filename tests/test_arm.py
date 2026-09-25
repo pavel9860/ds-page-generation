@@ -1,6 +1,6 @@
-"""External regression tests for solve_arm_analytic.
+"""External regression tests for solve_arm.
 
-Run with: python -m unittest tests.test_analytic_tip_flat -v
+Run with: python -m unittest tests.test_arm -v
 
 These do not compare against a4_page_bending.solve_arm or case5_solver --
 both were found to share equation issues of their own (see analytic_tip_flat.py
@@ -17,8 +17,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from analytic_tip_flat import solve_arm_analytic
-from elastica_continuation import D, _rk4_fixed_3
+from elastica.arm import solve_arm
+from elastica.ode import D, rk4_3
 
 Q = 0.7848
 
@@ -26,7 +26,7 @@ Q = 0.7848
 def profile_trajectory(theta0, arm, n=2000):
     """Curved-part (theta, v, z) trajectory for a solved arm dict."""
     r_tip = arm.get("r_tip", 0.0)
-    return _rk4_fixed_3(theta0, arm["v0"], arm["ell"], Q, D, n_steps=n, r_tip=r_tip)
+    return rk4_3(theta0, arm["v0"], arm["ell"], Q, D, n_steps=n, r_tip=r_tip)
 
 
 class TestNoLift(unittest.TestCase):
@@ -40,7 +40,7 @@ class TestNoLift(unittest.TestCase):
         for deg in (20, 41, 61, 81):
             theta0 = math.radians(deg)
             for ell_mm in range(50, 301, 25):
-                arm = solve_arm_analytic(theta0, ell_mm / 1000.0, plane=0.0)
+                arm = solve_arm(theta0, ell_mm / 1000.0, plane=0.0)
                 traj = profile_trajectory(theta0, arm)
                 zmin = traj[:, 2].min()
                 self.assertGreaterEqual(
@@ -51,7 +51,7 @@ class TestNoLift(unittest.TestCase):
     def test_flat_branch_touches_down_not_lifted(self):
         # The case that motivated this suite: theta0=61deg, ell=300mm.
         theta0 = math.radians(61.0)
-        arm = solve_arm_analytic(theta0, 0.300, plane=0.0)
+        arm = solve_arm(theta0, 0.300, plane=0.0)
         self.assertEqual(arm["branch"], "flat")
         traj = profile_trajectory(theta0, arm)
         z_end = traj[-1, 2]
@@ -66,7 +66,7 @@ class TestNoLift(unittest.TestCase):
         # that integrate the curved part need it under the same key.
         theta0 = math.radians(61.0)
         for ell_mm, expected_branch in ((280, "tip"), (300, "flat")):
-            arm = solve_arm_analytic(theta0, ell_mm / 1000.0, plane=0.0)
+            arm = solve_arm(theta0, ell_mm / 1000.0, plane=0.0)
             self.assertEqual(arm["branch"], expected_branch)
             self.assertIn("r_tip", arm,
                           f"branch={arm['branch']} is missing the r_tip key")
@@ -86,7 +86,7 @@ class TestSupportPosition(unittest.TestCase):
         lens_mm = list(range(260, 301, 5))
         touchdowns = []
         for ell_mm in lens_mm:
-            arm = solve_arm_analytic(theta0, ell_mm / 1000.0, plane=0.0)
+            arm = solve_arm(theta0, ell_mm / 1000.0, plane=0.0)
             td_mm, _ = self._touchdown_mm(theta0, arm)
             touchdowns.append(td_mm)
 
@@ -106,7 +106,7 @@ class TestSupportPosition(unittest.TestCase):
         # concentrated external moment there.
         theta0 = math.radians(61.0)
         for ell_mm in (250, 280, 290, 300):
-            arm = solve_arm_analytic(theta0, ell_mm / 1000.0, plane=0.0)
+            arm = solve_arm(theta0, ell_mm / 1000.0, plane=0.0)
             traj = profile_trajectory(theta0, arm)
             v_end = traj[-1, 1]
             self.assertLess(
@@ -119,7 +119,7 @@ class TestSupportPosition(unittest.TestCase):
         # (the tip itself) must equal the full arm length.
         theta0 = math.radians(61.0)
         for ell_mm in (200, 230, 260, 280):
-            arm = solve_arm_analytic(theta0, ell_mm / 1000.0, plane=0.0)
+            arm = solve_arm(theta0, ell_mm / 1000.0, plane=0.0)
             self.assertEqual(arm["branch"], "tip")
             self.assertAlmostEqual(arm["ell"] * 1e3, ell_mm, places=6)
 
@@ -133,7 +133,7 @@ class TestArcLengthConservation(unittest.TestCase):
             theta0 = math.radians(deg)
             for ell_mm in (60, 150, 220, 300):
                 ell = ell_mm / 1000.0
-                arm = solve_arm_analytic(theta0, ell, plane=0.0)
+                arm = solve_arm(theta0, ell, plane=0.0)
                 curved = arm["ell"]
                 flat_len = max(ell - curved, 0.0) if arm["branch"] == "flat" else 0.0
                 self.assertAlmostEqual(curved + flat_len, ell, places=9)

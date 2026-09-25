@@ -7,8 +7,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from analytic_tip_flat import solve_arm_analytic
-from elastica_continuation import D, _rk4_fixed_3
+from elastica.arm import solve_arm
+from elastica.ode import D, rk4_3
 
 Q = 0.7848
 DEGS = range(1, 82, 10)
@@ -20,7 +20,7 @@ THETA_END = 1e-3
 
 
 def trajectory(arm, n=400):
-    return _rk4_fixed_3(arm["theta0"], arm["v0"], arm["ell"], Q, D, n_steps=n,
+    return rk4_3(arm["theta0"], arm["v0"], arm["ell"], Q, D, n_steps=n,
                         r_tip=arm.get("r_tip", 0.0))
 
 
@@ -29,7 +29,7 @@ class TestArmSweep(unittest.TestCase):
         for deg in DEGS:
             for ell_mm in ARMS_MM:
                 with self.subTest(deg=deg, ell_mm=ell_mm):
-                    arm = solve_arm_analytic(math.radians(deg), ell_mm / 1000.0)
+                    arm = solve_arm(math.radians(deg), ell_mm / 1000.0)
                     tr = trajectory(arm)
                     theta1, v1, z1 = tr[-1]
                     self.assertGreaterEqual(tr[:, 2].min(), -Z_PEN)
@@ -49,7 +49,7 @@ class TestRaisedClampSweep(unittest.TestCase):
             for deg in range(0, 86, 5):
                 for ell_mm in range(10, 301, 10):
                     with self.subTest(h_mm=h_mm, deg=deg, ell_mm=ell_mm):
-                        arm = solve_arm_analytic(math.radians(deg), ell_mm / 1000.0, plane=plane)
+                        arm = solve_arm(math.radians(deg), ell_mm / 1000.0, plane=plane)
                         tr = trajectory(arm)
                         theta1, v1, z1 = tr[-1]
                         self.assertGreaterEqual(tr[:, 2].min(), plane - Z_PEN)
@@ -65,14 +65,14 @@ class TestArmRegressions(unittest.TestCase):
     def test_flat_touches_down(self):
         for deg, ell_mm in ((31, 230), (7, 200), (20, 297), (41, 300)):
             with self.subTest(deg=deg, ell_mm=ell_mm):
-                arm = solve_arm_analytic(math.radians(deg), ell_mm / 1000.0)
+                arm = solve_arm(math.radians(deg), ell_mm / 1000.0)
                 self.assertEqual(arm["branch"], "flat")
                 theta1, v1, z1 = trajectory(arm)[-1]
                 self.assertLess(abs(z1), Z_END)
                 self.assertLess(abs(theta1), THETA_END)
 
     def test_81deg_300mm_rests_on_table(self):
-        arm = solve_arm_analytic(math.radians(81), 0.300)
+        arm = solve_arm(math.radians(81), 0.300)
         self.assertIn(arm["branch"], ("tip", "flat"))
         tr = trajectory(arm)
         self.assertLess(abs(tr[-1, 2]), Z_END)

@@ -4,18 +4,13 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
 
-D = 0.688e-3
+from elastica.ode import D, dv0_dq as _dv0_dq_fixedstep, rhs3 as _rhs3_scalar, rhs9 as _rhs9, rk4_3 as _rk4_fixed_3, rk4_9 as _rk4_fixed_9
 
 
 def _rhs3(sp, y, ell, q, d):
     theta, v, _z = y
     shear = q * ell * (1.0 - sp)
     return [ell * v, ell * shear * np.cos(theta) / d, ell * np.sin(theta)]
-
-
-def _rhs3_scalar(sp, theta, v, ell, q, d, r_tip=0.0):
-    shear = q * ell * (1.0 - sp) + r_tip
-    return ell * v, ell * shear * math.cos(theta) / d, ell * math.sin(theta)
 
 
 def _M_end(v0, ell, q, d, theta0):
@@ -50,23 +45,6 @@ if __name__ == "__main__":
     sp = np.linspace(0.0, 1.0, 2000)
     th = sol.sol(sp)[0]
     print("theta range deg:", np.degrees(th.min()), np.degrees(th.max()))
-
-
-def _rhs9(sp, y, ell, q, d):
-    theta, v, z, a, b, c, p, r, s = y
-    shear = q * ell * (1.0 - sp)
-    dshear_dq = ell * (1.0 - sp)
-    ct, st = np.cos(theta), np.sin(theta)
-    dtheta = ell * v
-    dv = ell * shear * ct / d
-    dz = ell * st
-    da = ell * b
-    db = -ell * shear * st * a / d
-    dc = ell * ct * a
-    dp = ell * r
-    dr = ell * (dshear_dq * ct - shear * st * p) / d
-    ds = ell * ct * p
-    return [dtheta, dv, dz, da, db, dc, dp, dr, ds]
 
 
 def _dv0_dq_analytic(q, v0, ell, d, theta0):
@@ -134,27 +112,6 @@ def solve_free_arm_hybrid(theta0: float, ell_max: float, q_target: float,
     return v0, final
 
 
-def _rk4_fixed_9(theta0, v0, ell, q, d, n_steps=20):
-    h = 1.0 / n_steps
-    y = np.array([theta0, v0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0])
-    sp = 0.0
-    for _ in range(n_steps):
-        k1 = np.array(_rhs9(sp, y, ell, q, d))
-        k2 = np.array(_rhs9(sp + 0.5 * h, y + 0.5 * h * k1, ell, q, d))
-        k3 = np.array(_rhs9(sp + 0.5 * h, y + 0.5 * h * k2, ell, q, d))
-        k4 = np.array(_rhs9(sp + h, y + h * k3, ell, q, d))
-        y = y + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
-        sp += h
-    return y
-
-
-def _dv0_dq_fixedstep(q, v0, ell, d, theta0, n_steps=20):
-    y = _rk4_fixed_9(theta0, v0, ell, q, d, n_steps)
-    M_v0 = y[4]
-    M_q = y[7]
-    return [-M_q / M_v0]
-
-
 def solve_free_arm_fixedstep(theta0: float, ell_max: float, q_target: float,
                              d: float = D, n_outer: int = 6, n_inner: int = 15):
     q_steps = np.linspace(0.0, q_target, n_outer + 1)
@@ -178,25 +135,6 @@ def solve_free_arm_fixedstep(theta0: float, ell_max: float, q_target: float,
                       args=(ell_max, q_target, d), method="RK45",
                       rtol=1e-10, atol=1e-12, dense_output=True)
     return v0, final
-
-
-def _rk4_fixed_3(theta0, v0, ell, q, d, n_steps=60, r_tip=0.0):
-    h = 1.0 / n_steps
-    theta, v, z = theta0, v0, 0.0
-    sp = 0.0
-    traj = np.empty((n_steps + 1, 3))
-    traj[0] = (theta, v, z)
-    for i in range(n_steps):
-        k1t, k1v, k1z = _rhs3_scalar(sp, theta, v, ell, q, d, r_tip)
-        k2t, k2v, k2z = _rhs3_scalar(sp + 0.5 * h, theta + 0.5 * h * k1t, v + 0.5 * h * k1v, ell, q, d, r_tip)
-        k3t, k3v, k3z = _rhs3_scalar(sp + 0.5 * h, theta + 0.5 * h * k2t, v + 0.5 * h * k2v, ell, q, d, r_tip)
-        k4t, k4v, k4z = _rhs3_scalar(sp + h, theta + h * k3t, v + h * k3v, ell, q, d, r_tip)
-        theta += (h / 6.0) * (k1t + 2 * k2t + 2 * k3t + k4t)
-        v += (h / 6.0) * (k1v + 2 * k2v + 2 * k3v + k4v)
-        z += (h / 6.0) * (k1z + 2 * k2z + 2 * k3z + k4z)
-        sp += h
-        traj[i + 1] = (theta, v, z)
-    return traj
 
 
 def solve_free_arm_nolib(theta0: float, ell_max: float, q_target: float,
