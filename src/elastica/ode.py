@@ -72,7 +72,7 @@ def zmin(theta0, v0, ell, q, d, r_tip=0.0, n_steps=30):
     h = 1.0 / n_steps
     theta, v, z = theta0, v0, 0.0
     sp = 0.0
-    lowest = None
+    lowest = math.inf
     for _ in range(n_steps):
         k1t, k1v, k1z = rhs3(sp, theta, v, ell, q, d, r_tip)
         k2t, k2v, k2z = rhs3(sp + 0.5 * h, theta + 0.5 * h * k1t, v + 0.5 * h * k1v, ell, q, d, r_tip)
@@ -82,7 +82,7 @@ def zmin(theta0, v0, ell, q, d, r_tip=0.0, n_steps=30):
         v += (h / 6.0) * (k1v + 2 * k2v + 2 * k3v + k4v)
         z += (h / 6.0) * (k1z + 2 * k2z + 2 * k3z + k4z)
         sp += h
-        if lowest is None or z < lowest:
+        if z < lowest:
             lowest = z
     return lowest
 

@@ -61,6 +61,30 @@ class TestRaisedClampSweep(unittest.TestCase):
                             self.assertLess(abs(theta1), THETA_END)
 
 
+class TestPlaneAboveClampSweep(unittest.TestCase):
+    def test_arms_reaching_raised_plane(self):
+        for plane_mm in (10, 20, 30):
+            plane = plane_mm / 1000.0
+            for deg in range(5, 86, 10):
+                for ell_mm in range(50, 351, 10):
+                    with self.subTest(plane_mm=plane_mm, deg=deg, ell_mm=ell_mm):
+                        arm = solve_arm(math.radians(deg), ell_mm / 1000.0, plane=plane)
+                        tr = trajectory(arm)
+                        theta1, v1, z1 = tr[-1]
+                        self.assertLess(abs(v1), V_END)
+                        self.assertLessEqual(arm["ell"], ell_mm / 1000.0 + 1e-12)
+                        if arm["branch"] in ("tip", "flat"):
+                            self.assertLess(abs(z1 - plane), Z_END)
+                        if arm["branch"] == "flat":
+                            self.assertLess(abs(theta1), THETA_END)
+
+    def test_arm_shorter_than_plane_height_is_free(self):
+        for plane_mm, ell_mm in ((10, 10), (20, 20), (30, 30)):
+            arm = solve_arm(math.radians(45), ell_mm / 1000.0, plane=plane_mm / 1000.0)
+            self.assertEqual(arm["branch"], "free")
+            self.assertLess(abs(trajectory(arm)[-1, 1]), V_END)
+
+
 class TestArmRegressions(unittest.TestCase):
     def test_flat_touches_down(self):
         for deg, ell_mm in ((31, 230), (7, 200), (20, 297), (41, 300)):

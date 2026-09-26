@@ -9,8 +9,11 @@ def _bend(th):
 
 def flat_seed(dev, h, q, d):
     th = abs(dev)
-    G = max(r.real for r in np.roots([1.0, 0.0, 0.0, -24.0 * th, -72.0 * h * (q / d) ** (1.0 / 3.0)])
-            if abs(r.imag) < 1e-9)
+    roots = [r.real for r in np.roots([1.0, 0.0, 0.0, -24.0 * th, -72.0 * h * (q / d) ** (1.0 / 3.0)])
+             if abs(r.imag) < 1e-9 and r.real > 0.0]
+    if not roots:
+        return None
+    G = max(roots)
     lc = (d / q) ** (1.0 / 3.0)
     g = G * lc
     v0 = -math.copysign(_bend(th) * (G * G / 6.0 + 2.0 * th / G) / lc, dev)
