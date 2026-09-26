@@ -8,6 +8,7 @@ from .ode import D, Q, rk4_3
 N_SEG_STEPS = 60
 N_CHECK_STEPS = 300
 N_PROFILE_STEPS = 800
+N_NEWTON = 80
 
 
 def _segment_rk4_sens(theta0, v0, z0, sens0, ell, q, d, r_tip, dshear_dp,
@@ -77,7 +78,7 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
             J = np.array([sens2[2, :] - sens1[2, :], sens3[1, :]])
             return F, J
 
-        return newton_step(F_of, np.array([theta0_guess, r1_guess]))
+        return newton_step(F_of, np.array([theta0_guess, r1_guess]), n_iter=N_NEWTON)
 
     def solve_left_tip(theta0_seed, v0_seed, r1_seed):
         def F_of(state):
@@ -94,7 +95,7 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
             J = np.array([sens1[2, :], sens2[2, :] - sens1[2, :], sens3[1, :]])
             return F, J
 
-        return newton_step(F_of, np.array([theta0_seed, v0_seed, r1_seed]))
+        return newton_step(F_of, np.array([theta0_seed, v0_seed, r1_seed]), n_iter=N_NEWTON)
 
     def solve_tip(theta0_seed, r1_seed):
         def F_of(state):
@@ -113,7 +114,7 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
                           sens3[2, :] - sens1[2, :]])
             return F, J
 
-        return newton_step(F_of, np.array([theta0_seed, r1_seed, 0.0]))
+        return newton_step(F_of, np.array([theta0_seed, r1_seed, 0.0]), n_iter=N_NEWTON)
 
     def solve_flat(theta0_seed, r1_seed, r_edge_seed, frac_seed):
         def raw_end_state(theta0, r1, fracC, r_edgeC):
@@ -147,7 +148,7 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
 
         u0 = math.log(max(frac_seed, 1e-6) / (1.0 - max(frac_seed, 1e-6)))
         theta0, r1, r_edgeC, u = newton_step(
-            F_of, np.array([theta0_seed, r1_seed, r_edge_seed, u0]))
+            F_of, np.array([theta0_seed, r1_seed, r_edge_seed, u0]), n_iter=N_NEWTON)
         return theta0, r1, r_edgeC, 1.0 / (1.0 + math.exp(-u))
 
     theta0, r1 = solve_free()
