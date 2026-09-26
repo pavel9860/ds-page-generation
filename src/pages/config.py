@@ -34,7 +34,7 @@ class PageConfig:
     two_profile_prob: float = 0.5
     side_b_jitter: float = 0.35
     ranges: ProfileRanges = field(default_factory=ProfileRanges)
-    support_len_frac: tuple = (0.05, 1.0)
+    support_frac: tuple = (0.0, 1.0)
     n_slices: int = 9
     nu: int = 149
     nv: int = 105

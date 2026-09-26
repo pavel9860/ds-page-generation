@@ -37,20 +37,10 @@ def sample_params(rng, cfg: PageConfig, kind, length):
             rng.uniform(*r.two_p2_frac) * length, rng.uniform(*r.two_h))
 
 
-def support_lines(kind, params, length):
-    if kind == "center_support":
-        return [0.5 * length]
-    if kind == "two_support":
-        return [params[0], params[2]]
-    return []
-
-
-def shell_sag(rng, cfg: PageConfig, kind, params, u, v, z0, support_frac=None):
-    frac = rng.uniform(*cfg.support_len_frac) if support_frac is None else support_frac
-    half = 0.5 * frac * (v[-1] - v[0])
-    span = (0.5 * v[-1] - half, 0.5 * v[-1] + half)
-    lines = [(pu, *span) for pu in support_lines(kind, params, u[-1])]
-    return solve_w(u, v, z0, lines, span if kind == "clamp" else None, cfg.paper, cfg.shell_nodes), span
+def support_span(rng, cfg: PageConfig, width, frac=None):
+    frac = rng.uniform(*cfg.support_frac) if frac is None else frac
+    lo = rng.uniform(max(0.0, 0.5 * width - frac * width), min(0.5 * width, width - frac * width))
+    return lo, lo + frac * width
 
 
 def inextensible(x, z, u, v):
@@ -67,7 +57,8 @@ def strains(X, Y, Z, u, v):
     return su, sv
 
 
-def make_page(rng, cfg: PageConfig = PageConfig(), kind=None, two_profiles=None, along_long=None, support_frac=None):
+def make_page(rng, cfg: PageConfig = PageConfig(), kind=None, two_profiles=None, along_long=None,
+              support_frac=None, span=None):
     kind = kind or rng.choice(list(cfg.kind_probs), p=list(cfg.kind_probs.values()))
     along_long = rng.random() < cfg.profile_along_long_prob if along_long is None else along_long
     two = rng.random() < cfg.two_profile_prob if two_profiles is None else two_profiles
@@ -89,9 +80,11 @@ def make_page(rng, cfg: PageConfig = PageConfig(), kind=None, two_profiles=None,
     x = np.array([np.interp(tv, t, [sl[0][i] for sl in slices]) for i in range(len(u))]).T
     z0 = np.array([np.interp(tv, t, [sl[1][i] for sl in slices]) for i in range(len(u))]).T
     if two:
-        sag, span = np.zeros_like(z0), (0.0, width)
+        span = (0.0, width)
+        sag = np.zeros_like(z0)
     else:
-        sag, span = shell_sag(rng, cfg, kind, params_a, u, v, z0, support_frac)
+        span = span or support_span(rng, cfg, width, support_frac)
+        sag = solve_w(u, v, z0, span, cfg.paper, cfg.shell_nodes)
     Z = z0 + sag
     X, Y = inextensible(x, Z, u, v)
     su, sv = strains(X, Y, Z, u, v)

@@ -9,7 +9,6 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from pages import PageConfig, make_page
-from pages.page import support_lines
 
 OUT = os.path.join(os.path.dirname(__file__), "out")
 
@@ -38,8 +37,8 @@ def render(p, name):
     heat(axs[0, 2], fig, U, V, p.sag,
          f"3. shell sag, support v={p.support_span[0] * 1e3:.0f}..{p.support_span[1] * 1e3:.0f} mm, "
          f"min {p.sag.min() * 1e3:.2f} mm", "magma")
-    for pu in support_lines(p.kind, p.params_a, p.u[-1]) or [0.0]:
-        axs[0, 2].plot([pu * 1e3] * 2, [s * 1e3 for s in p.support_span], color="r", lw=4)
+    for s in p.support_span:
+        axs[0, 2].axhline(s * 1e3, color="r", lw=1.5)
     heat(axs[1, 0], fig, U, V, p.Z, f"4. z0 + sag on (u, v), min {p.Z.min() * 1e3:.3f} mm")
     heat(axs[1, 1], fig, p.X, p.Y, p.Z, "5. final z(x, y)")
     heat(axs[1, 2], fig, U[:, 1:], V[:, 1:], np.abs(p.strain_u) * 1e-3 * 1e6,
@@ -57,10 +56,12 @@ if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     cfg = PageConfig()
     rng = np.random.default_rng(int(sys.argv[1]) if len(sys.argv) > 1 else 0)
-    runs = [(kind, False, along, frac) for kind in ("clamp", "center_support", "two_support")
-            for along, frac in ((True, 0.1), (False, 1.0))] + [("center_support", True, True, None)]
-    for kind, two, along, frac in runs:
-        p = make_page(rng, cfg, kind=kind, two_profiles=two, along_long=along, support_frac=frac)
-        name = f"page_{kind}_{'two' if two else 'one'}_{'long' if along else 'short'}_{'full' if frac == 1.0 else 'part'}"
-        print(render(p, name), "sag min %.2f mm, z min %.3f mm, strain u %.1e v %.1e" % (
-            p.sag.min() * 1e3, p.Z.min() * 1e3, np.nanmax(np.abs(p.strain_u)), np.nanmax(np.abs(p.strain_v))))
+    for kind in ("clamp", "center_support", "two_support"):
+        for along in (True, False):
+            w = cfg.width if along else cfg.height
+            for tag, span in (("point", (w / 2, w / 2)), ("50mm", (w / 2 - 0.010, w / 2 + 0.040)), ("full", (0.0, w))):
+                p = make_page(np.random.default_rng(1), cfg, kind=kind, two_profiles=False, along_long=along, span=span)
+                name = f"page_{kind}_{'long' if along else 'short'}_{tag}"
+                print(render(p, name), "sag min %.2f mm, z min %.3f mm" % (p.sag.min() * 1e3, p.Z.min() * 1e3))
+    p = make_page(rng, cfg, kind="center_support", two_profiles=True, along_long=True)
+    print(render(p, "page_center_support_two_profiles"))
