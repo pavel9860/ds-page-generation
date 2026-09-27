@@ -3,6 +3,7 @@ import math
 import numpy as np
 
 from .arm import solve_arm
+from .multifold import folded as _folded
 from .ode import rk4_3
 from .two_support import solve_two_support
 
@@ -40,7 +41,12 @@ def two_support(length, p1, h1, p2, h2, q, d):
     return s, x, z
 
 
-KINDS = {"clamp": clamp, "center_support": center_support, "two_support": two_support}
+def folded(length, *params):
+    *params, q, d = params
+    return _folded(length, *params, q=q, d=d)
+
+
+KINDS = {"clamp": clamp, "center_support": center_support, "two_support": two_support, "folded": folded}
 
 
 def solve_case(kind, params, length, q, d):

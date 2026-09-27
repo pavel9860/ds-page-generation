@@ -31,10 +31,42 @@ def sample_params(rng, cfg: PageConfig, kind, length):
     r = cfg.ranges
     if kind == "clamp":
         return (np.radians(rng.uniform(*r.clamp_deg)),)
+    if kind == "folded":
+        return sample_folds(rng, r, length)
     if kind == "center_support":
         return (rng.uniform(*r.center_h),)
     return (rng.uniform(*r.two_p1_frac) * length, rng.uniform(*r.two_h),
             rng.uniform(*r.two_p2_frac) * length, rng.uniform(*r.two_h))
+
+
+def sample_folds(rng, r, length):
+    """Flat (s_1..s_M, theta_1..theta_M, k_1..k_M), unused slots s = nan. Random
+    valley/mountain per crease, so C-folds, Z-folds and mixed patterns all occur."""
+    keys = list(r.fold_templates)
+    tpl = keys[rng.choice(len(keys), p=list(r.fold_templates.values()))]
+    while True:
+        if tpl is None:
+            pos = rng.uniform(r.fold_min_gap, length - r.fold_min_gap, rng.integers(1, r.fold_max + 1))
+        else:
+            pos = np.array(tpl) * length + rng.normal(0.0, r.fold_jitter, len(tpl))
+        pos = np.sort(pos)
+        gaps = np.diff(np.concatenate([[0.0], pos, [length]]))
+        if gaps.min() >= r.fold_min_gap:
+            break
+    m = len(pos)
+    ang = np.clip(r.fold_angle_deg_median * np.exp(rng.normal(0.0, r.fold_angle_sigma, m)), *r.fold_angle_deg)
+    sign = np.where(rng.random(m) < r.fold_valley_prob, 1.0, -1.0)
+    k = r.fold_k_median * np.exp(rng.normal(0.0, r.fold_k_sigma, m))
+    pad = np.full(r.fold_max - m, np.nan)
+    return tuple(np.concatenate([pos, pad, sign * np.radians(ang), pad, k, pad]))
+
+
+def folded_side_b(rng, cfg: PageConfig, params_a):
+    """Creases are straight lines: same positions and stiffness, only the rest angle varies across the width."""
+    m = cfg.ranges.fold_max
+    p = np.array(params_a)
+    p[m:2 * m] *= 1.0 + cfg.ranges.fold_side_b_angle_jitter * rng.uniform(-1.0, 1.0, m)
+    return tuple(p)
 
 
 def support_span(rng, cfg: PageConfig, width, frac=None):
@@ -66,7 +98,12 @@ def make_page(rng, cfg: PageConfig = PageConfig(), kind=None, two_profiles=None,
 
     params_a = sample_params(rng, cfg, kind, length)
     j = cfg.side_b_jitter
-    params_b = tuple((1 - j) * a + j * b for a, b in zip(params_a, sample_params(rng, cfg, kind, length))) if two else params_a
+    if not two:
+        params_b = params_a
+    elif kind == "folded":
+        params_b = folded_side_b(rng, cfg, params_a)
+    else:
+        params_b = tuple((1 - j) * a + j * b for a, b in zip(params_a, sample_params(rng, cfg, kind, length)))
 
     u = np.linspace(0.0, length, cfg.nu)
     v = np.linspace(0.0, width, cfg.nv)
@@ -79,7 +116,7 @@ def make_page(rng, cfg: PageConfig = PageConfig(), kind=None, two_profiles=None,
     tv = v / width
     x = np.array([np.interp(tv, t, [sl[0][i] for sl in slices]) for i in range(len(u))]).T
     z0 = np.array([np.interp(tv, t, [sl[1][i] for sl in slices]) for i in range(len(u))]).T
-    if two:
+    if two or kind == "folded":         # folded page lies on the table: no support-strip sag
         span = (0.0, width)
         sag = np.zeros_like(z0)
     else:
