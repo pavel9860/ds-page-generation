@@ -4,7 +4,7 @@ import numpy as np
 
 from .arm import solve_arm
 from .ode import rk4_3
-from .two_support import profile_xy, solve_two_support
+from .two_support import solve_two_support
 
 N_ARM = 400
 
@@ -35,7 +35,7 @@ def center_support(length, h, q, d):
 
 
 def two_support(length, p1, h1, p2, h2, q, d):
-    x, z, _ = profile_xy(solve_two_support(p1, h1, p2, h2, length, q=q, d=d))
+    x, z = solve_two_support(p1, h1, p2, h2, length, q=q, d=d)
     s = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(x), np.diff(z)))])
     return s, x, z
 

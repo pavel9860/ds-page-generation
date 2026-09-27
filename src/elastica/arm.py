@@ -43,7 +43,8 @@ def solve_arm(theta0, ell, plane=0.0, flat_theta=0.0, q=Q, d=D):
     reachable = ell > plane
     if reachable and free_touches(th, -plane, ell, q, d):
         v0, r_tip = newton_step(F_of_tip, tip_seed(th, m, -plane, ell, q, d))
-        return {"branch": "tip", "theta0": theta0, "v0": v0, "ell": ell, "r_tip": r_tip}
+        if r_tip <= 0.0:
+            return {"branch": "tip", "theta0": theta0, "v0": v0, "ell": ell, "r_tip": r_tip}
 
     q_steps = np.linspace(0.0, q, N_OUTER + 1)
     h_q = q / N_OUTER

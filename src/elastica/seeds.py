@@ -5,7 +5,7 @@ import numpy as np
 
 def _bend(th):
     th = max(abs(th), 1e-6)
-    return 2.17 * math.sin(th) ** 0.69 / (0.25 * (24.0 * th) ** (2.0 / 3.0))
+    return 2.17 * abs(math.sin(th)) ** 0.69 / (0.25 * (24.0 * th) ** (2.0 / 3.0))
 
 
 def flat_seed(th, m, h, q, d):
