@@ -25,7 +25,7 @@ def solve_two_support(p1, h1, p2, h2, L, q=Q, d=D):
     span = p2 - p1
 
     def middle(s, contact=None):
-        th1, th2, t1 = s[:3]
+        th1, _, t1 = s[:3]
         v1 = -_outer(th1, p1, h1, True, q, d)["v0"]
         if contact is None:
             return [_shoot(th1, v1, h1, t1, p1, p2, q, d)]

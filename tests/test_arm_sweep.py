@@ -3,7 +3,6 @@ import os
 import sys
 import unittest
 
-import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -91,7 +90,7 @@ class TestArmRegressions(unittest.TestCase):
             with self.subTest(deg=deg, ell_mm=ell_mm):
                 arm = solve_arm(math.radians(deg), ell_mm / 1000.0)
                 self.assertEqual(arm["branch"], "flat")
-                theta1, v1, z1 = trajectory(arm)[-1]
+                theta1, _, z1 = trajectory(arm)[-1]
                 self.assertLess(abs(z1), Z_END)
                 self.assertLess(abs(theta1), THETA_END)
 
