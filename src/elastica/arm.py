@@ -15,8 +15,11 @@ N_STEPS_SP = 30
 def solve_arm(theta0, ell, plane=0.0, flat_theta=0.0, q=Q, d=D):
     min_dev = math.radians(1.0)
     dev = theta0 - flat_theta
-    if abs(dev) < min_dev:
+    if plane >= 0.0 and abs(dev) < min_dev:
         theta0 = flat_theta + (min_dev if dev >= 0 else -min_dev)
+
+    m = math.cos(flat_theta)
+    th = (theta0 - flat_theta) * m
 
     def F_of_flat(state):
         vv, g, re = state
@@ -25,7 +28,7 @@ def solve_arm(theta0, ell, plane=0.0, flat_theta=0.0, q=Q, d=D):
         return (np.array([z1 - plane, theta1 - flat_theta, v1]),
                 np.array([[c1, c2, c3], [a1, a2, a3], [b1, b2, b3]]))
 
-    seed = flat_seed(theta0 - flat_theta, -plane, q, d)
+    seed = flat_seed(th, m, -plane, q, d)
     if seed is not None:
         v0, g, r_edge = newton_step(F_of_flat, seed)
         if g <= ell:
@@ -38,8 +41,8 @@ def solve_arm(theta0, ell, plane=0.0, flat_theta=0.0, q=Q, d=D):
         return np.array([z1 - plane, v1]), np.array([[c1, c2], [b1, b2]])
 
     reachable = ell > plane
-    if reachable and free_touches(theta0 - flat_theta, -plane, ell, q, d):
-        v0, r_tip = newton_step(F_of_tip, tip_seed(theta0 - flat_theta, -plane, ell, q, d))
+    if reachable and free_touches(th, -plane, ell, q, d):
+        v0, r_tip = newton_step(F_of_tip, tip_seed(th, m, -plane, ell, q, d))
         return {"branch": "tip", "theta0": theta0, "v0": v0, "ell": ell, "r_tip": r_tip}
 
     q_steps = np.linspace(0.0, q, N_OUTER + 1)
@@ -57,5 +60,5 @@ def solve_arm(theta0, ell, plane=0.0, flat_theta=0.0, q=Q, d=D):
     if not reachable or zmin(theta0, v0, ell, q, d) >= plane - 1e-9:
         return {"branch": "free", "theta0": theta0, "v0": v0, "ell": ell}
 
-    v0, r_tip = newton_step(F_of_tip, tip_seed(theta0 - flat_theta, -plane, ell, q, d))
+    v0, r_tip = newton_step(F_of_tip, tip_seed(th, m, -plane, ell, q, d))
     return {"branch": "tip", "theta0": theta0, "v0": v0, "ell": ell, "r_tip": r_tip}

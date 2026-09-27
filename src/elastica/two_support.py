@@ -66,7 +66,7 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
     def solve_free():
         def F_of(state):
             theta0, r1 = state
-            r_tip2 = r1 - q * p2
+            r_tip2 = r1 + r_l - q * p2
             sens0 = np.array([[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
             th1, v1, z1, sens1 = _segment_rk4_sens(theta0, 0.0, 0.0, sens0, p1, q, d,
                                                     r_tip1, dshear_dp=[0.0, 0.0])
@@ -80,27 +80,26 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
 
         return newton_step(F_of, np.array([theta0_guess, r1_guess]), n_iter=N_NEWTON)
 
-    def solve_left_tip(theta0_seed, v0_seed, r1_seed):
+    def solve_left_tip(theta0_seed, r1_seed):
         def F_of(state):
-            theta0, v0, r1 = state
-            r_tip2 = r1 - q * p2
-            sens0 = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]])
-            th1, v1, z1, sens1 = _segment_rk4_sens(theta0, v0, 0.0, sens0, p1, q, d,
-                                                    r_tip1, dshear_dp=[0.0, 0.0, 0.0])
+            theta0, r_l, r1 = state
+            sens0 = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+            th1, v1, z1, sens1 = _segment_rk4_sens(theta0, 0.0, 0.0, sens0, p1, q, d,
+                                                    r_l - q * p1, dshear_dp=[0.0, 1.0, 0.0])
             th2, v2, z2, sens2 = _segment_rk4_sens(th1, v1, z1, sens1, la, q, d,
-                                                    r_tip2, dshear_dp=[0.0, 0.0, 1.0])
+                                                    r_l + r1 - q * p2, dshear_dp=[0.0, 1.0, 1.0])
             _th3, v3, _z3, sens3 = _segment_rk4_sens(th2, v2, z2, sens2, lb, q, d,
                                                       0.0, dshear_dp=[0.0, 0.0, 0.0])
             F = np.array([z1 - h1, (z2 - z1) - (h2 - h1), v3])
             J = np.array([sens1[2, :], sens2[2, :] - sens1[2, :], sens3[1, :]])
             return F, J
 
-        return newton_step(F_of, np.array([theta0_seed, v0_seed, r1_seed]), n_iter=N_NEWTON)
+        return newton_step(F_of, np.array([theta0_seed, 0.0, r1_seed]), n_iter=N_NEWTON)
 
     def solve_tip(theta0_seed, r1_seed):
         def F_of(state):
             theta0, r1, r_tipC = state
-            r_tip2 = r1 - q * p2
+            r_tip2 = r1 + r_l - q * p2
             sens0 = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
             th1, v1, z1, sens1 = _segment_rk4_sens(theta0, 0.0, 0.0, sens0, p1, q, d,
                                                     r_tip1, dshear_dp=[0.0, 0.0, 0.0])
@@ -118,7 +117,7 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
 
     def solve_flat(theta0_seed, r1_seed, r_edge_seed, frac_seed):
         def raw_end_state(theta0, r1, fracC, r_edgeC):
-            r_tip2 = r1 - q * p2
+            r_tip2 = r1 + r_l - q * p2
             sens0 = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
             th1, v1, z1, sens1 = _segment_rk4_sens(theta0, 0.0, 0.0, sens0, p1, q, d,
                                                     r_tip1, dshear_dp=[0.0, 0.0, 0.0])
@@ -151,6 +150,32 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
             F_of, np.array([theta0_seed, r1_seed, r_edge_seed, u0]), n_iter=N_NEWTON)
         return theta0, r1, r_edgeC, 1.0 / (1.0 + math.exp(-u))
 
+    def solve_mid(theta0_seed, r1_seed, g_seed):
+        def raw(theta0, r1, g, rc):
+            sc = p1 + g
+            sens0 = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+            th1, v1, z1, sens1 = _segment_rk4_sens(theta0, 0.0, 0.0, sens0, p1, q, d,
+                                                    r_tip1, dshear_dp=[0.0, 0.0, 0.0])
+            thc, vc, zc, sensc = _segment_rk4_sens(th1, v1, z1, sens1, g, q, d,
+                                                    r1 + r_l - q * sc, dshear_dp=[0.0, 1.0, 0.0])
+            th2, v2, z2, sens2 = _segment_rk4_sens(thc, vc, zc, sensc, p2 - sc, q, d,
+                                                    r1 + r_l + rc - q * p2, dshear_dp=[0.0, 1.0, 1.0])
+            _th3, v3, _z3, sens3 = _segment_rk4_sens(th2, v2, z2, sens2, lb, q, d,
+                                                      0.0, dshear_dp=[0.0, 0.0, 0.0])
+            F = np.array([(z2 - z1) - (h2 - h1), v3, zc - z1 + h1, thc])
+            J = np.array([sens2[2, :] - sens1[2, :], sens3[1, :], sensc[2, :] - sens1[2, :], sensc[0, :]])
+            return F, J
+
+        def F_of(state):
+            theta0, r1, g, rc = state
+            F, Jsub = raw(theta0, r1, g, rc)
+            h = 1e-7
+            col_g = (raw(theta0, r1, g + h, rc)[0] - raw(theta0, r1, g - h, rc)[0]) / (2.0 * h)
+            return F, np.column_stack([Jsub[:, :2], col_g, Jsub[:, 2]])
+
+        return newton_step(F_of, np.array([theta0_seed, r1_seed, g_seed, 0.0]), n_iter=N_NEWTON)
+
+    r_l = 0.0
     theta0, r1 = solve_free()
     v0 = 0.0
     branch_left = "free"
@@ -159,12 +184,13 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
     z1 = sol1[-1, 2]
     zmin_left, _ = _zmin_interior(theta0, 0.0, p1, q, d, r_tip1, ext_offset=h1 - z1)
     if zmin_left < -1e-7:
-        theta0, v0, r1 = solve_left_tip(theta0, v0, r1)
+        theta0, r_l, r1 = solve_left_tip(theta0, r1)
+        r_tip1 = r_l - q * p1
         branch_left = "tip"
 
     sol1 = rk4_3(theta0, v0, p1, q, d, n_steps=N_CHECK_STEPS, r_tip=r_tip1)
     th1, v1, z1 = sol1[-1]
-    r_tip2 = r1 - q * p2
+    r_tip2 = r1 + r_l - q * p2
     sol2 = rk4_3(th1, v1, la, q, d, n_steps=N_CHECK_STEPS, r_tip=r_tip2)
     th2, v2, z2 = sol2[-1]
 
@@ -174,7 +200,7 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
     fracC = 1.0
     if zmin_right < -1e-7:
         theta0, r1, r_tipC = solve_tip(theta0, r1)
-        r_tip2 = r1 - q * p2
+        r_tip2 = r1 + r_l - q * p2
         sol1 = rk4_3(theta0, v0, p1, q, d, n_steps=N_CHECK_STEPS, r_tip=r_tip1)
         th1, v1, z1 = sol1[-1]
         sol2 = rk4_3(th1, v1, la, q, d, n_steps=N_CHECK_STEPS, r_tip=r_tip2)
@@ -184,7 +210,7 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
         if zmin_tip < -1e-7:
             frac_seed = min(max(sp_at_zmin_tip, 1e-3), 1.0 - 1e-3)
             theta0, r1, r_edgeC, fracC = solve_flat(theta0, r1, r_tipC, frac_seed)
-            r_tip2 = r1 - q * p2
+            r_tip2 = r1 + r_l - q * p2
             r_tipC = r_edgeC
             sol1 = rk4_3(theta0, v0, p1, q, d, n_steps=N_CHECK_STEPS, r_tip=r_tip1)
             th1, v1, z1 = sol1[-1]
@@ -192,9 +218,22 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
             th2, v2, z2 = sol2[-1]
             branch_right = "flat"
 
+    zmin_mid, sp_mid = _zmin_interior(th1, v1, la, q, d, r_tip2, ext_offset=h1)
+    g_c, r_c = None, 0.0
+    if zmin_mid < -1e-7 and branch_right == "free":
+        theta0, r1, g_c, r_c = solve_mid(theta0, r1, sp_mid * la)
+        r_tip2 = r1 + r_l - q * p2
+
     sol1 = rk4_3(theta0, v0, p1, q, d, n_steps=N_PROFILE_STEPS, r_tip=r_tip1)
     th1, v1, z1 = sol1[-1]
-    sol2 = rk4_3(th1, v1, la, q, d, n_steps=N_PROFILE_STEPS, r_tip=r_tip2)
+    if g_c is None:
+        sol2 = rk4_3(th1, v1, la, q, d, n_steps=N_PROFILE_STEPS, r_tip=r_tip2)
+    else:
+        n_a = max(1, round(N_PROFILE_STEPS * g_c / la))
+        sa = rk4_3(th1, v1, g_c, q, d, n_steps=n_a, r_tip=r1 + r_l - q * (p1 + g_c))
+        sb = rk4_3(*sa[-1, :2], la - g_c, q, d, n_steps=max(1, N_PROFILE_STEPS - n_a), r_tip=r1 + r_l + r_c - q * p2)
+        sb[:, 2] += sa[-1, 2]
+        sol2 = np.vstack([sa, sb[1:]])
     th2, v2, z2 = sol2[-1]
     ell_curved_C = fracC * lb
     sol3_curved = rk4_3(th2, v2, ell_curved_C, q, d, n_steps=N_PROFILE_STEPS, r_tip=r_tipC)
@@ -212,13 +251,13 @@ def solve_two_support(p1, h1, p2, h2, span, q=Q, d=D,
         segments.append(flat_traj)
         seg_ell.append(flat_len)
 
-    r2 = q * span - r1
+    r2 = q * span - r1 - r_l - r_c
     z_shift = h1 - z1
     return {"theta0": theta0, "v0": v0, "r1": r1, "r2": r2, "z_shift": z_shift,
             "p1": p1, "p2": p2, "span": span,
             "segments": tuple(segments), "seg_ell": tuple(seg_ell),
             "branch_right": branch_right, "r_tipC": r_tipC, "fracC": fracC,
-            "branch_left": branch_left}
+            "branch_left": branch_left, "r_left": r_l, "mid_contact": g_c, "r_mid": r_c}
 
 
 def profile_xy(res, n=300):

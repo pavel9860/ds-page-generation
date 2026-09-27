@@ -1,15 +1,3 @@
-"""External regression tests for solve_arm.
-
-Run with: python -m unittest tests.test_arm -v
-
-These do not compare against a4_page_bending.solve_arm or case5_solver --
-both were found to share equation issues of their own (see analytic_tip_flat.py
-history). Instead they check invariants the physics must satisfy regardless
-of which solver produced the answer: the arc never lifts through/above its
-own support, the returned contact-force key is consistent across branches,
-the touchdown position and moment vary continuously across the tip/flat
-switch, and arc length is conserved.
-"""
 import math
 import os
 import sys
