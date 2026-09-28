@@ -38,6 +38,19 @@ class ProfileRanges:
 
 
 @dataclass
+class ShallowCreaseConfig:
+    """Shallow creases (creases.shallow): a height map on the page, not applied to the surface."""
+    prob: float = 0.0                   # per page; 0 keeps pages crease-free
+    mean_groups: float = 1.8            # groups per page ~ 1 + Poisson(mean_groups - 1)
+    p_isolated: float = 0.3             # group is one unit
+    mean_extra: float = 1.5             # else 2 + Poisson(mean_extra) units
+    radius_mm: tuple = (15.0, 45.0)     # group radius
+    spread_deg: float = 25.0            # direction spread inside a group
+    singles_per_group: tuple = (3.0, 4.0)   # stand-alone single creases ~ Poisson(U(.) * n_groups)
+    pitch_mm: float = 0.5               # height-map grid
+
+
+@dataclass
 class PageConfig:
     width: float = 0.210
     height: float = 0.297
@@ -52,3 +65,4 @@ class PageConfig:
     nu: int = 149
     nv: int = 105
     shell_nodes: tuple = (31, 43)
+    shallow_creases: ShallowCreaseConfig = field(default_factory=ShallowCreaseConfig)

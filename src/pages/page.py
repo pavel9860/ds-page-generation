@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from creases import shallow
 from elastica import solve_case
 
 from .config import PageConfig
@@ -25,6 +26,8 @@ class Page:
     Z: np.ndarray
     strain_u: np.ndarray
     strain_v: np.ndarray
+    creases: list = None                # shallow creases: centerlines [mm] in (u, v), severity, sign, group
+    crease_h: np.ndarray = None         # their height map [mm] on a (v, u) grid of pitch cfg.shallow_creases.pitch_mm
 
 
 def sample_params(rng, cfg: PageConfig, kind, length):
@@ -125,4 +128,14 @@ def make_page(rng, cfg: PageConfig = PageConfig(), kind=None, two_profiles=None,
     Z = z0 + sag
     X, Y = inextensible(x, Z, u, v)
     su, sv = strains(X, Y, Z, u, v)
-    return Page(kind, params_a, params_b, along_long, u, v, slices, z0, sag, span, X, Y, Z, su, sv)
+    page = Page(kind, params_a, params_b, along_long, u, v, slices, z0, sag, span, X, Y, Z, su, sv)
+    sc = cfg.shallow_creases
+    if sc.prob > 0 and rng.random() < sc.prob:          # drawn after the geometry: surface unchanged
+        page.creases, page.crease_h = shallow_crease_map(rng, sc, length * 1e3, width * 1e3)
+    return page
+
+
+def shallow_crease_map(rng, sc, length_mm, width_mm):
+    creases = shallow.sample(rng, length_mm, width_mm, sc.mean_groups, sc.p_isolated, sc.mean_extra,
+                             sc.radius_mm, sc.spread_deg, sc.singles_per_group)
+    return creases, shallow.render(creases, length_mm, width_mm, sc.pitch_mm)
