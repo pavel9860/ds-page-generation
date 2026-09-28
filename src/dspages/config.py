@@ -85,14 +85,14 @@ class ShallowCreaseCfg:
 @dataclass(frozen=True)
 class DeepCreaseCfg:
     levels: tuple = (("light", 0.4), ("medium", 0.35), ("heavy", 0.25))
-    n_ridges: dict = field(default_factory=lambda: {"light": (6, 14), "medium": (15, 35), "heavy": (40, 80)})
+    coverage: dict = field(default_factory=lambda: {"light": (0.1, 0.4), "medium": (0.3, 0.8), "heavy": (0.6, 1.0)})
+    max_scale_mm: dict = field(default_factory=lambda: {"light": (30.0, 90.0), "medium": (25.0, 80.0),
+                                                        "heavy": (15.0, 70.0)})   # page's largest crease length
+    scale_ratio: tuple = (1.0, 5.0)               # largest / smallest local crease length on the page
+    region_mm: tuple = (40.0, 120.0)              # size of the regions of equal scale / coverage
+    density: float = 1.2                          # ridges per local length^2 of covered area
     k: dict = field(default_factory=lambda: {"light": (0.2, 0.6), "medium": (0.5, 1.2), "heavy": (0.7, 1.4)})
-    w_max_mm: dict = field(default_factory=lambda: {"light": 0.6, "medium": 1.4, "heavy": 1.5})   # strain < 0.5 % yield
-    length_median_frac: float = 0.12               # of the sheet diagonal, lognormal (Blair & Kudrolli)
-    length_sigma: float = 0.5
-    length_frac: tuple = (0.03, 0.4)
-    branch_prob: float = 0.65
-    max_degree: int = 4
+    w_max_mm: dict = field(default_factory=lambda: {"light": 0.6, "medium": 1.0, "heavy": 1.4})
     kink_deg: float = 25.0
     pitch_mm: float = 0.5
 
