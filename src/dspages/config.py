@@ -61,7 +61,7 @@ class SceneCfg:
     fold_k_sigma: float = 0.7
     fold_k: tuple = (0.003, 0.05)
     fold_side_b_angle_jitter: float = 0.25
-    near_flat_prob: float = 0.3
+    near_flat_prob: float = 0.15
     flat_support_h: tuple = (0.001, 0.005)
     flat_fold_deg: tuple = (1.0, 8.0)
     flat_clamp_deg: tuple = (2.0, 10.0)
@@ -197,10 +197,10 @@ class LayoutCfg:
 @dataclass(frozen=True)
 class CameraCfg:
     dist_mm: tuple = (100.0, 600.0)                 # camera to page centre
-    tilt_deg: tuple = (0.0, 35.0)                   # optical axis to the table normal
-    roll_deg: tuple = (-15.0, 15.0)
-    fill: tuple = (0.85, 0.98)                      # page bbox to frame, along the tighter side
-    shift: float = 0.5                              # page centre offset, fraction of the free space
+    tilt_deg: tuple = (0.0, 40.0)                   # optical axis to the table normal
+    roll_deg: tuple = (-8.0, 8.0)
+    fill: tuple = (0.93, 1.0)                       # page bbox to frame, along the tighter side
+    shift: float = 0.3                              # page centre offset, fraction of the free space
     incidence_deg: float = 75.0                     # max view angle to the surface normal
 
 
@@ -220,12 +220,13 @@ class RenderCfg:
     px: tuple = (1024, 1365)                        # warped photo (width, height)
     map_px: tuple = (212, 300)                      # UV / 3D maps
     background: str = "texture"                     # "black" or "texture"
+    black_prob: float = 0.2                         # black background share under "texture"
     camera: CameraCfg = CameraCfg()
     light: LightCfg = LightCfg()
     effects: dict = field(default_factory=lambda: {
         "shading": _fx(1.0),
         "vignetting": _fx(0.5, strength=(0.05, 0.35)),
-        "defocus": _fx(0.5, coc_px=(0.3, 2.5)),
+        "defocus": _fx(0.5, coc_px=(0.3, 1.0)),
         "motion_blur": _fx(0.12, length_px=(2.0, 10.0)),
         "exposure": _fx(1.0, ev=(-0.6, 0.4), gamma=(0.85, 1.2)),
         "iso_noise": _fx(0.9, iso=(50.0, 3200.0)),

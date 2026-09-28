@@ -11,7 +11,7 @@ import numpy as np
 from numba import njit
 
 from ..config import LightCfg, RenderCfg
-from ..layout.paper import smooth_noise, variable_blur
+from ..layout.paper import variable_blur
 from .camera import look_at, project
 from .raster import rasterize
 
@@ -106,22 +106,118 @@ def table_points(cam, size, step=1):
     return Q
 
 
-def table_texture(rng, Q):
-    """Procedural table surface luminance at table points Q (h, w, 3) mm: base level, low-frequency variation,
-    wood-like grain, fabric weave or mottle."""
-    base = rng.uniform(0.12, 0.8)
-    x, y = np.nan_to_num(Q[..., 0]), np.nan_to_num(Q[..., 1])
-    lowf = smooth_noise(rng, Q.shape[:2], 60)
-    kind = rng.integers(3)
-    if kind == 0:
+def _lattice(seed, i, j):
+    h = (i.astype(np.int64) * 374761393 + j.astype(np.int64) * 668265263 + seed * 2246822519) & 0xFFFFFFFF
+    h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
+    return ((h ^ (h >> 16)) & 0xFFFF).astype(np.float32) / 65535.0
+
+
+def value_noise(seed, x, y):
+    """Smooth value noise in [0, 1] at arbitrary coordinates (lattice pitch 1)."""
+    i, j = np.floor(x), np.floor(y)
+    fx, fy = x - i, y - j
+    fx, fy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
+    a, b = _lattice(seed, i, j), _lattice(seed, i + 1, j)
+    c, d = _lattice(seed, i, j + 1), _lattice(seed, i + 1, j + 1)
+    return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy
+
+
+def fbm(seed, x, y, scale, octaves=5, gain=0.5):
+    """Fractal noise in about [-1, 1], feature size `scale` (same units as x, y)."""
+    out, amp, f, tot = 0.0, 1.0, 1.0 / scale, 0.0
+    for o in range(octaves):
+        out = out + amp * (value_noise(seed + o, x * f, y * f) * 2 - 1)
+        tot += amp
+        amp, f = amp * gain, f * 2.03
+    return out / tot
+
+
+def _cells(x, y, w, h, off):
+    """Brick / grid cells: (index u, index v, local u, local v) for cells w x h, rows shifted by off * w."""
+    v = np.floor(y / h)
+    xs = x + off * w * v
+    u = np.floor(xs / w)
+    return u, v, xs - u * w, y - v * h
+
+
+def _wood(rng, x, y, sd):
+    pw = rng.uniform(60, 250)
+    u, v, lu, lv = _cells(y, x, pw, rng.uniform(400, 2000), rng.choice((0.0, 0.5, rng.uniform(0, 1))))
+    tone = _lattice(sd, u, v)
+    warp = fbm(sd + 7, x * 0.3, y + 1000 * u, 40) * rng.uniform(8, 30) + fbm(sd + 8, x, y, 300) * 40
+    rings = 0.5 + 0.5 * np.sin(2 * np.pi * (lu + warp + 50 * tone) / rng.uniform(3, 10))
+    fine = fbm(sd + 3, x * 0.03, y * 2, 1.0, 4)
+    g = 0.6 - 0.35 * rings ** rng.uniform(2, 6) + 0.15 * fine + 0.35 * (tone - 0.5)
+    seam = np.minimum(lu, pw - lu) < rng.uniform(0.3, 1.2)
+    return np.where(seam, 0.25 * g, g)
+
+
+def _fabric(rng, x, y, sd):
+    p = rng.uniform(0.5, 2.5)
+    th = rng.uniform(0, np.pi)
+    a, b = x * np.cos(th) + y * np.sin(th), -x * np.sin(th) + y * np.cos(th)
+    ia, ib = np.floor(a / p), np.floor(b / p)
+    twill = rng.integers(1, 4)
+    over = ((ia + ib * (twill if twill > 1 else 1)) % (twill + 1)) < (1 if twill > 1 else 1)
+    thread = np.where(over, np.sin(np.pi * (b / p - ib)), np.sin(np.pi * (a / p - ia)))
+    jitter = np.where(over, _lattice(sd, ia, 0 * ib), _lattice(sd + 1, 0 * ia, ib))
+    return 0.45 + 0.4 * thread + 0.25 * (jitter - 0.5) + 0.15 * fbm(sd + 2, x, y, 20, 3)
+
+
+def _marble(rng, x, y, sd):
+    th = rng.uniform(0, np.pi)
+    t = (x * np.cos(th) + y * np.sin(th)) / rng.uniform(40, 200) + rng.uniform(2, 6) * fbm(sd, x, y, 120, 6)
+    vein = np.abs(np.sin(np.pi * t)) ** rng.uniform(0.2, 0.6)
+    return 0.3 + 0.6 * vein + 0.08 * fbm(sd + 9, x, y, 5, 3)
+
+
+def _granite(rng, x, y, sd):
+    g = 0.5 + 0.35 * fbm(sd, x, y, rng.uniform(2, 10), 4)
+    for k, (sz, d) in enumerate(((0.6, 0.12), (1.5, 0.06), (3.0, 0.03))):
+        n = value_noise(sd + 20 + k, x / sz, y / sz)
+        g = np.where(n > 1 - d, rng.uniform(0.0, 1.0), g)
+    return g
+
+
+def _tiles(rng, x, y, sd):
+    w = rng.uniform(40, 400)
+    h = w * rng.choice((1.0, 1.0, 0.5, 2.0))
+    u, v, lu, lv = _cells(x, y, w, h, rng.choice((0.0, 0.5)))
+    tone = 0.5 + 0.45 * (_lattice(sd, u, v) - 0.5) + 0.2 * fbm(sd + 1, x, y, rng.uniform(5, 60), 4)
+    grout = rng.uniform(1, 5)
+    edge = np.minimum(np.minimum(lu, w - lu), np.minimum(lv, h - lv))
+    return np.where(edge < grout / 2, rng.choice((0.1, 0.9)), tone)
+
+
+def _felt(rng, x, y, sd):
+    return 0.5 + 0.3 * fbm(sd, x, y, rng.uniform(0.3, 1.5), 3) + 0.15 * fbm(sd + 5, x, y, 50, 3)
+
+
+def _plain(rng, x, y, sd):
+    g = 0.5 + 0.12 * fbm(sd, x, y, rng.uniform(30, 300), 4)
+    for k in range(rng.integers(5, 60)):
         th = rng.uniform(0, np.pi)
-        pattern = 0.5 + 0.5 * np.sin(2 * np.pi * (x * np.cos(th) + y * np.sin(th)) / rng.uniform(4, 15) + 3 * lowf)
-    elif kind == 1:
-        p = rng.uniform(0.8, 3.0)
-        pattern = 0.5 + 0.25 * (np.sin(2 * np.pi * x / p) + np.sin(2 * np.pi * y / p))
-    else:
-        pattern = 0.5 + 0.5 * np.clip(smooth_noise(rng, Q.shape[:2], 8), -1, 1)
-    return np.clip(base * (1 + 0.25 * (pattern - 0.5) + 0.08 * lowf), 0, 1).astype(np.float32)
+        c = rng.uniform(-300, 300)
+        d = np.abs(x * np.cos(th) + y * np.sin(th) - c)
+        along = -x * np.sin(th) + y * np.cos(th)
+        m = (d < rng.uniform(0.15, 0.6)) & (np.abs(along - rng.uniform(-300, 300)) < rng.uniform(5, 80))
+        g = np.where(m, g + rng.choice((-1, 1)) * rng.uniform(0.15, 0.35), g)
+    return g
+
+
+TEXTURES = (_wood, _fabric, _marble, _granite, _tiles, _felt, _plain)
+
+
+def table_texture(rng, Q):
+    """Table surface luminance at table points Q (h, w, 3) mm, evaluated per point (sharp at any distance): wood
+    planks, woven fabric, marble, granite, tiles, felt or plain with scratches, at a random base level and
+    contrast, with broad stains."""
+    x, y = np.nan_to_num(Q[..., 0]).astype(np.float32), np.nan_to_num(Q[..., 1]).astype(np.float32)
+    sd = int(rng.integers(1 << 30))
+    t = TEXTURES[rng.integers(len(TEXTURES))](rng, x, y, sd)
+    base, contrast = rng.uniform(0.05, 0.85), rng.uniform(0.3, 1.2)
+    stain = 1 + rng.uniform(0, 0.25) * fbm(sd + 99, x, y, rng.uniform(100, 600), 3)
+    return np.clip(base * (1 + contrast * (t - 0.5)) * stain, 0, 1).astype(np.float32)
 
 
 TONE_LEVELS = 4096
