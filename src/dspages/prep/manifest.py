@@ -38,7 +38,7 @@ def _init():
     cv2.setNumThreads(1)
 
 
-def _load_metadata(meta_path: str) -> dict:
+def load_metadata(meta_path: str) -> dict:
     """local_path -> {language, bucket, category, pages}, keyed after
     normalizing the metadata's stale '/Layouts/test/corpus/...' prefix to
     the corpus's actual on-disk '/Layouts/corpus/...' location."""
@@ -190,7 +190,7 @@ def _job_image(args):
 # source enumeration
 # ---------------------------------------------------------------------------
 
-def _corpus_pdf_jobs(meta_idx: dict):
+def corpus_pdf_jobs(meta_idx: dict):
     jobs = []
     for sub in ("pdf", "scanned", "forms_bulk"):
         for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus", sub, "**", "*.pdf"), recursive=True)):
@@ -201,7 +201,7 @@ def _corpus_pdf_jobs(meta_idx: dict):
     return jobs
 
 
-def _corpus_overflow_jobs():
+def corpus_overflow_jobs():
     pdf_jobs, img_jobs = [], []
     for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus_overflow", "Images", "*.png"))):
         img_jobs.append((p, "unknown", None, _seed(p)))
@@ -213,12 +213,12 @@ def _corpus_overflow_jobs():
     return pdf_jobs, img_jobs
 
 
-def _pdf_png_jobs():
+def pdf_png_jobs():
     return [(p, "en", None, _seed(p))
             for p in sorted(glob.glob(os.path.join(LAYOUTS, "Pdf", "*.png")))]
 
 
-def _xfund_funsd_jobs():
+def xfund_funsd_jobs():
     """<lang>.<split>/*.png dirs -- language is the dir name's prefix
     before the dot (en = FUNSD, others = XFUND)."""
     root = os.path.join(LAYOUTS, "XFUND and FUNSD")
@@ -229,7 +229,7 @@ def _xfund_funsd_jobs():
     return jobs
 
 
-def _arxiv_jobs():
+def arxiv_jobs():
     return [(p, None, "en", "scientific_paper", _seed(p))
             for p in sorted(glob.glob(os.path.join(LAYOUTS, "scientific_paper", "arxiv_pdfs", "*.pdf")))]
 
@@ -238,13 +238,13 @@ def _arxiv_jobs():
 # book-text filler (step 3)
 # ---------------------------------------------------------------------------
 
-def _book_txt_paths():
+def book_txt_paths():
     paths = sorted(glob.glob(os.path.join(BOOKS, "**", "*.txt"), recursive=True))
     return [p for p in paths if len(_words(p)) >= MIN_BOOK_WORDS]
 
 
 def _book_jobs():
-    return [(p, classify_language(p), LayoutCfg().book_page_chars) for p in _book_txt_paths()]
+    return [(p, classify_language(p), LayoutCfg().book_page_chars) for p in book_txt_paths()]
 
 
 def _job_book_text(args):
@@ -273,15 +273,15 @@ def _run_group(name, jobs, job_fn, workers, out_f, counts, t0):
 def main(out_path: str, workers: int, limit_files: int = None):
     """Every usable page: PDF pages (PAGES_PER_PDF_CAP per document, all of rare-script ones), every image, and
     one entry per book text (snippets are drawn per use)."""
-    meta_idx = _load_metadata(os.path.join(LAYOUTS, "corpus", "metadata.jsonl"))
-    overflow_pdf_jobs, overflow_img_jobs = _corpus_overflow_jobs()
+    meta_idx = load_metadata(os.path.join(LAYOUTS, "corpus", "metadata.jsonl"))
+    overflow_pdf_jobs, overflow_img_jobs = corpus_overflow_jobs()
     groups = [
-        ("corpus_pdf", _corpus_pdf_jobs(meta_idx), _job_pdf),
+        ("corpus_pdf", corpus_pdf_jobs(meta_idx), _job_pdf),
         ("overflow_pdf", overflow_pdf_jobs, _job_pdf),
         ("overflow_img", overflow_img_jobs, _job_image),
-        ("pdf_png_en", _pdf_png_jobs(), _job_image),
-        ("xfund_funsd", _xfund_funsd_jobs(), _job_image),
-        ("arxiv_en", _arxiv_jobs(), _job_pdf),
+        ("pdf_png_en", pdf_png_jobs(), _job_image),
+        ("xfund_funsd", xfund_funsd_jobs(), _job_image),
+        ("arxiv_en", arxiv_jobs(), _job_pdf),
         ("books", _book_jobs(), _job_book_text),
     ]
     if limit_files:
