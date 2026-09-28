@@ -1,0 +1,101 @@
+"""Condition space of a preset and stratified plans over it.
+
+Every discrete factor (and every continuous one cut into bins) is listed with its probability. Cells are the
+combinations of the factors of a group (geometry, view, layout), impossible ones folded into their canonical
+form. A plan of n samples gives every factor value round(n p) samples by largest remainder and pairs the factors
+by independent shuffles (Latin hypercube): exact marginals for any n, no sampling retries. Continuous values are
+drawn within their bin per sample.
+"""
+import itertools
+import json
+from dataclasses import replace
+
+import numpy as np
+
+from .config import Preset
+
+
+def _bins(lo, hi, n, log=False):
+    e = np.exp(np.linspace(np.log(lo), np.log(hi), n + 1)) if log else np.linspace(lo, hi, n + 1)
+    return tuple((float(a), float(b)) for a, b in zip(e[:-1], e[1:]))
+
+
+def factors(P: Preset):
+    """name -> ((value, weight), ...) for geometry, view and layout."""
+    g, s = P.geometry, P.geometry.scene
+    bend = _bins(-g.bend_dir_deg, g.bend_dir_deg, 5)
+    cam, li, m = P.render.camera, P.render.light, P.layout.margin_frac
+    return dict(
+        combo=tuple((c, w) for c, w in s.combos),
+        flat=((True, s.near_flat_prob), (False, 1 - s.near_flat_prob)),
+        two=((True, g.two_profile_prob), (False, 1 - g.two_profile_prob)),
+        along_long=((True, g.along_long_prob), (False, 1 - g.along_long_prob)),
+        bend_bin=tuple((b, 1.0) for b in bend),
+        gsm=tuple((v, 1.0) for v in P.paper.gsm),
+        shallow=((True, g.shallow.prob), (False, 1 - g.shallow.prob)),
+        deep=g.deep.levels,
+        dist_bin=tuple((b, 1.0) for b in _bins(*cam.dist_mm, 4, log=True)),
+        tilt_bin=tuple((b, 1.0) for b in _bins(*cam.tilt_deg, 3)),
+        sharp=((True, li.sharp_prob), (False, 1 - li.sharp_prob)),
+        margin_bin=tuple((b, 1.0) for b in _bins(*m, 3)) if m[1] > m[0] else ((m, 1.0),))
+
+
+def _canonical(c):
+    crumple = c["combo"][3]
+    return dict(c, flat=c["flat"] and not crumple, two=c["two"] and not crumple, deep=c["deep"] if crumple else "")
+
+
+GROUPS = dict(geometry=("combo", "flat", "two", "along_long", "bend_bin", "gsm", "shallow", "deep"),
+              view=("dist_bin", "tilt_bin", "sharp"), layout=("margin_bin",))
+
+
+def cells(P: Preset, group):
+    """[(cell dict, probability)] of one factor group, impossible cells merged into canonical ones."""
+    f = {k: v for k, v in factors(P).items() if k in GROUPS[group]}
+    names = list(f)
+    merged = {}
+    for combo in itertools.product(*(f[k] for k in names)):
+        c = {k: v for k, (v, _) in zip(names, combo)}
+        c = _canonical(c) if group == "geometry" else c
+        p = float(np.prod([w / sum(x for _, x in f[k]) for k, (_, w) in zip(names, combo)]))
+        key = json.dumps(c, sort_keys=True)
+        merged[key] = (c, merged.get(key, (c, 0.0))[1] + p)
+    return list(merged.values())
+
+
+def _exact(rng, table, n):
+    """n values with the table's proportions exactly (largest remainder), shuffled."""
+    w = np.array([x for _, x in table], float)
+    p = w / w.sum()
+    k = np.floor(n * p).astype(int)
+    k[np.argsort(-(n * p - k))[:n - k.sum()]] += 1
+    vals = [v for (v, _), m in zip(table, k) for _ in range(m)]
+    return [vals[i] for i in rng.permutation(n)]
+
+
+def plan(P: Preset, n, seed, n_entries):
+    """n sample specs with exact factor marginals; continuous values and the manifest entry drawn per sample."""
+    rng = np.random.default_rng(seed)
+    cols = {k: _exact(rng, v, n) for k, v in factors(P).items()}
+    specs = []
+    for i in range(n):
+        s = _canonical({k: cols[k][i] for k in cols})
+        s["bend_dir"] = float(rng.uniform(*s.pop("bend_bin")))
+        s["entry"] = int(rng.integers(n_entries))
+        specs.append(s)
+    return specs
+
+
+def geometry_cond(spec):
+    return {k: spec[k] for k in ("combo", "flat", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
+
+
+def view_preset(P: Preset, spec):
+    """The preset with camera and light narrowed to the spec's bins."""
+    r = P.render
+    return replace(P, render=replace(r, camera=replace(r.camera, dist_mm=spec["dist_bin"], tilt_deg=spec["tilt_bin"]),
+                                     light=replace(r.light, sharp_prob=float(spec["sharp"]))))
+
+
+def layout_preset(P: Preset, spec):
+    return replace(P, layout=replace(P.layout, margin_frac=spec["margin_bin"]))

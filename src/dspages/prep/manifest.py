@@ -1,0 +1,342 @@
+"""Source manifest: one JSON line per usable page of the layout corpora (PDF pages, images, book texts).
+
+Fields: source_path, page_index, language, category, kind (raster | book_text), content_frac, needs_deskew,
+rotate90, used_h, used_w (raster size the bbox refers to), bbox_y0, bbox_x0, bbox_h, bbox_w (content bbox).
+
+python -m dspages.prep.manifest --out <paths.manifest> --n 100000
+"""
+import argparse
+import glob
+import json
+import os
+import time
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from ..config import Paths
+from ..layout.content import bbox, content_mask
+from ..layout.deskew import detect_rotation, rotate90
+from ..layout.text import _words
+from .text_extract import DOMINANT_IMAGE_AREA_FRAC, classify_language
+
+LAYOUTS = Paths().layouts
+BOOKS = Paths().books
+MIN_CONTENT_AREA_FRAC = 0.01
+MAX_MARGIN_FRAC = 0.50
+MIN_CONTENT_FRAC = 0.01
+MIN_BOOK_WORDS = 3000
+PAGES_PER_PDF_CAP = 10
+RASTER_ZOOM = 2.0
+
+
+def _init():
+    cv2.setNumThreads(1)
+
+
+def _load_metadata(meta_path: str) -> dict:
+    """local_path -> {language, bucket, category, pages}, keyed after
+    normalizing the metadata's stale '/Layouts/test/corpus/...' prefix to
+    the corpus's actual on-disk '/Layouts/corpus/...' location."""
+    idx = {}
+    if not os.path.exists(meta_path):
+        return idx
+    with open(meta_path, encoding="utf-8") as f:
+        for line in f:
+            d = json.loads(line)
+            p = d["local_path"].replace("/Layouts/test/corpus/", "/Layouts/corpus/")
+            idx[p] = d
+    return idx
+
+
+def _seed(path: str) -> int:
+    return hash(path) & 0xFFFFFFFF
+
+
+def _page_indices(page_count: int, rng, cap: int = PAGES_PER_PDF_CAP) -> list:
+    if page_count <= cap:
+        return list(range(page_count))
+    return sorted(rng.choice(page_count, size=cap, replace=False).tolist())
+
+
+# ---------------------------------------------------------------------------
+# per-page processing, shared by pdf and image sources
+# ---------------------------------------------------------------------------
+
+def _bbox_keep(b, h, w):
+    y0, y1, x0, x1 = b
+    return ((y1 - y0 + 1) * (x1 - x0 + 1) >= MIN_CONTENT_AREA_FRAC * h * w
+            and 1 - (y1 - y0 + 1) / h <= MAX_MARGIN_FRAC and 1 - (x1 - x0 + 1) / w <= MAX_MARGIN_FRAC)
+
+
+def _bbox_fields(b, s, h, w):
+    y0, y1, x0, x1 = (round(v / s) for v in b)
+    return dict(bbox_y0=y0, bbox_x0=x0, bbox_h=min(h, y1 + 1) - y0, bbox_w=min(w, x1 + 1) - x0)
+
+
+def _process_gray(gray: np.ndarray, rng):
+    rot = detect_rotation(gray)
+    gray = rotate90(gray, rot)
+    mask, s = content_mask(gray)
+    b = bbox(mask)
+    if b is None or not _bbox_keep(b, *mask.shape) or mask.mean() < MIN_CONTENT_FRAC:
+        return None
+    return dict(content_frac=round(float(mask.mean()), 5), needs_deskew=True, rotate90=rot,
+                used_h=gray.shape[0], used_w=gray.shape[1], **_bbox_fields(b, s, *gray.shape))
+
+
+def _pdf_text_blocks_px(page, zoom: float) -> list:
+    """Word-level boxes, not paragraph-level "blocks" -- a block's own
+    bbox spans its full line height/spacing and reads as much denser
+    content than it visually is, letting sparse pages clear the patch-
+    coverage bar that the pixel-based raster path would reject them on."""
+    return [(w[0] * zoom, w[1] * zoom, w[2] * zoom, w[3] * zoom) for w in page.get_text("words")]
+
+
+def _occupancy(blocks: list, width: int, height: int, x_off: float = 0.0,
+               y_off: float = 0.0, scale: float = 1.0) -> np.ndarray:
+    mask = np.zeros((height, width), dtype=bool)
+    for x0, y0, x1, y1 in blocks:
+        gx0 = max(0, int((x0 - x_off) * scale))
+        gy0 = max(0, int((y0 - y_off) * scale))
+        gx1 = min(width, int(np.ceil((x1 - x_off) * scale)))
+        gy1 = min(height, int(np.ceil((y1 - y_off) * scale)))
+        if gx1 > gx0 and gy1 > gy0:
+            mask[gy0:gy1, gx0:gx1] = True
+    return mask
+
+
+def _pdf_text_page_info(page, rng, zoom: float = RASTER_ZOOM):
+    """Content bbox from the page's word boxes (no rasterization); None for landscape pages."""
+    pw_pt, ph_pt = page.rect.width, page.rect.height
+    if pw_pt > ph_pt:
+        return None
+    used_w, used_h = round(pw_pt * zoom), round(ph_pt * zoom)
+    blocks = _pdf_text_blocks_px(page, zoom)
+    if not blocks:
+        return None
+    s = min(1.0, 512 / max(used_w, used_h))
+    mask = _occupancy(blocks, max(1, round(used_w * s)), max(1, round(used_h * s)), scale=s)
+    b = bbox(mask)
+    if b is None or not _bbox_keep(b, *mask.shape):
+        return None
+    return dict(content_frac=round(float(mask.mean()), 5), needs_deskew=False, used_h=used_h, used_w=used_w,
+                **_bbox_fields(b, s, used_h, used_w))
+
+
+def _pdf_page_is_scan(page) -> bool:
+    """A page with a real text layer can still be a scanned image with an
+    OCR text overlay -- its own text bbox says nothing about visual skew
+    in that case, so it needs the raster/deskew path, not the vector one."""
+    page_area = page.rect.width * page.rect.height
+    if not page_area:
+        return False
+    return any((info["bbox"][2] - info["bbox"][0]) * (info["bbox"][3] - info["bbox"][1]) / page_area
+               > DOMINANT_IMAGE_AREA_FRAC for info in page.get_image_info())
+
+
+def _job_pdf(args):
+    import pymupdf as fitz
+    pdf_path, page_count_hint, language, category, seed = args
+    rng = np.random.default_rng(seed)
+    try:
+        doc = fitz.open(pdf_path)
+        page_indices = _page_indices(doc.page_count, rng)
+    except Exception:
+        return []
+    recs = []
+    try:
+        for pi in page_indices:
+            if pi >= doc.page_count:
+                continue
+            page = doc[pi]
+            has_text = bool(page.get_text().strip())
+            info = has_text and not _pdf_page_is_scan(page) and _pdf_text_page_info(page, rng)
+            if not info:
+                pix = page.get_pixmap(matrix=fitz.Matrix(RASTER_ZOOM, RASTER_ZOOM),
+                                      colorspace=fitz.csGRAY, alpha=False)
+                gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
+                info = _process_gray(gray, rng)
+            if info is None:
+                continue
+            recs.append(dict(source_path=pdf_path, page_index=pi, language=language,
+                             category=category, kind="raster", **info))
+    except Exception:
+        return recs
+    finally:
+        doc.close()
+    return recs
+
+
+def _job_image(args):
+    image_path, language, category, seed = args
+    rng = np.random.default_rng(seed)
+    gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if gray is None:
+        return []
+    info = _process_gray(gray, rng)
+    if info is None:
+        return []
+    return [dict(source_path=image_path, page_index=0, language=language,
+                 category=category, kind="raster", **info)]
+
+
+# ---------------------------------------------------------------------------
+# source enumeration
+# ---------------------------------------------------------------------------
+
+def _corpus_pdf_jobs(meta_idx: dict):
+    jobs = []
+    for sub in ("pdf", "scanned", "forms_bulk"):
+        for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus", sub, "**", "*.pdf"), recursive=True)):
+            m = meta_idx.get(p)
+            language = m["language"] if m else "unknown"
+            category = m.get("category") if m else None
+            jobs.append((p, m.get("pages") if m else None, language, category, _seed(p)))
+    return jobs
+
+
+def _corpus_overflow_jobs():
+    pdf_jobs, img_jobs = [], []
+    for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus_overflow", "Images", "*.png"))):
+        img_jobs.append((p, "unknown", None, _seed(p)))
+    for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus_overflow", "pdf", "*"))):
+        if p.lower().endswith(".pdf"):
+            pdf_jobs.append((p, None, "unknown", None, _seed(p)))
+        elif p.lower().endswith(".png"):
+            img_jobs.append((p, "unknown", None, _seed(p)))
+    return pdf_jobs, img_jobs
+
+
+def _pdf_png_jobs():
+    return [(p, "en", None, _seed(p))
+            for p in sorted(glob.glob(os.path.join(LAYOUTS, "Pdf", "*.png")))]
+
+
+def _xfund_funsd_jobs():
+    """<lang>.<split>/*.png dirs -- language is the dir name's prefix
+    before the dot (en = FUNSD, others = XFUND)."""
+    root = os.path.join(LAYOUTS, "XFUND and FUNSD")
+    jobs = []
+    for p in sorted(glob.glob(os.path.join(root, "*", "*.png"))):
+        lang = os.path.basename(os.path.dirname(p)).split(".")[0]
+        jobs.append((p, lang, "form", _seed(p)))
+    return jobs
+
+
+def _arxiv_jobs():
+    return [(p, None, "en", "scientific_paper", _seed(p))
+            for p in sorted(glob.glob(os.path.join(LAYOUTS, "scientific_paper", "arxiv_pdfs", "*.pdf")))]
+
+
+# ---------------------------------------------------------------------------
+# book-text filler (step 3)
+# ---------------------------------------------------------------------------
+
+def _book_txt_paths():
+    paths = sorted(glob.glob(os.path.join(BOOKS, "**", "*.txt"), recursive=True))
+    return [p for p in paths if len(_words(p)) >= MIN_BOOK_WORDS]
+
+
+def _build_filler_jobs(target_lang_counts: dict, n_needed: int, seed0: int):
+    paths = _book_txt_paths()
+    if not paths:
+        return []
+    buckets = {"en": [], "eu": [], "cyr": []}
+    for p in paths:
+        buckets[classify_language(p)].append(p)
+    # coarse-map real-corpus language tags to en/eu(other)/cyr buckets
+    coarse = {"en": 0, "cyr": 0, "eu": 0}
+    for lang, c in target_lang_counts.items():
+        coarse["cyr" if lang == "cyr" else ("en" if lang == "en" else "eu")] += c
+    total = sum(coarse.values()) or 1
+    jobs = []
+    idx = 0
+    for bucket, frac_count in coarse.items():
+        n_bucket = round(n_needed * frac_count / total)
+        pool = buckets.get(bucket) or paths
+        for _ in range(n_bucket):
+            jobs.append((pool[idx % len(pool)], bucket, seed0 + idx))
+            idx += 1
+    return jobs
+
+
+def _job_book_text(args):
+    txt_path, bucket, _ = args
+    return [dict(source_path=txt_path, page_index=0, language=bucket, category="book_filler", kind="book_text")]
+
+
+# ---------------------------------------------------------------------------
+# driver
+# ---------------------------------------------------------------------------
+
+def _run_group(name, jobs, job_fn, workers, out_f, kept, target, t0, lang_counts):
+    if kept[0] >= target or not jobs:
+        print(f"[{name}] skipped ({kept[0]}/{target} already, {len(jobs)} jobs)", flush=True)
+        return
+    print(f"[{name}] {len(jobs)} jobs", flush=True)
+    done = 0
+    with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
+        for recs in pool.map(job_fn, jobs, chunksize=8):
+            done += 1
+            for rec in recs:
+                if kept[0] >= target:
+                    break
+                out_f.write(json.dumps(rec) + "\n")
+                lang_counts[rec["language"]] = lang_counts.get(rec["language"], 0) + 1
+                kept[0] += 1
+            if done % 1000 == 0 or kept[0] >= target:
+                el = time.time() - t0
+                print(f"[{name}] {done}/{len(jobs)} files, kept={kept[0]} elapsed={el:.0f}s", flush=True)
+            if kept[0] >= target:
+                break
+    print(f"[{name}] done: kept={kept[0]}", flush=True)
+
+
+SCIENTIFIC_PAPER_QUOTA_FRAC = 0.02
+
+
+def main(out_path: str, n: int, workers: int, limit_files: int = None):
+    meta_idx = _load_metadata(os.path.join(LAYOUTS, "corpus", "metadata.jsonl"))
+    overflow_pdf_jobs, overflow_img_jobs = _corpus_overflow_jobs()
+    groups = [
+        ("corpus_pdf", _corpus_pdf_jobs(meta_idx), _job_pdf),
+        ("overflow_pdf", overflow_pdf_jobs, _job_pdf),
+        ("overflow_img", overflow_img_jobs, _job_image),
+        ("pdf_png_en", _pdf_png_jobs(), _job_image),
+        ("xfund_funsd", _xfund_funsd_jobs(), _job_image),
+        ("arxiv_en", _arxiv_jobs(), _job_pdf),
+    ]
+    if limit_files:
+        groups = [(name, jobs[:limit_files], fn) for name, jobs, fn in groups]
+
+    kept = [0]
+    t0 = time.time()
+    lang_counts = {}
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as out_f:
+        for name, jobs, fn in groups:
+            target = (min(n, kept[0] + round(n * SCIENTIFIC_PAPER_QUOTA_FRAC))
+                      if name == "arxiv_en" else n)
+            _run_group(name, jobs, fn, workers, out_f, kept, target, t0, lang_counts)
+
+        if kept[0] < n and not limit_files:
+            filler_jobs = _build_filler_jobs(lang_counts, round((n - kept[0]) * 1.2), seed0=12345)
+            _run_group("book_filler", filler_jobs, _job_book_text, workers, out_f, kept, n, t0,
+                       lang_counts)
+
+    print(f"TOTAL kept={kept[0]} wall={time.time() - t0:.0f}s", flush=True)
+    print("language distribution:", json.dumps(lang_counts, indent=2), flush=True)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--n", type=int, default=100000)
+    ap.add_argument("--workers", type=int, default=12)
+    ap.add_argument("--limit_files", type=int, default=None,
+                    help="cap per-source-group file count, for a fast dry run")
+    args = ap.parse_args()
+    main(args.out, args.n, args.workers, args.limit_files)

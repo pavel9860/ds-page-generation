@@ -1,8 +1,9 @@
 __pycache__/
 *.pyc
+*.egg-info/
 .venv/
-logs/
 .idea/
-scripts/pages/out/
-scripts/paper_bend/a4_page_bending_out/
-scripts/creases/out/
+.claude/
+.pytest_cache/
+logs/
+out/
