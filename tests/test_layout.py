@@ -80,7 +80,8 @@ def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
             assert lum[paper_].mean() - lum[ink].mean() > 60
         assert 150 < page[paper_].mean() < 250
         assert m.get("upscale", 1.0) <= 1.0 + 1e-6 or not m["source"].lower().endswith(".pdf")
-        assert m.get("image_share", 0.0) <= full_small.layout.max_image + 1e-6 or m.get("fill", 1) < full_small.layout.min_fill
+        c = full_small.layout
+        assert m.get("image_share", 0.0) <= c.max_image + 1e-6 or m.get("fill", 1) < c.min_fill
     assert kinds
 
 
