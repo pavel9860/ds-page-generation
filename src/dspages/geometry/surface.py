@@ -51,7 +51,7 @@ def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
             - folds[None, :]).min() > c.fold_clear_mm * 1e-3]
         h, pitch = shallow.render(lines, w_mm, h_mm, c.pitch_mm, c.w_max_mm), c.pitch_mm
     if cond["deep"]:
-        net = deep.sample(rng, w_mm, h_mm, cond["deep"], g.deep)
+        net = deep.sample(rng, w_mm, h_mm, cond["deep"], g.deep, min(w_mm / (g.mesh[0] - 1), h_mm / (g.mesh[1] - 1)))
         hd = deep.render(net, w_mm, h_mm, cond["deep"], g.deep)
         h, pitch = (hd if h is None else h + hd), g.deep.pitch_mm
         lines = lines + net

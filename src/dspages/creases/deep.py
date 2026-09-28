@@ -50,9 +50,9 @@ def _starts(rng, spacing, covered):
     return np.stack([xs[keep], ys[keep]], -1) + jit, iy[keep], ix[keep]
 
 
-def sample(rng, W, H, level, c: DeepCreaseCfg):
+def sample(rng, W, H, level, c: DeepCreaseCfg, min_length=1.0):
     """Crease dicts (line, k, sign[, spread]) of one page's network: small creases spread regularly by the local
-    scale, and a few broad, deep, low-angle creases across the page."""
+    scale, and a few broad, deep, low-angle creases across the page. Lengths within [min_length, max_length_mm]."""
     shape = (int(H / FIELD_MM) + 1, int(W / FIELD_MM) + 1)
     region = rng.uniform(*c.region_mm) / FIELD_MM
     cover = rng.uniform(*c.coverage[level])
@@ -61,12 +61,12 @@ def sample(rng, W, H, level, c: DeepCreaseCfg):
     L_max = rng.uniform(*c.max_scale_mm[level])
     local = L_max * rng.uniform(*c.scale_ratio) ** -_unit(smooth_noise(rng, shape, region))
     pts, iy, ix = _starts(rng, local / np.sqrt(c.density), covered)
-    lengths = local[iy, ix] * np.exp(rng.normal(0.0, 0.4, len(pts)))
+    lengths = np.clip(local[iy, ix] * np.exp(rng.normal(0.0, 0.4, len(pts))), min_length, c.max_length_mm)
     kink = np.radians(c.kink_deg)
     out = [dict(line=_ridge(rng, p, rng.uniform(0, 2 * np.pi), L, kink), k=rng.uniform(*c.k[level]),
                 sign=rng.choice([-1, 1])) for p, L in zip(pts, lengths)]
     for _ in range(rng.integers(c.broad_n[level][0], c.broad_n[level][1] + 1)):
-        L = rng.uniform(*c.broad_length_mm)
+        L = min(rng.uniform(*c.broad_length_mm), c.max_length_mm)
         depth = rng.uniform(*c.broad_depth_frac) * c.max_depth_mm[level]
         th = rng.uniform(0, np.pi)
         line = _ridge(rng, rng.uniform([0, 0], [W, H]) - 0.5 * L * np.array([np.cos(th), np.sin(th)]), th, L, kink / 3)

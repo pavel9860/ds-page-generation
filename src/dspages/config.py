@@ -94,7 +94,8 @@ class DeepCreaseCfg:
     k: dict = field(default_factory=lambda: {"light": (0.2, 0.6), "medium": (0.5, 1.2), "heavy": (0.7, 1.4)})
     max_depth_mm: dict = field(default_factory=lambda: {"light": 3.0, "medium": 8.0, "heavy": 15.0})   # valley to peak
     broad_n: dict = field(default_factory=lambda: {"light": (0, 2), "medium": (1, 3), "heavy": (2, 5)})
-    broad_length_mm: tuple = (80.0, 300.0)       # large creases: long, wide, low angle
+    max_length_mm: float = 150.0                 # longest crease; the shortest is the 3D grid pitch
+    broad_length_mm: tuple = (80.0, 150.0)       # large creases: long, wide, low angle
     broad_spread: tuple = (4.0, 12.0)            # width multiplier of the crease profile
     broad_depth_frac: tuple = (0.2, 1.0)         # depth as a fraction of max_depth_mm
     kink_deg: float = 25.0
