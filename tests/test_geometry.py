@@ -26,7 +26,7 @@ def _reference_cases():
 @pytest.mark.parametrize("case", list(_reference_cases()), ids=lambda c: str(c[1]))
 def test_strip_matches_reference_solvers(case):
     L, kw, s_ref, z_ref, q, d = case
-    s, x, z = solve_strip(L, q, d, **kw)
+    s, x, z, _ = solve_strip(L, q, d, **kw)
     assert np.abs(np.interp(s_ref, s, z) - z_ref).max() < 2e-5
     assert np.all(np.diff(x) > 0)
 

@@ -60,7 +60,6 @@ def _is_script_font(path: str) -> bool:
     return len(_font_cmap(path)) >= _MIN_SCRIPT_CMAP_SIZE
 
 
-@lru_cache(maxsize=1)
 @lru_cache(maxsize=4)
 def find_fonts(font_dirs: tuple) -> tuple:
     """.ttf/.ttc/.otf files of known families, verified via their real cmap: Latin + Cyrillic + Greek for the
@@ -97,14 +96,22 @@ def char_budget(w_px, h_px, px_per_mm, font_pt, line_spacing):
 
 
 def sample_snippet(path, rng, budget) -> str:
-    """Contiguous words from a random place of the text file, about budget characters, wrapping around."""
-    words = _words(path)
-    if not words:
-        return ""
-    start, out, total = int(rng.integers(len(words))), [], 0
-    for i in range(len(words)):
-        out.append(words[(start + i) % len(words)])
-        total += len(out[-1]) + 1
+    """Words with letters from a random place of the text file, about budget characters, wrapping around.
+    Reads 4 budget bytes from a random offset instead of the whole file."""
+    size = os.path.getsize(path)
+    n = min(size, 4 * int(budget) + 64)
+    start = int(rng.integers(size)) if size else 0
+    with open(path, "rb") as f:
+        f.seek(start)
+        raw = f.read(n)
+        if len(raw) < n:
+            f.seek(0)
+            raw += f.read(n - len(raw))
+    words = [w for w in raw.decode("utf-8", errors="ignore").split()[1:] if _has_letters(w)]
+    out, total = [], 0
+    for w in words:
+        out.append(w)
+        total += len(w) + 1
         if total >= budget:
             break
     return " ".join(out)

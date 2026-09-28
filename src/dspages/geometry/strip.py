@@ -54,8 +54,9 @@ def _rest(folds, b, h, n, clamp):
     return y
 
 
-def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150):
-    """folds [(s, theta, k)], supports [(s, h)], clamp: edge tangent angle or None. -> s, x, z node arrays."""
+def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150, y0=None):
+    """folds [(s, theta, k)], supports [(s, h)], clamp: edge tangent angle or None; y0: start state (a nearby
+    solution), else the rigid rest. -> s, x, z node arrays and the state y."""
     h = length / n
     D = np.full(n - 1, d)
     kbar = np.zeros(n - 1)
@@ -68,7 +69,7 @@ def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150):
     sh = np.array([hh for _, hh in supports])
     for j, w_, hh in zip(sj, sw, sh):
         b[j + (w_ >= 0.5)] = max(b[j + (w_ >= 0.5)], hh)
-    y = _rest(folds, b, h, n, clamp)
+    y = _rest(folds, b, h, n, clamp) if y0 is None else y0.copy()
 
     free = np.arange(1 if clamp is not None else 0, n + 1)
     idx, jj = np.arange(n), np.arange(n - 1)
@@ -84,15 +85,18 @@ def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150):
     w = np.full(n + 1, q * h)
     w[[0, n]] *= 0.5
     wtail = np.cumsum(w[::-1])[::-1][1:]
-    nodes = np.concatenate([free, sj, sj + 1])
-    m = len(free) + len(sj)
-    Z = np.zeros((m, len(nodes)))
-    Z[np.arange(len(free)), np.arange(len(free))] = 1.0
-    Z[len(free) + np.arange(len(sj)), len(free) + np.arange(len(sj))] = 1 - sw
-    Z[len(free) + np.arange(len(sj)), len(free) + len(sj) + np.arange(len(sj))] = sw
-    bound = np.concatenate([np.zeros(len(free)), sh])
-    below = idx[None, :] < nodes[:, None]
+    nf = len(free)
+    m = nf + len(sj)
+    rows = np.zeros((m, n + 1))                    # constraint rows over node heights: table nodes, supports
+    rows[np.arange(nf), free] = 1.0
+    rows[nf + np.arange(len(sj)), sj] = 1 - sw
+    rows[nf + np.arange(len(sj)), sj + 1] = sw
+    B = rows[:, 1:][:, ::-1].cumsum(1)[:, ::-1]   # d(row) / d(sin phi_i) / h: weight of nodes beyond segment i
+    bound = np.concatenate([np.zeros(nf), sh])
     lam = np.zeros(m)
+    Ct = np.zeros((n + 1, len(E) + m))
+    Ct[:, :len(E)] = E.T
+    Ct[n, len(E):] = 1.0
     for _ in range(MAX_STEPS):
         c, s = np.cos(y[:-1]), np.sin(y[:-1])
         r = D / h * (np.diff(y[:-1]) - h * kbar)
@@ -101,19 +105,17 @@ def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150):
         g[1:-1] += r
         if clamp is not None:
             g[0] += 2 * d / h * (y[0] - clamp)
-        f = np.zeros(n + 1)
-        np.add.at(f, nodes, Z.T @ lam)
-        tail = wtail - np.cumsum(f[::-1])[::-1][1:]
+        tail = wtail - (lam @ B)
         H = H0.copy()
         H[idx, idx] += np.abs(h * s * tail)
-        J = Z @ np.hstack([h * c * below, np.ones((len(nodes), 1))])
-        dy, _, _, _, mult, _ = quadprog.solve_qp(H, -g, np.vstack([E, J]).T,
-                                                 np.concatenate([-E @ y, bound - Z @ _nodes(y, h)[nodes]]), len(E))
+        Ct[:n, len(E):] = (B * (h * c)).T
+        dy, _, _, _, mult, _ = quadprog.solve_qp(H, -g, Ct, np.concatenate([-E @ y, bound - rows @ _nodes(y, h)]),
+                                                 len(E))
         a = min(1.0, MAX_DPHI / max(np.abs(dy[:-1]).max(), 1e-300))
         y = y + a * dy
         lam = (1 - a) * lam + a * mult[len(E):]
         dz = dy[-1] + h * np.concatenate([[0.0], np.cumsum(c * dy[:-1])])
         dx = h * np.concatenate([[0.0], np.cumsum(-s * dy[:-1])])
         if a * max(np.abs(dz).max(), np.abs(dx).max()) < STEP_TOL:
-            return h * np.arange(n + 1), _xs(y, h), _nodes(y, h)
+            return h * np.arange(n + 1), _xs(y, h), _nodes(y, h), y
     raise RuntimeError(f"strip: no equilibrium for folds {folds}, supports {supports}, clamp {clamp}")

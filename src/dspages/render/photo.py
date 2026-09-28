@@ -8,6 +8,7 @@ motion blur, vignetting, exposure and gamma, sensor noise at an ISO, JPEG.
 """
 import cv2
 import numpy as np
+from numba import njit
 
 from ..config import LightCfg, RenderCfg
 from ..layout.paper import smooth_noise, variable_blur
@@ -52,29 +53,51 @@ def shadow_maps(light, P, faces, target):
     return maps
 
 
+@njit(cache=True, fastmath=True)
+def _shade(Q, N, eye, pts, Rs, cams, depths, ambient, specular, shininess, bias):
+    n, m, s = Q.shape[0], pts.shape[0], depths.shape[1]
+    out = np.empty(n, np.float32)
+    for i in range(n):
+        nx, ny, nz = N[i, 0], N[i, 1], N[i, 2]
+        vx, vy, vz = eye[0] - Q[i, 0], eye[1] - Q[i, 1], eye[2] - Q[i, 2]
+        vn = np.sqrt(vx * vx + vy * vy + vz * vz)
+        vx, vy, vz = vx / vn, vy / vn, vz / vn
+        acc = 0.0
+        for k in range(m):
+            lx, ly, lz = pts[k, 0] - Q[i, 0], pts[k, 1] - Q[i, 1], pts[k, 2] - Q[i, 2]
+            ln = np.sqrt(lx * lx + ly * ly + lz * lz)
+            lx, ly, lz = lx / ln, ly / ln, lz / ln
+            qx, qy, qz = -lx * ln, -ly * ln, -lz * ln
+            cx = Rs[k, 0, 0] * qx + Rs[k, 0, 1] * qy + Rs[k, 0, 2] * qz
+            cy = Rs[k, 1, 0] * qx + Rs[k, 1, 1] * qy + Rs[k, 1, 2] * qz
+            cz = Rs[k, 2, 0] * qx + Rs[k, 2, 1] * qy + Rs[k, 2, 2] * qz
+            xi = min(max(int(cams[k, 0] * cx / cz + cams[k, 1]), 0), s - 1)
+            yi = min(max(int(cams[k, 0] * cy / cz + cams[k, 2]), 0), s - 1)
+            if cz > depths[k, yi, xi] + bias:
+                continue
+            hx, hy, hz = lx + vx, ly + vy, lz + vz
+            hn = np.sqrt(hx * hx + hy * hy + hz * hz)
+            nh = max((nx * hx + ny * hy + nz * hz) / hn, 0.0)
+            acc += max(nx * lx + ny * ly + nz * lz, 0.0) + specular * nh ** shininess
+        out[i] = ambient + (1 - ambient) * acc / m
+    return out
+
+
 def shade(Q, N, eye, light, maps):
-    """Light factor of points Q (n, 3) with normals N seen from eye."""
-    v = eye - Q
-    v /= np.linalg.norm(v, axis=-1, keepdims=True)
-    acc = np.zeros(len(Q))
-    for L, (cam, depth) in zip(light["points"], maps):
-        to_l = L - Q
-        to_l /= np.linalg.norm(to_l, axis=-1, keepdims=True)
-        pix, z = project(Q, cam)
-        xi = np.clip(pix[:, 0].astype(int), 0, SHADOW_PX - 1)
-        yi = np.clip(pix[:, 1].astype(int), 0, SHADOW_PX - 1)
-        vis = z <= depth[yi, xi] + SHADOW_BIAS_MM
-        hv = to_l + v
-        hv /= np.linalg.norm(hv, axis=-1, keepdims=True)
-        spec = light["specular"] * np.clip((N * hv).sum(-1), 0, 1) ** light["shininess"]
-        acc += vis * (np.clip((N * to_l).sum(-1), 0, 1) + spec)
-    return light["ambient"] + (1 - light["ambient"]) * acc / len(light["points"])
+    """Light factor of points Q (n, 3) with normals N (n, 3) seen from eye."""
+    Rs = np.stack([cam["R"] for cam, _ in maps])
+    cams = np.array([[cam["f"], cam["cx"], cam["cy"]] for cam, _ in maps])
+    depths = np.stack([d for _, d in maps]).astype(np.float64)
+    return _shade(np.ascontiguousarray(Q, np.float64), np.ascontiguousarray(N, np.float64), np.asarray(eye, float),
+                  light["points"].astype(np.float64), Rs, cams, depths, light["ambient"], light["specular"],
+                  light["shininess"], SHADOW_BIAS_MM)
 
 
-def table_points(cam, size):
-    """Where each pixel's ray meets the table plane z = 0 (NaN if it does not)."""
+def table_points(cam, size, step=1):
+    """Where the rays of every step-th pixel meet the table plane z = 0 (NaN if they do not)."""
     w, h = size
-    xs, ys = np.meshgrid(np.arange(w, dtype=np.float32) + 0.5, np.arange(h, dtype=np.float32) + 0.5)
+    xs, ys = np.meshgrid(np.arange(0, w, step, dtype=np.float32) + step / 2,
+                         np.arange(0, h, step, dtype=np.float32) + step / 2)
     d = np.stack([(xs - cam["cx"]) / cam["f"], (ys - cam["cy"]) / cam["f"],
                  np.ones_like(xs)], -1) @ cam["R"].astype(np.float32)
     t = -cam["eye"][2] / d[..., 2]

@@ -61,13 +61,13 @@ def make_sample(rng, page, surf, P: Preset):
     my = (np.nan_to_num(uv[..., 1]) * (ph - 1)).astype(np.float32)
     img = cv2.remap(lin, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE) * lf
     if c.background == "texture":
-        Q = photo.table_points(cam, c.px)
-        bg = cv2.resize(photo.table_texture(rng, Q[::2, ::2]), c.px, interpolation=cv2.INTER_LINEAR) ** 2.2
+        Q = photo.table_points(cam, c.px, 2)
+        bg = cv2.resize(photo.table_texture(rng, Q), c.px, interpolation=cv2.INTER_LINEAR) ** 2.2
         if shading:
-            q = Q[BG_STEP // 2::BG_STEP, BG_STEP // 2::BG_STEP]
+            q = Q[BG_STEP // 4::BG_STEP // 2, BG_STEP // 4::BG_STEP // 2]
             ok = np.isfinite(q[..., 0])
             t = np.ones(q.shape[:2], np.float32)
-            t[ok] = photo.shade(q[ok], np.array([[0.0, 0.0, 1.0]]), cam["eye"], light, maps)
+            t[ok] = photo.shade(q[ok], np.tile([0.0, 0.0, 1.0], (int(ok.sum()), 1)), cam["eye"], light, maps)
             bg = bg * cv2.resize(t, c.px, interpolation=cv2.INTER_LINEAR)
         img = np.where(mask, img, bg)
     else:

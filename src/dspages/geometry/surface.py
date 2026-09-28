@@ -81,16 +81,19 @@ def make_surface(rng, g: GeometryCfg, paper, cond):
 
     sa, sb = sample_ends(rng, g.scene, lp, wg, cond["two"], cond["combo"], cond["flat"])
     t = np.linspace(0.0, 1.0, g.n_slices if cond["two"] else 1)
-    slices = []
+    slices, y = [], None
     for tk in t:
         sc = lerp_scene(sa, sb, tk)
-        s, x, z = solve_strip(lp, pp["q"], pp["bending"], sc["folds"], sc["supports"], sc["clamp"], g.strip_segments)
+        s, x, z, y = solve_strip(lp, pp["q"], pp["bending"], sc["folds"], sc["supports"], sc["clamp"],
+                                 g.strip_segments, y)
         slices.append((np.interp(up, s, x), np.interp(up, s, z)))
-    tv = vg / wg
-    x = np.array([np.interp(tv, t, [sl[0][i] for sl in slices]) for i in range(len(up))]).T
-    z = np.array([np.interp(tv, t, [sl[1][i] for sl in slices]) for i in range(len(up))]).T
+    k = np.clip(np.searchsorted(t, vg / wg, side="right") - 1, 0, max(len(t) - 2, 0))
+    wt = ((vg / wg - t[k]) / (t[min(1, len(t) - 1)] - t[0] or 1.0))[:, None]
+    xs, zs = (np.array([sl[j] for sl in slices]) for j in (0, 1))
+    k1 = np.minimum(k + 1, len(t) - 1)
+    x, z = ((1 - wt) * a[k] + wt * a[k1] for a in (xs, zs))
     span = (0.0, wg)
-    if sa["supports"] or sa["clamp"] is not None:
+    if sa["supports"]:
         f = rng.uniform(*g.support_frac)
         a0 = rng.uniform(max(0.0, 0.5 - f), min(0.5, 1 - f)) * wg
         span = (a0, a0 + f * wg)

@@ -5,6 +5,7 @@ import numpy as np
 from ..config import CameraCfg
 
 TILT_STEPS = 16
+SELECT_POINTS = 4000
 
 
 def vertex_normals(X, Y, Z):
@@ -47,8 +48,9 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     fill = rng.uniform(*c.fill)
     tilts = np.radians(rng.uniform(*c.tilt_deg)) * np.linspace(1, 0, TILT_STEPS)
     eyes = target + dist * np.stack([np.sin(tilts) * np.cos(az), np.sin(tilts) * np.sin(az), np.cos(tilts)], -1)
-    rays = eyes[:, None, :] - P[None]
-    cos_i = np.einsum("tnk,nk->tn", rays, N) / np.linalg.norm(rays, axis=-1)
+    sub = slice(None, None, max(1, len(P) // SELECT_POINTS))
+    rays = eyes[:, None, :] - P[sub][None]
+    cos_i = np.einsum("tnk,nk->tn", rays, N[sub]) / np.linalg.norm(rays, axis=-1)
     worst = cos_i.min(1)
     ok = np.flatnonzero(worst >= np.cos(np.radians(c.incidence_deg)))
     k = int(ok[0]) if ok.size else int(worst.argmax())
@@ -62,5 +64,5 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     view = dict(dist_mm=dist, tilt_deg=float(np.degrees(tilts[k])), azimuth_deg=float(np.degrees(az)),
                 roll_deg=float(np.degrees(roll)), fill=float(fill), fov_deg=float(np.degrees(2 * np.arctan(h / 2 / f))),
                 max_incidence_deg=float(np.degrees(np.arccos(np.clip(worst[k], -1, 1)))),
-                min_px_per_mm=float((f * np.clip(cos_i[k], 0, 1) / z).min()))
+                min_px_per_mm=float((f * np.clip(cos_i[k], 0, 1) / z[sub]).min()))
     return cam, view

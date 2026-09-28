@@ -20,6 +20,7 @@ dependencies = [
     "pillow>=10.0",
     "fonttools>=4.40",
     "python-bidi>=0.6",
+    "pypardiso>=0.4",
 ]
 
 [project.optional-dependencies]

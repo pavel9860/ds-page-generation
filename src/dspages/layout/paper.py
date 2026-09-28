@@ -22,7 +22,7 @@ def smooth_noise(rng, shape, scale_px):
     """Zero-mean, unit-std Gaussian noise with correlation length ~scale_px, made on a coarse grid."""
     h, w = shape
     s = max(1.0, scale_px / 4)
-    small = rng.standard_normal((max(2, int(h / s) + 2), max(2, int(w / s) + 2))).astype(np.float32)
+    small = rng.standard_normal((max(2, int(h / s) + 2), max(2, int(w / s) + 2)), dtype=np.float32)
     small = cv2.GaussianBlur(small, (0, 0), 2.0)
     n = cv2.resize(small, (w, h), interpolation=cv2.INTER_CUBIC)
     return (n - n.mean()) / (n.std() + 1e-6)
@@ -100,8 +100,8 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
     tex = np.ones((h, w), np.float32)
     if "paper_texture" in fx:
         p = fx["paper_texture"].params
-        fib = cv2.GaussianBlur(rng.standard_normal((h, w)).astype(np.float32), (0, 0), _u(rng, p["fiber_sigma"]))
-        grain = rng.standard_normal((h, w)).astype(np.float32)
+        fib = cv2.GaussianBlur(rng.standard_normal((h, w), dtype=np.float32), (0, 0), _u(rng, p["fiber_sigma"]))
+        grain = rng.standard_normal((h, w), dtype=np.float32)
         tex += _u(rng, p["fiber_amp"]) * fib / (fib.std() + 1e-6) + _u(rng, p["grain_amp"]) * grain
         tex += _u(rng, p["cloud_amp"]) * smooth_noise(rng, (h, w), _u(rng, p["cloud_scale_mm"]) * px_per_mm)
     if "show_through" in fx:

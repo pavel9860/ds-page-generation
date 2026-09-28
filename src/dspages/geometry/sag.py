@@ -1,7 +1,8 @@
 import numpy as np
+import pypardiso
 from scipy.interpolate import LinearNDInterpolator, RegularGridInterpolator
 from skfem import (Basis, BilinearForm, ElementTriMorley, ElementTriP1, ElementTriP2, ElementVector,
-                   LinearForm, MeshQuad, bmat, condense, solve)
+                   LinearForm, MeshQuad, bmat, condense)
 from skfem.helpers import dd, ddot, grad, sym_grad, trace
 
 
@@ -57,6 +58,8 @@ def solve_sag(u, v, z0, span, paper, nodes):
     fixed += [ba.get_dofs(nodes=np.array([a0])).all() + bw.N, ba.get_dofs(nodes=np.array([a1])).all("u^2") + bw.N]
     s = 1.0 / np.sqrt(np.abs(K.diagonal()))
     Ks = K.multiply(s[:, None]).multiply(s[None, :]).tocsr()
-    sol = s * solve(*condense(Ks, f * s, D=np.unique(np.concatenate(fixed))))
+    Kc, fc, x, free = condense(Ks, f * s, D=np.unique(np.concatenate(fixed)))
+    x[free] = pypardiso.spsolve(Kc.tocsr(), fc)
+    sol = s * x
     U, V = np.meshgrid(u, v)
     return LinearNDInterpolator(m.p.T, sol[:bw.N][bw.nodal_dofs[0]])(U, V)

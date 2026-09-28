@@ -41,8 +41,10 @@ def load_plan(path):
 
 def _init(preset, out, seed):
     import numba
+    from threadpoolctl import threadpool_limits
     cv2.setNumThreads(1)
     numba.set_num_threads(1)
+    threadpool_limits(1)
     P = get_preset(preset)
     _W.update(P=P, out=Path(out), seed=seed, plan=load_plan(Path(out) / "plan.jsonl"),
               manifest=load_manifest(P.paths.manifest), fonts=find_fonts(P.paths.font_dirs))
