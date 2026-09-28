@@ -36,8 +36,8 @@ class SceneCfg:
         ((False, 1, True, False), 0.09), ((False, 2, True, False), 0.09), ((False, 3, True, False), 0.04),
         ((True, 0, False, False), 0.09), ((True, 1, False, False), 0.05), ((True, 2, False, False), 0.03),
         ((True, 0, True, False), 0.06), ((True, 1, True, False), 0.04),
-        ((False, 0, False, True), 0.12))
-    clamp_deg: tuple = (5.0, 60.0)
+        ((False, 0, False, True), 0.0463))            # crumple: 5% of all
+    clamp_deg: tuple = (5.0, 45.0)
     clamp_free_len: float = 0.03
     support_edge: float = 0.05
     support_min_gap: float = 0.04
@@ -84,7 +84,8 @@ class ShallowCreaseCfg:
 
 @dataclass(frozen=True)
 class DeepCreaseCfg:
-    levels: tuple = (("light", 0.4), ("medium", 0.35), ("heavy", 0.25))
+    levels: tuple = (("medium", 0.55), ("heavy", 0.45))   # crumpled pages (no bends or folds)
+    on_bends_prob: float = 0.1                    # light creases on top of bends and folds
     coverage: dict = field(default_factory=lambda: {"light": (0.1, 0.4), "medium": (0.3, 0.8), "heavy": (0.6, 1.0)})
     max_scale_mm: dict = field(default_factory=lambda: {"light": (30.0, 90.0), "medium": (25.0, 80.0),
                                                         "heavy": (15.0, 70.0)})   # page's largest crease length
@@ -148,7 +149,7 @@ class PictureCfg:
 
 @dataclass(frozen=True)
 class TextFormatCfg:
-    columns: tuple = ((1, 0.55), (2, 0.35), (3, 0.10))
+    columns: tuple = ((1, 0.85), (2, 0.12), (3, 0.03))
     gutter_mm: tuple = (4.0, 10.0)
     heading_prob: float = 0.3
     heading_scale: tuple = (1.3, 2.2)
@@ -201,7 +202,7 @@ class CameraCfg:
     roll_deg: tuple = (-8.0, 8.0)
     fill: tuple = (0.93, 1.0)                       # page bbox to frame, along the tighter side
     shift: float = 0.3                              # page centre offset, fraction of the free space
-    incidence_deg: float = 75.0                     # max view angle to the surface normal
+    incidence_deg: float = 40.0                     # max view angle to the surface normal, anywhere on the page
 
 
 @dataclass(frozen=True)

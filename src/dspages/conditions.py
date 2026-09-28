@@ -36,6 +36,7 @@ def factors(P: Preset):
         gsm=tuple((v, 1.0) for v in P.paper.gsm),
         shallow=((True, g.shallow.prob), (False, 1 - g.shallow.prob)),
         deep=g.deep.levels,
+        bend_deep=((True, g.deep.on_bends_prob), (False, 1 - g.deep.on_bends_prob)),
         dist_bin=tuple((b, 1.0) for b in _bins(*cam.dist_mm, 4, log=True)),
         tilt_bin=tuple((b, 1.0) for b in _bins(*cam.tilt_deg, 3)),
         sharp=((True, li.sharp_prob), (False, 1 - li.sharp_prob)),
@@ -44,10 +45,12 @@ def factors(P: Preset):
 
 def _canonical(c):
     crumple = c["combo"][3]
-    return dict(c, flat=c["flat"] and not crumple, two=c["two"] and not crumple, deep=c["deep"] if crumple else "")
+    out = {k: v for k, v in c.items() if k != "bend_deep"}
+    return dict(out, flat=c["flat"] and not crumple, two=c["two"] and not crumple,
+                deep=c["deep"] if crumple else "light" if c.get("bend_deep") else "")
 
 
-GROUPS = dict(geometry=("combo", "flat", "two", "along_long", "bend_bin", "gsm", "shallow", "deep"),
+GROUPS = dict(geometry=("combo", "flat", "two", "along_long", "bend_bin", "gsm", "shallow", "deep", "bend_deep"),
               view=("dist_bin", "tilt_bin", "sharp"), layout=("margin_bin",))
 
 

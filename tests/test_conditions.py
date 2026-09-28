@@ -17,9 +17,9 @@ def test_plan_marginals_exact(full_small):
     combos = Counter(s["combo"] for s in specs)
     w = np.array([p for _, p in f["combo"]])
     for (c, p), m in zip(f["combo"], w / w.sum()):
-        assert abs(combos[c] - n * p) < 1
+        assert abs(combos[c] - n * m) < 1
     for s in specs:
-        assert s["combo"][3] or (not s["deep"])
+        assert s["combo"][3] or s["deep"] in ("", "light")
         assert not s["combo"][3] or (not s["two"] and not s["flat"] and s["deep"])
         assert -full_small.geometry.bend_dir_deg <= s["bend_dir"] <= full_small.geometry.bend_dir_deg
 

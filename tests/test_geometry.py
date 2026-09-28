@@ -64,7 +64,7 @@ def _conds(P):
     for i, (combo, _) in enumerate(P.geometry.scene.combos):
         yield dict(combo=combo, flat=bool(i % 3 == 0), two=not combo[3] and i % 2 == 0, along_long=bool(i % 2),
                    bend_dir=float(-40 + 7 * i), gsm=P.paper.gsm[i % len(P.paper.gsm)], shallow=bool(i % 2),
-                   deep=("light", "medium", "heavy")[i % 3] if combo[3] else "")
+                   deep=("medium", "heavy")[i % 2] if combo[3] else "light" if i % 4 == 1 else "")
 
 
 @pytest.mark.parametrize("i", range(13))
@@ -98,6 +98,6 @@ def test_crease_heights_bounded(full_small):
     lines = shallow.sample(rng, 210, 297, c.mean_groups, c.p_isolated, c.mean_extra, c.radius_mm, c.spread_deg,
                            c.singles_per_group, c.k)
     assert np.abs(shallow.render(lines, 210, 297, 1.0, c.w_max_mm)).max() <= c.w_max_mm
-    for level, _ in g.deep.levels:
+    for level in ("light", "medium", "heavy"):
         h = deep.render(deep.sample(rng, 210, 297, level, g.deep), 210, 297, level, g.deep)
         assert 0 < np.ptp(h) <= g.deep.max_depth_mm[level]

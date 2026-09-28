@@ -106,7 +106,7 @@ def make_surface(rng, g: GeometryCfg, paper, cond):
         a_, b_ = _swap((P - p0) * cb - (Gq - g0) * sn, (P - p0) * sn + (Gq - g0) * cb, cond["along_long"])
         z = z + RegularGridInterpolator(axes, hmap, bounds_error=False, fill_value=None)(
             np.stack([np.clip(b_, 0, sh), np.clip(a_, 0, sw)], -1))
-    if cond["deep"]:
+    if cond["combo"][3]:
         z = z - z.min()
     z = np.maximum(z, 0.0)
     xd, yd = inextensible(x, z, up, vg)

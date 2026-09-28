@@ -132,6 +132,29 @@ def fbm(seed, x, y, scale, octaves=5, gain=0.5):
     return out / tot
 
 
+def worley(seed, x, y, scale):
+    """Cellular noise: distances to the nearest and second nearest jittered lattice point (feature size `scale`)
+    and the nearest point's cell id in [0, 1]."""
+    x, y = x / scale, y / scale
+    i0, j0 = np.floor(x), np.floor(y)
+    d1 = np.full(x.shape, 9.0, np.float32)
+    d2, cid = d1.copy(), np.zeros(x.shape, np.float32)
+    for di in (-1, 0, 1):
+        for dj in (-1, 0, 1):
+            i, j = i0 + di, j0 + dj
+            d = np.hypot(i + _lattice(seed, i, j) - x, j + _lattice(seed + 1, i, j) - y)
+            near = d < d1
+            d2 = np.where(near, d1, np.minimum(d2, d))
+            cid = np.where(near, _lattice(seed + 2, i, j), cid)
+            d1 = np.minimum(d1, d)
+    return d1, d2, cid
+
+
+def warp(seed, x, y, scale, amount):
+    """Domain warping: coordinates displaced by fractal noise."""
+    return x + amount * fbm(seed, x, y, scale, 4), y + amount * fbm(seed + 50, x, y, scale, 4)
+
+
 def _cells(x, y, w, h, off):
     """Brick / grid cells: (index u, index v, local u, local v) for cells w x h, rows shifted by off * w."""
     v = np.floor(y / h)
@@ -166,7 +189,8 @@ def _fabric(rng, x, y, sd):
 
 def _marble(rng, x, y, sd):
     th = rng.uniform(0, np.pi)
-    t = (x * np.cos(th) + y * np.sin(th)) / rng.uniform(40, 200) + rng.uniform(2, 6) * fbm(sd, x, y, 120, 6)
+    wx, wy = warp(sd + 3, x, y, rng.uniform(80, 300), rng.uniform(20, 120))
+    t = (wx * np.cos(th) + wy * np.sin(th)) / rng.uniform(40, 200) + rng.uniform(1, 4) * fbm(sd, wx, wy, 120, 6)
     vein = np.abs(np.sin(np.pi * t)) ** rng.uniform(0.2, 0.6)
     return 0.3 + 0.6 * vein + 0.08 * fbm(sd + 9, x, y, 5, 3)
 
@@ -205,12 +229,37 @@ def _plain(rng, x, y, sd):
     return g
 
 
-TEXTURES = (_wood, _fabric, _marble, _granite, _tiles, _felt, _plain)
+def _leather(rng, x, y, sd):
+    wx, wy = warp(sd, x, y, 10, rng.uniform(0.3, 1.5))
+    d1, d2, _ = worley(sd + 1, wx, wy, rng.uniform(0.8, 3.0))
+    crease = np.clip((d2 - d1) * rng.uniform(3, 8), 0, 1)
+    return 0.35 + 0.4 * crease + 0.15 * fbm(sd + 2, x, y, 40, 3)
+
+
+def _terrazzo(rng, x, y, sd):
+    d1, d2, cid = worley(sd, *warp(sd + 1, x, y, 8, rng.uniform(0.5, 3)), rng.uniform(3, 15))
+    chip = (d2 - d1) > rng.uniform(0.15, 0.4)
+    ground = 0.5 + 0.1 * fbm(sd + 2, x, y, 3, 3)
+    return np.where(chip & (cid < rng.uniform(0.3, 0.8)), cid * 1.4 - 0.1, ground)
+
+
+def _cork(rng, x, y, sd):
+    d1, _, cid = worley(sd, x, y, rng.uniform(0.6, 2.0))
+    return 0.35 + 0.35 * cid + 0.25 * d1 + 0.1 * fbm(sd + 1, x, y, 20, 3)
+
+
+def _pebbled(rng, x, y, sd):
+    d1, _, _ = worley(sd, x, y, rng.uniform(0.3, 1.2))
+    return 0.5 + 0.3 * (0.5 - np.clip(d1, 0, 1)) + 0.05 * fbm(sd + 1, x, y, 60, 3)
+
+
+TEXTURES = (_wood, _fabric, _marble, _granite, _tiles, _felt, _plain, _leather, _terrazzo, _cork, _pebbled)
 
 
 def table_texture(rng, Q):
     """Table surface luminance at table points Q (h, w, 3) mm, evaluated per point (sharp at any distance): wood
-    planks, woven fabric, marble, granite, tiles, felt or plain with scratches, at a random base level and
+    planks, woven fabric, marble, granite, tiles, felt, plain with scratches, leather, terrazzo, cork or pebbled
+    plastic (fractal, cellular and domain-warped noise), at a random base level and
     contrast, with broad stains."""
     x, y = np.nan_to_num(Q[..., 0]).astype(np.float32), np.nan_to_num(Q[..., 1]).astype(np.float32)
     sd = int(rng.integers(1 << 30))
