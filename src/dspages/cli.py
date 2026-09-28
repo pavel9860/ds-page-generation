@@ -78,25 +78,34 @@ def _geometry(i, save):
     return surf
 
 
-def _render(i, save_parts):
+def _render(i, save_parts, dt):
     lp, gp = _path("layout", i), _path("geometry", i)
+    t = time.time()
     page = io.load(lp)[0]["page"] if lp.exists() and not save_parts else _layout(i, save_parts)
+    dt["layout"], t = time.time() - t, time.time()
     surf = io.load(gp)[0] if gp.exists() and not save_parts else _geometry(i, save_parts)
+    dt["geometry"], t = time.time() - t, time.time()
     o = make_sample(_rng(i, "render"), page, surf, view_preset(_W["P"], _W["plan"][i]))
     preview = np.hstack([cv2.resize(o["flat"], o["warped"].shape[1::-1]), o["warped"]])
     io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "uv", "map3d", "mask")}, o["meta"], preview)
+    dt["render"] = time.time() - t
 
 
 def _job(args):
+    """-> (i, seconds per step)."""
     cmd, i = args
-    t = time.time()
+    t, dt = time.time(), {}
+    if _path("render" if cmd in ("render", "all") else cmd, i).exists():
+        return i, dt
     if cmd == "layout":
         _layout(i, True)
+        dt["layout"] = time.time() - t
     elif cmd == "geometry":
         _geometry(i, True)
+        dt["geometry"] = time.time() - t
     else:
-        _render(i, cmd == "all")
-    return i, time.time() - t
+        _render(i, cmd == "all", dt)
+    return i, dt
 
 
 def main(argv=None):
@@ -120,16 +129,19 @@ def main(argv=None):
             specs = plan(P, a.n, a.seed, load_manifest(P.paths.manifest))
             for s in specs:
                 f.write(json.dumps(s) + "\n")
-        short = {g: round(a.n * w) - sum(s["script"] == g for s in specs) for g, w in P.layout.script_mix}
-        print(f"plan: {len(specs)} of {a.n} specs -> {plan_path}; short per script: {short}")
+        per = {g: sum(s["script"] == g for s in specs) for g, _ in P.layout.script_mix}
+        print(f"plan: {len(specs)} of {a.n} specs -> {plan_path}; per script: {per}", flush=True)
     if a.cmd == "plan":
         return
     n = sum(1 for _ in open(plan_path))
     idx = range(a.start, min(n, a.start + (a.count or n)))
-    t0, times = time.time(), []
+    t0, times = time.time(), {}
     with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed)) as pool:
-        for k, (i, dt) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=4), 1):
-            times.append(dt)
+        for k, (i, dt) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=1), 1):
+            for step, v in dt.items():
+                times.setdefault(step, []).append(v)
             if k % 50 == 0 or k == len(idx):
-                print(f"{a.cmd}: {k}/{len(idx)}  {np.mean(times):.2f} s/sample/worker  {time.time() - t0:.0f} s",
-                      flush=True)
+                el = time.time() - t0
+                steps = "  ".join(f"{s_} {np.mean(v):.2f}" for s_, v in times.items())
+                print(f"{a.cmd}: {k}/{len(idx)}  s/sample/worker: {steps}  elapsed {el:.0f} s  "
+                      f"eta {el / k * (len(idx) - k):.0f} s", flush=True)

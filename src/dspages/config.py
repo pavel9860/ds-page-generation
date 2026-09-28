@@ -7,7 +7,7 @@ G = 9.81
 @dataclass(frozen=True)
 class Paths:
     layouts: str = "/run/media/me/D/ML_DS/UVTM/Layouts"
-    manifest: str = "/run/media/me/D/ML_DS/UVTM/Layouts/manifest_100k.jsonl"
+    manifest: str = "/run/media/me/D/ML_DS/UVTM/Layouts/manifest_pages.jsonl"
     books: str = "/run/media/me/D/ML_DS/UVTM/Layouts/books/Texts"
     out: str = "/run/media/me/D/ML_DS/UVTM/dspages"
     font_dirs: tuple = ("/usr/share/fonts", "/usr/local/share/fonts", "~/.fonts")
@@ -37,7 +37,7 @@ class SceneCfg:
         ((True, 0, False, False), 0.09), ((True, 1, False, False), 0.05), ((True, 2, False, False), 0.03),
         ((True, 0, True, False), 0.06), ((True, 1, True, False), 0.04),
         ((False, 0, False, True), 0.0463))            # crumple: 5% of all
-    clamp_deg: tuple = (5.0, 45.0)
+    clamp_deg: tuple = (5.0, 35.0)
     clamp_free_len: float = 0.03
     support_edge: float = 0.05
     support_min_gap: float = 0.04
@@ -54,8 +54,8 @@ class SceneCfg:
     fold_valley_prob: float = 0.5
     fold_angle_deg_median: float = 25.0
     fold_angle_sigma: float = 0.6
-    fold_angle_deg: tuple = (3.0, 60.0)
-    fold_total_deg: float = 90.0
+    fold_angle_deg: tuple = (3.0, 45.0)
+    fold_total_deg: float = 70.0
     fold_total_deg_supported: float = 45.0
     fold_k_median: float = 0.01
     fold_k_sigma: float = 0.7
@@ -197,12 +197,12 @@ class LayoutCfg:
 
 @dataclass(frozen=True)
 class CameraCfg:
-    dist_mm: tuple = (100.0, 600.0)                 # camera to page centre
-    tilt_deg: tuple = (0.0, 40.0)                   # optical axis to the table normal
+    dist_mm: tuple = (200.0, 600.0)                 # camera to page centre
+    tilt_deg: tuple = (0.0, 50.0)                   # optical axis to the table normal
     roll_deg: tuple = (-8.0, 8.0)
     fill: tuple = (0.93, 1.0)                       # page bbox to frame, along the tighter side
     shift: float = 0.3                              # page centre offset, fraction of the free space
-    incidence_deg: float = 40.0                     # max view angle to the surface normal, anywhere on the page
+    incidence_deg: float = 50.0                     # max view angle to the surface normal, anywhere on the page
 
 
 @dataclass(frozen=True)
