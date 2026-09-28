@@ -6,6 +6,8 @@ SCAN_MAX_SIDE = 512
 LINE_KSIZE = 15
 LINE_THRESH = 36
 PATCH_INK_EPS = 0.01
+IMAGE_KSIZE = 7
+IMAGE_THRESH = 200
 
 
 def content_mask(gray, max_side=SCAN_MAX_SIDE):
@@ -39,20 +41,40 @@ def window_fill(mask, win, grid):
     return (s > PATCH_INK_EPS * area).mean(axis=(1, 2))
 
 
-def select_window(mask, aspect, rng, min_fill, grid):
-    """Largest window of aspect w/h inside mask's content bbox, placed along its free axis at a random
-    position with fill >= min_fill (the best one if none reaches it). -> (y0, x0, h, w) in mask cells, fill."""
+def image_mask(gray, max_side=SCAN_MAX_SIDE):
+    """Images and solid areas: dark-ish regions that survive an opening wider than text strokes."""
+    s = min(1.0, max_side / max(gray.shape))
+    small = cv2.resize(gray, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else gray
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (IMAGE_KSIZE, IMAGE_KSIZE))
+    return cv2.morphologyEx((small < IMAGE_THRESH).astype(np.uint8), cv2.MORPH_OPEN, k) > 0
+
+
+def _window_share(mask, win):
+    """Share of mask inside every window position sliding along axis 0 (window spans axis 1)."""
+    rows = np.concatenate([[0], np.cumsum(mask.sum(1))])
+    return (rows[win:] - rows[:-win]) / (win * mask.shape[1])
+
+
+def select_window(mask, aspect, rng, min_fill, grid, images=None, max_image=1.0):
+    """Largest window of aspect w/h inside mask's content bbox, placed along its free axis at a random position
+    with fill >= min_fill and image share <= max_image (the best fill among those, or overall, if none reaches
+    it). -> (y0, x0, h, w) in mask cells, fill, image share."""
     b = bbox(mask)
     if b is None:
-        return None, 0.0
+        return None, 0.0, 0.0
     y0, y1, x0, x1 = b
     bh, bw = y1 - y0 + 1, x1 - x0 + 1
-    sub = mask[y0:y1 + 1, x0:x1 + 1]
     tall = bw / bh < aspect
     win = max(1, min(bh, round(bw / aspect))) if tall else max(1, min(bw, round(bh * aspect)))
-    fill = window_fill(sub if tall else sub.T, win, grid)
-    ok = np.flatnonzero(fill >= min_fill)
-    o = int(rng.choice(ok)) if ok.size else int(fill.argmax())
-    if tall:
-        return (y0 + o, x0, win, bw), float(fill[o])
-    return (y0, x0 + o, bh, win), float(fill[o])
+
+    def along(m):
+        m = m[y0:y1 + 1, x0:x1 + 1]
+        return m if tall else m.T
+    fill = window_fill(along(mask), win, grid)
+    img = _window_share(along(images), win) if images is not None else np.zeros_like(fill)
+    fits = img <= max_image
+    ok = np.flatnonzero((fill >= min_fill) & fits)
+    pool = np.flatnonzero(fits) if fits.any() else np.arange(len(fill))
+    o = int(rng.choice(ok)) if ok.size else int(pool[fill[pool].argmax()])
+    box = (y0 + o, x0, win, bw) if tall else (y0, x0 + o, bh, win)
+    return box, float(fill[o]), float(img[o])

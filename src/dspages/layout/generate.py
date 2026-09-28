@@ -4,9 +4,9 @@ import numpy as np
 
 from ..config import Preset, page_px
 from . import paper
-from .content import content_mask, select_window
+from .content import content_mask, image_mask, select_window
 from .grid import crossings, grid_page
-from .sources import raster_page
+from .sources import is_pdf, raster_page
 from .text import char_budget, render_text, sample_snippet
 
 
@@ -31,11 +31,17 @@ def make_layout(rng, entry, P: Preset, fonts):
     else:
         src = raster_page(entry)
         mask, s = content_mask(src)
-        (y0, x0, h, w), fill = select_window(mask, iw / ih, rng, c.min_fill, c.fill_grid)
-        y0, x0, h, w = (round(v / s) for v in (y0, x0, h, w))
+        box, fill, img = select_window(mask, iw / ih, rng, c.min_fill, c.fill_grid, image_mask(src), c.max_image)
+        y0, x0, h, w = (v / s for v in box)
+        k = iw / w
+        if k > 1 and is_pdf(entry):
+            k = min(k, c.max_zoom)
+            src = raster_page(entry, k)
+            y0, x0, h, w = (v * k for v in (y0, x0, h, w))
+        y0, x0, h, w = (round(v) for v in (y0, x0, h, w))
         crop = src[y0:y0 + h, x0:x0 + w]
-        inner = cv2.resize(crop, (iw, ih), interpolation=cv2.INTER_AREA if crop.shape[1] > iw else cv2.INTER_CUBIC)
-        meta.update(window=(y0, x0, h, w), fill=fill)
+        inner = cv2.resize(crop, (iw, ih), interpolation=cv2.INTER_AREA if crop.shape[1] >= iw else cv2.INTER_CUBIC)
+        meta.update(window=(y0, x0, h, w), fill=fill, image_share=img, upscale=float(iw / crop.shape[1]))
     gray = np.full((ph, pw), 255, np.uint8)
     gray[my:my + ih, mx:mx + iw] = inner
     page, effects = paper.apply(rng, gray, ppm, c, P.geometry.shallow)

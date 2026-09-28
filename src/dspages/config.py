@@ -138,6 +138,14 @@ class LayoutCfg:
     margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
     min_fill: float = 0.8                           # fraction of the content window's patches with ink
     fill_grid: int = 10
+    max_image: float = 0.6                          # max share of the window covered by images / solid areas
+    max_zoom: float = 4.0                           # PDF re-render limit for a 1:1 window
+    script_mix: tuple = (("latin", 0.5), ("unknown", 0.1), ("cyrillic", 0.15), ("cjk", 0.1), ("other", 0.15))
+    scripts: dict = field(default_factory=lambda: {
+        "cyrillic": ("cyr", "bg", "ru", "uk", "sr", "mk", "be", "kk"),
+        "cjk": ("zh", "ja", "ko"),
+        "other": ("el", "he", "ar", "fa", "hi", "bn", "th", "ka", "hy", "ta", "te", "ur"),
+        "unknown": ("unknown", None)})
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
     grid: GridCfg = GridCfg()
     font_pt: tuple = (10.0, 16.0)

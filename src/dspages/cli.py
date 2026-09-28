@@ -116,7 +116,7 @@ def main(argv=None):
         P = get_preset(a.preset)
         out.mkdir(parents=True, exist_ok=True)
         with open(plan_path, "w") as f:
-            for s in plan(P, a.n, a.seed, len(load_manifest(P.paths.manifest))):
+            for s in plan(P, a.n, a.seed, load_manifest(P.paths.manifest)):
                 f.write(json.dumps(s) + "\n")
         print(f"plan: {a.n} specs -> {plan_path}")
     if a.cmd == "plan":

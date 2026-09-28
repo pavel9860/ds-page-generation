@@ -12,7 +12,8 @@ from dataclasses import replace
 
 import numpy as np
 
-from .config import Preset
+from .config import Preset, page_px
+from .layout.sources import is_pdf, min_window_px
 
 
 def _bins(lo, hi, n, log=False):
@@ -73,15 +74,33 @@ def _exact(rng, table, n):
     return [vals[i] for i in rng.permutation(n)]
 
 
-def plan(P: Preset, n, seed, n_entries):
-    """n sample specs with exact factor marginals; continuous values and the manifest entry drawn per sample."""
+def script(entry, scripts):
+    return next((g for g, langs in scripts.items() if entry["language"] in langs), "latin")
+
+
+def entry_pools(P: Preset, manifest):
+    """Manifest indices per script group, of entries that fill the sheet without upscaling: book texts, PDF pages
+    (rendered at the needed zoom) and raster images whose largest sheet-shaped window is at least the sheet."""
+    pw, ph = page_px(P.layout.sheet_mm, P.layout.canvas_px)
+    pools = {g: [] for g, _ in P.layout.script_mix}
+    for i, e in enumerate(manifest):
+        if e["kind"] == "book_text" or is_pdf(e) or min_window_px(e, pw / ph) >= pw:
+            pools.setdefault(script(e, P.layout.scripts), []).append(i)
+    return pools
+
+
+def plan(P: Preset, n, seed, manifest):
+    """n sample specs with exact factor marginals, script groups included; continuous values and the manifest
+    entry (uniform within its script group) drawn per sample."""
     rng = np.random.default_rng(seed)
-    cols = {k: _exact(rng, v, n) for k, v in factors(P).items()}
+    pools = entry_pools(P, manifest)
+    mix = tuple((g, w) for g, w in P.layout.script_mix if pools.get(g))
+    cols = {k: _exact(rng, v, n) for k, v in (*factors(P).items(), ("script", mix))}
     specs = []
     for i in range(n):
         s = _canonical({k: cols[k][i] for k in cols})
         s["bend_dir"] = float(rng.uniform(*s.pop("bend_bin")))
-        s["entry"] = int(rng.integers(n_entries))
+        s["entry"] = int(rng.choice(pools[s["script"]]))
         specs.append(s)
     return specs
 

@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from dspages.config import page_px
-from dspages.layout.content import content_mask, select_window, window_fill
+from dspages.layout.content import content_mask, image_mask, select_window, window_fill
 from dspages.layout.generate import make_layout
 from dspages.layout.text import char_budget, is_rtl, render_text
 
@@ -31,7 +31,7 @@ def test_select_window_aspect_and_speed():
         mask = np.zeros((512, 400), bool)
         mask[40:470:6, 30:380] = True
         t = time.perf_counter()
-        (y0, x0, h, w), fill = select_window(mask, aspect, rng, 0.8, 10)
+        (y0, x0, h, w), fill, _ = select_window(mask, aspect, rng, 0.8, 10)
         assert time.perf_counter() - t < 0.05
         assert abs(w / h - aspect) < 0.02 and fill >= 0.8
         assert 40 <= y0 and y0 + h <= 470 and 30 <= x0 and x0 + w <= 380
@@ -79,4 +79,18 @@ def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
             lum = page.astype(float)
             assert lum[paper_].mean() - lum[ink].mean() > 60
         assert 150 < page[paper_].mean() < 250
+        assert m.get("upscale", 1.0) <= 1.0 + 1e-6 or not m["source"].lower().endswith(".pdf")
+        assert m.get("image_share", 0.0) <= full_small.layout.max_image + 1e-6 or m.get("fill", 1) < full_small.layout.min_fill
     assert kinds
+
+
+def test_image_share_limit():
+    rng = np.random.default_rng(0)
+    page = np.full((1200, 400), 255, np.uint8)
+    page[:600] = 40
+    for y in range(620, 1190, 12):
+        page[y:y + 3, 20:380] = 0
+    mask, s = content_mask(page)
+    mask |= image_mask(page)
+    (y0, x0, h, w), fill, img = select_window(mask, 1.0, rng, 0.5, 10, image_mask(page), 0.6)
+    assert img <= 0.6

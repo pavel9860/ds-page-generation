@@ -9,23 +9,33 @@ from .deskew import estimate_deskew_angle, needs_deskew, rotate90, rotate_full_r
 RASTER_ZOOM = 2.0
 
 
+def min_window_px(entry, aspect):
+    """Width [px, manifest scale] of the largest window of aspect w/h inside the entry's content bbox."""
+    return min(entry["bbox_w"], entry["bbox_h"] * aspect)
+
+
 def load_manifest(path):
     with open(path, encoding="utf-8") as f:
         return [json.loads(line) for line in f]
 
 
-def raster_page(entry):
-    """uint8 gray page of a raster entry at the manifest's size, turned upright and deskewed."""
-    if entry["source_path"].lower().endswith(".pdf"):
+def is_pdf(entry):
+    return entry["source_path"].lower().endswith(".pdf")
+
+
+def raster_page(entry, scale=1.0):
+    """uint8 gray page of a raster entry at scale x the manifest's size, turned upright and deskewed. PDF pages
+    are rendered at that scale (vector sharp); images are resized."""
+    if is_pdf(entry):
         import pymupdf as fitz
         with fitz.open(entry["source_path"]) as doc:
-            pix = doc[entry["page_index"]].get_pixmap(matrix=fitz.Matrix(RASTER_ZOOM, RASTER_ZOOM),
-                                                      colorspace=fitz.csGRAY, alpha=False)
+            z = RASTER_ZOOM * scale
+            pix = doc[entry["page_index"]].get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csGRAY, alpha=False)
             gray = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width).copy()
     else:
         gray = cv2.imread(entry["source_path"], cv2.IMREAD_GRAYSCALE)
     gray = rotate90(gray, entry.get("rotate90", 0))
-    h, w = entry["used_h"], entry["used_w"]
+    h, w = round(entry["used_h"] * scale), round(entry["used_w"] * scale)
     if gray.shape != (h, w):
         gray = cv2.resize(gray, (w, h), interpolation=cv2.INTER_AREA if gray.size > h * w else cv2.INTER_LINEAR)
     if entry["needs_deskew"]:

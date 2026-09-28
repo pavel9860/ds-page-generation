@@ -15,6 +15,17 @@ def small(name):
     return replace(P, geometry=g)
 
 
+def fake_manifest():
+    """Entries of every script group; raster images too small for an A4 sheet at 1:1 are every other block of six."""
+    langs = ["en", "eu", "cyr", "zh", "el", "unknown"]
+    out = []
+    for i in range(120):
+        big = (i // 6) % 2 == 0
+        out.append(dict(source_path=f"x{i}.png", page_index=0, kind="raster", language=langs[i % 6], category=None,
+                        bbox_w=1200 if big else 400, bbox_h=1700 if big else 600))
+    return out
+
+
 @pytest.fixture(scope="session")
 def full_small():
     return small("full")

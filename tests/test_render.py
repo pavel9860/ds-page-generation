@@ -3,6 +3,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from conftest import fake_manifest
 from dspages.conditions import plan
 from dspages.config import page_px
 from dspages.geometry.surface import make_surface
@@ -27,7 +28,7 @@ def _samples(P, n):
     pw, ph = page_px(P.layout.sheet_mm, P.layout.canvas_px)
     yy, xx = np.mgrid[0:ph, 0:pw]
     page = np.where((xx // 6 + yy // 6) % 2 == 0, 30, 230).astype(np.uint8)
-    for k, spec in enumerate(plan(P, n, 1, 1)):
+    for k, spec in enumerate(plan(P, n, 1, fake_manifest())):
         cond = {key: spec[key] for key in ("combo", "flat", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
         surf = make_surface(np.random.default_rng(k), P.geometry, P.paper, cond)
         yield page, surf, make_sample(np.random.default_rng(k), page, surf, P)
