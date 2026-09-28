@@ -29,11 +29,7 @@ FBM_CREASE_DARKEN = 0.97
 
 # ---- 3D surface geometry (geometry.py) -------------------------------------
 MAX_CAMERA_TILT_DEG = 30.0     # camera's own tilt range (combined cap = CAP_DEG below)
-
-CREASE_R_MM = (1, 2)                  # bend radius at each end
-CREASE_ANGLE_DEG = (15, 45)           # ramp angle between bends
-CREASE_HEIGHT_MM = (1, 2)             # peak amplitude
-CREASE_LENGTH_PX = (50, 150)          # along-mark length
+# deep-crease shape ranges: creases.deep
 
 FOLD_ANGLE_DEG = (15, 45)
 FOLD_R_FRAC_OF_WIDTH = (0.05, 0.25)   # bottom radius, fraction of half-width
