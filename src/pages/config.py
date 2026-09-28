@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from .scenes import SceneConfig
+
 G = 9.81
 
 
@@ -16,31 +18,9 @@ class PaperConfig:
 
 
 @dataclass
-class ProfileRanges:
-    clamp_deg: tuple = (5.0, 60.0)
-    center_h: tuple = (0.005, 0.040)
-    two_p1_frac: tuple = (0.05, 0.30)
-    two_p2_frac: tuple = (0.70, 0.95)
-    two_h: tuple = (0.010, 0.040)
-    # folded: template crease positions (fractions of length), else 1..max random
-    fold_templates: dict = field(default_factory=lambda: {
-        (0.5,): 0.3, (1 / 3, 2 / 3): 0.3, (0.25, 0.5, 0.75): 0.1, None: 0.3})
-    fold_max: int = 4
-    fold_jitter: float = 0.006          # m, crease position noise
-    fold_min_gap: float = 0.03          # m, between creases and to edges
-    fold_valley_prob: float = 0.5       # per crease: valley (+) vs mountain (-)
-    fold_angle_deg_median: float = 25.0 # residual rest angle after unfolding, lognormal
-    fold_angle_sigma: float = 0.6
-    fold_angle_deg: tuple = (3.0, 110.0)
-    fold_k_median: float = 0.01         # N*m/m per rad, crease hinge stiffness, lognormal
-    fold_k_sigma: float = 0.7
-    fold_side_b_angle_jitter: float = 0.25
-
-
-@dataclass
 class ShallowCreaseConfig:
     """Shallow creases (creases.shallow): a height map on the page, not applied to the surface."""
-    prob: float = 0.0                   # per page; 0 keeps pages crease-free
+    prob: float = 0.5                   # per page; 0 keeps pages crease-free
     mean_groups: float = 1.8            # groups per page ~ 1 + Poisson(mean_groups - 1)
     p_isolated: float = 0.3             # group is one unit
     mean_extra: float = 1.5             # else 2 + Poisson(mean_extra) units
@@ -48,6 +28,7 @@ class ShallowCreaseConfig:
     spread_deg: float = 25.0            # direction spread inside a group
     singles_per_group: tuple = (3.0, 4.0)   # stand-alone single creases ~ Poisson(U(.) * n_groups)
     pitch_mm: float = 0.5               # height-map grid
+    fold_clear_mm: float = 8.0          # drop shallow creases this close to a fold line
 
 
 @dataclass
@@ -55,12 +36,10 @@ class PageConfig:
     width: float = 0.210
     height: float = 0.297
     paper: PaperConfig = field(default_factory=PaperConfig)
-    kind_probs: dict = field(default_factory=lambda: {"clamp": 0.35, "center_support": 0.2, "two_support": 0.15, "folded": 0.3})
+    scenes: SceneConfig = field(default_factory=SceneConfig)
     profile_along_long_prob: float = 0.5
+    bend_dir_deg: float = 45.0          # profile direction turned up to this off the base axis (with along_long: any)
     two_profile_prob: float = 0.5
-    side_b_jitter: float = 0.35
-    ranges: ProfileRanges = field(default_factory=ProfileRanges)
-    support_frac: tuple = (0.0, 1.0)
     n_slices: int = 9
     nu: int = 149
     nv: int = 105
