@@ -161,17 +161,23 @@ _SCRIPT_LANG = dict(CYRILLIC="cyr", CJK="zh", HIRAGANA="ja", KATAKANA="ja", HANG
                     TELUGU="te")
 
 
+def script_language(text: str) -> str:
+    """Language code of the dominant Unicode script of the letters ("latin" for Latin, "unknown" without letters)."""
+    import unicodedata
+    from collections import Counter
+    names = Counter(unicodedata.name(c, "?").split()[0] for c in text if c.isalpha())
+    if not names:
+        return "unknown"
+    return _SCRIPT_LANG.get(max(("HIRAGANA", "KATAKANA"), key=names.get) if names["HIRAGANA"] + names["KATAKANA"]
+                            > 0.05 * sum(names.values()) else names.most_common(1)[0][0], "latin")
+
+
 def book_language(path: str, scripts: dict) -> str:
     """Language of a book text: the file-name code (name.<code>.txt) when its script group matches the text's
     dominant Unicode script, else that script's code; Latin text without a usable code by classify_language."""
-    import unicodedata
-    from collections import Counter
-    txt = open(path, encoding="utf-8", errors="ignore").read(200000)
-    names = Counter(unicodedata.name(c, "?").split()[0] for c in txt if c.isalpha())
-    if not names:
-        return "unknown"
-    lang = _SCRIPT_LANG.get(max(("HIRAGANA", "KATAKANA"), key=names.get) if names["HIRAGANA"] + names["KATAKANA"]
-                            > 0.05 * sum(names.values()) else names.most_common(1)[0][0], "latin")
+    lang = script_language(open(path, encoding="utf-8", errors="ignore").read(200000))
+    if lang == "unknown":
+        return lang
     m = re.search(r"\.([a-z]{2})(?:_\w+)?\.txt$", path)
     code = m.group(1) if m else None
 

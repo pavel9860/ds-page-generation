@@ -9,6 +9,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -22,7 +23,7 @@ from ..layout.content import bbox, content_mask
 from ..layout.deskew import detect_rotation, rotate90
 from ..layout.sources import RASTER_ZOOM
 from ..layout.text import _words, book_text
-from .text_extract import DOMINANT_IMAGE_AREA_FRAC, book_language
+from .text_extract import DOMINANT_IMAGE_AREA_FRAC, book_language, script_language
 
 LAYOUTS = Paths().layouts
 BOOKS = Paths().books
@@ -30,6 +31,9 @@ MIN_CONTENT_AREA_FRAC = 0.01
 MAX_MARGIN_FRAC = 0.50
 MIN_CONTENT_FRAC = 0.01
 MIN_BOOK_WORDS = 3000
+BOOK_SCAN_LANGUAGES = {"Bakht Novel": "ur", "Dana Pani": "ur", "Yaaram novel": "ur", "Kandukondaen": "ta",
+                       "Yoga Vasistam": "ta", "Nagaon_Ka_Rahasya": "hi", "kupdf.net_1-1-": "el", "Kusadikika": "sw"}
+SCAN_CHARS_PER_PAGE = 300                  # book PDFs with less text per page are used as raster pages
 PAGES_PER_PDF_CAP = 10                 # pages per PDF; all pages of rare-script documents
 RARE_SCRIPTS = ("cyrillic", "cjk", "other")
 
@@ -240,7 +244,42 @@ def arxiv_jobs():
 
 def book_txt_paths():
     paths = sorted(glob.glob(os.path.join(BOOKS, "**", "*.txt"), recursive=True))
-    return [p for p in paths if len(_words(p)) >= MIN_BOOK_WORDS]
+    return [p for p in paths if len(_words(p)) >= MIN_BOOK_WORDS and not _scan_text(p)]
+
+
+def _scan_text(txt):
+    pdf = os.path.join(os.path.dirname(BOOKS), os.path.relpath(txt, BOOKS))[:-4] + ".pdf"
+    pdf = pdf if os.path.exists(pdf) else os.path.join(os.path.dirname(BOOKS), os.path.basename(pdf))
+    if not os.path.exists(pdf):
+        return False
+    import pymupdf
+    with pymupdf.open(pdf) as d:
+        return len(book_text(txt)) < SCAN_CHARS_PER_PAGE * d.page_count
+
+
+def book_scan_jobs():
+    """Book PDFs without a usable text layer (scans, music scores) as raster PDF jobs. Language: BOOK_SCAN_LANGUAGES
+    (checked by eye), else the name's code (name.<code>.pdf), else a non-Latin script in the name, else "unknown"."""
+    import pymupdf
+    jobs = []
+    for pdf in sorted(glob.glob(os.path.join(os.path.dirname(BOOKS), "**", "*.pdf"), recursive=True)):
+        rel = os.path.relpath(pdf, os.path.dirname(BOOKS))
+        topic = os.path.dirname(rel) or "uncategorized"
+        txt = os.path.join(BOOKS, topic, os.path.splitext(os.path.basename(rel))[0] + ".txt")
+        try:
+            with pymupdf.open(pdf) as d:
+                n = d.page_count
+        except Exception:
+            continue
+        if os.path.exists(txt) and len(book_text(txt)) >= SCAN_CHARS_PER_PAGE * n:
+            continue
+        name = os.path.basename(rel)
+        code = re.search(r"\.([a-z]{2})(?:_\w+)?\.pdf$", name)
+        other = script_language("".join(c for c in name if not c.isascii()))
+        lang = next((v for k, v in BOOK_SCAN_LANGUAGES.items() if name.startswith(k)), None) or (
+            code.group(1) if code else other if other not in ("latin", "unknown") else "unknown")
+        jobs.append((pdf, n, lang, "book_scan", _seed(pdf)))
+    return jobs
 
 
 def _book_jobs():
@@ -282,6 +321,7 @@ def main(out_path: str, workers: int, limit_files: int = None):
         ("pdf_png_en", pdf_png_jobs(), _job_image),
         ("xfund_funsd", xfund_funsd_jobs(), _job_image),
         ("arxiv_en", arxiv_jobs(), _job_pdf),
+        ("book_scans", book_scan_jobs(), _job_pdf),
         ("books", _book_jobs(), _job_book_text),
     ]
     if limit_files:

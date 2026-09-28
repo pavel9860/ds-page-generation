@@ -46,7 +46,7 @@ def main():
     sc = P.layout.scripts
     meta = M.load_metadata(os.path.join(M.LAYOUTS, "corpus", "metadata.jsonl"))
     over_pdf, over_img = M.corpus_overflow_jobs()
-    pdfs = [(j[0], j[2]) for j in M.corpus_pdf_jobs(meta) + over_pdf + M.arxiv_jobs()]
+    pdfs = [(j[0], j[2]) for j in M.corpus_pdf_jobs(meta) + over_pdf + M.arxiv_jobs() + M.book_scan_jobs()]
     images = [(j[0], j[1]) for j in over_img + M.pdf_png_jobs() + M.xfund_funsd_jobs()]
     books = [(p, P.layout.book_page_chars) for p in M.book_txt_paths()]
 
@@ -79,9 +79,7 @@ def main():
     print("\nconfigured languages without book text:",
           {g: [x for x in ls if x not in have and x and x not in ("unknown", "cyr")]
            for g, ls in P.layout.scripts.items() if g not in P.layout.use_all})
-    print("book texts with no text (scans, need OCR):",
-          [os.path.basename(p) for p in M.glob.glob(os.path.join(M.BOOKS, "**", "*.txt"), recursive=True)
-           if p not in set(M.book_txt_paths())])
+    print("book PDFs used as raster pages:", [(os.path.basename(j[0])[:40], j[2]) for j in M.book_scan_jobs()])
 
 
 if __name__ == "__main__":
