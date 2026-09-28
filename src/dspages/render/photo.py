@@ -3,8 +3,8 @@
 Light: a point light (sharp shadows) or an area light sampled at AREA_SAMPLES points (soft shading and shadows)
 above the table. Per point: ambient + (1 - ambient) * mean over light samples of visibility * (lambert + specular);
 visibility from a depth map rendered from each light sample, so the page shadows itself and the table.
-Camera effects run on linear RGB in [0, 1]: depth-of-field blur, motion blur, vignetting, white balance to a
-colour temperature, exposure and gamma, sensor noise at an ISO, JPEG.
+Everything is single-channel luminance. Camera effects run on linear luminance in [0, 1]: depth-of-field blur,
+motion blur, vignetting, exposure and gamma, sensor noise at an ISO, JPEG.
 """
 import cv2
 import numpy as np
@@ -84,39 +84,21 @@ def table_points(cam, size):
 
 
 def table_texture(rng, Q):
-    """Procedural table surface at table points Q (h, w, 3) mm: base colour, low-frequency variation, wood-like
-    grain or fabric weave."""
-    hue = rng.uniform(0.0, 1.0)
-    sat = rng.uniform(0.0, 0.35) if rng.random() < 0.7 else rng.uniform(0.35, 0.6)
-    val = rng.uniform(0.12, 0.8)
-    base = cv2.cvtColor(np.array([[[hue * 179, sat * 255, val * 255]]], np.uint8), cv2.COLOR_HSV2RGB)[0, 0] / 255.0
-    base = base.astype(np.float32)
+    """Procedural table surface luminance at table points Q (h, w, 3) mm: base level, low-frequency variation,
+    wood-like grain, fabric weave or mottle."""
+    base = rng.uniform(0.12, 0.8)
     x, y = np.nan_to_num(Q[..., 0]), np.nan_to_num(Q[..., 1])
     lowf = smooth_noise(rng, Q.shape[:2], 60)
     kind = rng.integers(3)
     if kind == 0:
         th = rng.uniform(0, np.pi)
-        s = x * np.cos(th) + y * np.sin(th)
-        pattern = 0.5 + 0.5 * np.sin(2 * np.pi * s / rng.uniform(4, 15) + 3 * lowf)
+        pattern = 0.5 + 0.5 * np.sin(2 * np.pi * (x * np.cos(th) + y * np.sin(th)) / rng.uniform(4, 15) + 3 * lowf)
     elif kind == 1:
         p = rng.uniform(0.8, 3.0)
         pattern = 0.5 + 0.25 * (np.sin(2 * np.pi * x / p) + np.sin(2 * np.pi * y / p))
     else:
         pattern = 0.5 + 0.5 * np.clip(smooth_noise(rng, Q.shape[:2], 8), -1, 1)
-    tex = base * (1 + 0.25 * (pattern[..., None] - 0.5) + 0.08 * lowf[..., None])
-    return np.clip(tex, 0, 1).astype(np.float32)
-
-
-def kelvin_rgb(k):
-    """Relative RGB of a black body at k kelvin (Tanner Helland fit), 1 at 6500 K."""
-    t = k / 100.0
-
-    def rgb(t):
-        r = 255.0 if t <= 66 else 329.698727446 * (t - 60) ** -0.1332047592
-        g = 99.4708025861 * np.log(t) - 161.1195681661 if t <= 66 else 288.1221695283 * (t - 60) ** -0.0755148492
-        b = 255.0 if t >= 66 else (0.0 if t <= 19 else 138.5177312231 * np.log(t - 10) - 305.0447927307)
-        return np.clip([r, g, b], 1, 255)
-    return (rgb(t) / rgb(65.0)).astype(np.float32)
+    return np.clip(base * (1 + 0.25 * (pattern - 0.5) + 0.08 * lowf), 0, 1).astype(np.float32)
 
 
 TONE_LEVELS = 4096
@@ -124,8 +106,8 @@ SRGB_TO_LINEAR = ((np.arange(256) / 255.0) ** 2.2).astype(np.float32)
 
 
 def camera_effects(rng, img, depth, page_mask, c: RenderCfg):
-    """Linear RGB (h, w, 3) -> uint8 RGB photo and the effects applied. Order of a camera: optics (defocus,
-    motion, vignetting), exposure, sensor noise, white balance, tone curve, JPEG."""
+    """Linear luminance (h, w) -> uint8 photo and the effects applied. Order of a camera: optics (defocus,
+    motion, vignetting), exposure, sensor noise, tone curve, JPEG."""
     fx = {k: e for k, e in c.effects.items() if k != "shading" and rng.random() < e.prob}
     h, w = img.shape[:2]
     if "defocus" in fx:
@@ -151,23 +133,16 @@ def camera_effects(rng, img, depth, page_mask, c: RenderCfg):
         p = fx["exposure"].params
         gain = gain * 2 ** _u(rng, p["ev"])
         gamma = _u(rng, p["gamma"])
-    img = img * gain[..., None]
+    img = img * gain
     if "iso_noise" in fx:
         g = float(np.exp(rng.uniform(*np.log(fx["iso_noise"].params["iso"])))) / 100.0
         sd = np.sqrt(np.clip(img, 0, 1) * 0.0004 * g + (0.002 * g) ** 2)
         img = img + sd * rng.standard_normal(img.shape, dtype=np.float32)
-        chroma = rng.standard_normal((h // 2, w // 2, 3), dtype=np.float32) * 0.002 * g
-        img = img + cv2.resize(cv2.GaussianBlur(chroma, (0, 0), 0.75), (w, h))
         if g > 8:
             img = cv2.bilateralFilter(img, 5, 0.05 * g / 8, 3)
-    if "white_balance" in fx:
-        p = fx["white_balance"].params
-        wb = kelvin_rgb(_u(rng, p["kelvin"])) * np.array([1.0, 1.0 + _u(rng, p["tint"]), 1.0], np.float32)
-        img = img * (wb / wb.mean())
     tone = (np.linspace(0, 1, TONE_LEVELS) ** (gamma / 2.2) * 255 + 0.5).astype(np.uint8)
     out = tone[(np.clip(img, 0, 1) * (TONE_LEVELS - 1) + 0.5).astype(np.int32)]
     if "jpeg" in fx:
         q = int(rng.integers(*fx["jpeg"].params["quality"]))
-        out = cv2.imdecode(cv2.imencode(".jpg", out[..., ::-1],
-                           [cv2.IMWRITE_JPEG_QUALITY, q])[1], cv2.IMREAD_COLOR)[..., ::-1]
+        out = cv2.imdecode(cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, q])[1], cv2.IMREAD_GRAYSCALE)
     return np.ascontiguousarray(out), sorted(fx)

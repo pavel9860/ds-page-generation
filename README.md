@@ -9,8 +9,8 @@ page-dewarping networks. Three independent parts:
    and plastic folds (discrete elastica, SQP with contact), blended across the page between two end profiles,
    shell sag outside the support strip, shallow creases or a deep crease network.
 3. **Render** — the layout on the page seen by a pinhole camera: rasterized with a z-buffer, lit by a point or
-   area light with cast shadows, on a table, through camera effects (defocus, motion, vignetting, white balance,
-   exposure, ISO noise, JPEG).
+   area light with cast shadows, on a table, through camera effects (defocus, motion, vignetting,
+   exposure, ISO noise, JPEG). All images are single-channel luminance.
 
 ## Install
 
@@ -31,9 +31,9 @@ python -m dspages all --preset full --out OUT --n 1000 --workers 12
 
 | file | arrays |
 |---|---|
-| `layouts/<i>.npz` | `page` sheet RGB uint8, `gray` clean sheet uint8 |
+| `layouts/<i>.npz` | `page` sheet luminance uint8, `gray` clean sheet uint8 |
 | `geometry/<i>.npz` | `X, Y, Z` page grid [mm] float32, rows down the sheet, table at z = 0 |
-| `samples/<i>.npz` | `flat` canvas RGB, `warped` photo RGB, `uv` page coords in [0, 1] of each photo pixel (NaN off the page, float16), `map3d` X, Y, Z [mm] (float16), `mask` |
+| `samples/<i>.npz` | `flat` canvas, `warped` photo (luminance uint8), `uv` page coords in [0, 1] of each photo pixel (NaN off the page, float16), `map3d` X, Y, Z [mm] (float16), `mask` |
 
 Each `.npz` holds `meta` (JSON: source, scene, paper, camera, light, effects) and has a `.jpg` preview.
 

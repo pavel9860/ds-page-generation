@@ -147,7 +147,6 @@ class LayoutCfg:
     effects: dict = field(default_factory=lambda: {
         "paper_texture": _fx(1.0, fiber_amp=(0.01, 0.04), fiber_sigma=(0.6, 1.6), grain_amp=(0.005, 0.02),
                              cloud_amp=(0.0, 0.03), cloud_scale_mm=(8.0, 40.0)),
-        "tint": _fx(0.4, rgb_shift=0.04),
         "yellowing": _fx(0.15, strength=(0.03, 0.12), edge_mm=(5.0, 40.0)),
         "print_spread": _fx(0.5, sigma_px=(0.3, 1.2), gain=(-0.25, 0.25)),
         "ink_fade": _fx(0.3, strength=(0.05, 0.35), scale_mm=(10.0, 60.0)),
@@ -193,7 +192,6 @@ class RenderCfg:
         "vignetting": _fx(0.5, strength=(0.05, 0.35)),
         "defocus": _fx(0.5, coc_px=(0.3, 2.5)),
         "motion_blur": _fx(0.12, length_px=(2.0, 10.0)),
-        "white_balance": _fx(0.8, kelvin=(2800.0, 7500.0), tint=(-0.03, 0.03)),
         "exposure": _fx(1.0, ev=(-0.6, 0.4), gamma=(0.85, 1.2)),
         "iso_noise": _fx(0.9, iso=(50.0, 3200.0)),
         "jpeg": _fx(0.8, quality=(45, 95)),

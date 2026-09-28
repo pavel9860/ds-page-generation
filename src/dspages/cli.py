@@ -1,7 +1,7 @@
 """python -m dspages {plan,layout,geometry,render,all} --preset NAME --out DIR [--n N] [--seed S] [--workers W]
 
 plan      DIR/plan.jsonl: n stratified sample specs (written by the other commands too when missing)
-layout    DIR/layouts/<i>.npz   page (sheet RGB), gray (clean sheet) + .jpg
+layout    DIR/layouts/<i>.npz   page (sheet luminance), gray (clean sheet) + .jpg
 geometry  DIR/geometry/<i>.npz  X, Y, Z [mm] page grid + .jpg height map
 render    DIR/samples/<i>.npz   flat, warped, uv, map3d, mask + .jpg flat | warped; reads layouts/ and geometry/
           of the same index when present, else makes them in memory

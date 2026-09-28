@@ -1,7 +1,7 @@
 """Paper, print and ageing effects on a flat page.
 
-The page is carried as ink coverage a (0 paper .. 1 ink) until it is composited into RGB reflectance:
-    rgb = paper_rgb * texture * (1 - a (1 - ink_rgb / paper_rgb))
+The page is carried as ink coverage a (0 paper .. 1 ink) until it is composited into luminance reflectance:
+    lum = paper * texture * (1 - a (1 - ink / paper))
 Each effect runs with its config probability and draws its parameters uniformly from the config ranges.
 """
 import cv2
@@ -9,6 +9,9 @@ import numpy as np
 
 from ..config import LayoutCfg, ShallowCreaseCfg
 from ..creases import shallow
+
+YELLOW_LUMA = 0.24              # Rec. 709 luma of a yellow cast (0, 0.25, 0.8) per unit strength
+STAIN_LUMA = 0.57               # of a brown stain (0.3, 0.6, 1.0)
 
 
 def _u(rng, r):
@@ -59,7 +62,7 @@ def old_crease_map(rng, w_mm, h_mm, px, sc: ShallowCreaseCfg):
 
 
 def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
-    """uint8 gray page (0 ink .. 255 paper) -> uint8 RGB page and the names of the effects applied."""
+    """uint8 gray page (0 ink .. 255 paper) -> uint8 luminance page and the names of the effects applied."""
     fx = {k: e for k, e in c.effects.items() if rng.random() < e.prob}
     h, w = gray.shape
     a = 1.0 - gray.astype(np.float32) / 255.0
@@ -93,11 +96,7 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
         creases = (np.cos(az) * gx + np.sin(az) * gy, np.abs(hmap) / (np.abs(hmap).max() + 1e-6), p)
         a *= 1 - _u(rng, p["ink_loss"]) * creases[1] ** 4
 
-    paper = _u(rng, c.paper_tone)
-    paper_rgb = np.full(3, paper, np.float32)
-    if "tint" in fx:
-        paper_rgb = np.clip(paper_rgb + rng.uniform(-1, 1, 3) * fx["tint"].params["rgb_shift"], 0, 1)
-    ink_rgb = np.clip(_u(rng, c.ink_tone) + rng.uniform(-0.03, 0.03, 3), 0, 1).astype(np.float32)
+    paper, ink = _u(rng, c.paper_tone), _u(rng, c.ink_tone)
     tex = np.ones((h, w), np.float32)
     if "paper_texture" in fx:
         p = fx["paper_texture"].params
@@ -109,7 +108,7 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
         p = fx["show_through"].params
         back = cv2.GaussianBlur(a[:, ::-1], (0, 0), _u(rng, p["blur_px"]))
         tex -= _u(rng, p["strength"]) * back
-    rgb = paper_rgb * tex[..., None] * (1 - a[..., None] * (1 - ink_rgb / np.maximum(paper_rgb, 1e-3)))
+    lum = paper * tex * (1 - a * (1 - ink / paper))
 
     if "yellowing" in fx:
         p = fx["yellowing"].params
@@ -117,23 +116,22 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
         yy, xx = np.arange(h), np.arange(w)
         dist = np.minimum.outer(np.minimum(yy, h - 1 - yy), np.minimum(xx, w - 1 - xx)).astype(np.float32)
         y = _u(rng, p["strength"]) * (0.4 + 0.6 * np.exp(-dist / e))
-        rgb = rgb * (1 - y[..., None] * np.array([0.0, 0.25, 0.8], np.float32))
+        lum = lum * (1 - YELLOW_LUMA * y)
     if "stains" in fx:
         p = fx["stains"].params
         for _ in range(rng.integers(p["n"][0], p["n"][1] + 1)):
             r = _u(rng, p["size_mm"]) * px_per_mm / 2
             m = _blob_mask(rng, (h, w), rng.uniform([0, 0], [w, h]), r)
             ring = np.clip(m - cv2.GaussianBlur(m, (0, 0), 0.15 * r) * 0.8, 0, 1) if rng.random() < 0.5 else m
-            rgb = rgb * (1 - _u(rng, p["strength"]) * ring[..., None] * np.array([0.3, 0.6, 1.0], np.float32))
+            lum = lum * (1 - STAIN_LUMA * _u(rng, p["strength"]) * ring)
     if creases is not None:
         shade, ridge, p = creases
-        rgb = (rgb * (1 + _u(rng, p["shade"]) * np.clip(shade, -1, 1)[..., None])
-               * (1 - _u(rng, p["darken"]) * ridge[..., None]))
+        lum = lum * (1 + _u(rng, p["shade"]) * np.clip(shade, -1, 1)) * (1 - _u(rng, p["darken"]) * ridge)
     if "local_blur" in fx:
         p = fx["local_blur"].params
         smap = np.zeros((h, w), np.float32)
         for _ in range(rng.integers(p["n"][0], p["n"][1] + 1)):
             smap = np.maximum(smap, _u(rng, p["sigma_px"]) * _blob_mask(
                 rng, (h, w), rng.uniform([0, 0], [w, h]), _u(rng, p["size_mm"]) * px_per_mm / 2))
-        rgb = variable_blur(rgb, smap)
-    return np.clip(rgb * 255 + 0.5, 0, 255).astype(np.uint8), sorted(fx)
+        lum = variable_blur(lum, smap)
+    return np.clip(lum * 255 + 0.5, 0, 255).astype(np.uint8), sorted(fx)

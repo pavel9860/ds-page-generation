@@ -11,7 +11,7 @@ from .text import char_budget, render_text, sample_snippet
 
 
 def make_layout(rng, entry, P: Preset, fonts):
-    """-> dict(page: uint8 RGB sheet, gray: uint8 clean sheet before effects, meta)."""
+    """-> dict(page: uint8 luminance sheet, gray: uint8 clean sheet before effects, meta)."""
     c = P.layout
     pw, ph = page_px(c.sheet_mm, c.canvas_px)
     ppm = pw / c.sheet_mm[0]

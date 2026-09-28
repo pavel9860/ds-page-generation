@@ -23,7 +23,8 @@ def uv_image(uv):
 
 def tile(arrays, h):
     flat, warped, uv, map3d = arrays["flat"], arrays["warped"], arrays["uv"].astype(np.float32), arrays["map3d"]
-    parts = [flat, warped, uv_image(uv), io.height_preview(map3d[..., 2].astype(np.float32))]
+    parts = [np.repeat(flat[..., None], 3, -1), np.repeat(warped[..., None], 3, -1), uv_image(uv),
+             io.height_preview(map3d[..., 2].astype(np.float32))]
     return np.hstack([cv2.resize(p, (round(h * p.shape[1] / p.shape[0]), h), interpolation=cv2.INTER_AREA)
                       for p in parts])
 

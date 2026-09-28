@@ -66,7 +66,7 @@ def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
         L = make_layout(np.random.default_rng(k), manifest[idx], full_small, fonts)
         page, gray, m = L["page"], L["gray"], L["meta"]
         kinds.add(m["kind"])
-        assert page.shape == (ph, pw, 3) and gray.shape == (ph, pw)
+        assert page.shape == (ph, pw) and gray.shape == (ph, pw)
         mx, my = round(m["margin"] * pw), round(m["margin"] * ph)
         if mx:
             assert gray[:, :mx].min() == 255 and gray[:, -mx:].min() == 255
@@ -76,7 +76,7 @@ def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
         assert np.mean([c.any() for c in cells]) >= 0.75
         ink, paper_ = gray < 100, gray > 200
         if ink.any():
-            lum = page.mean(-1)
+            lum = page.astype(float)
             assert lum[paper_].mean() - lum[ink].mean() > 60
         assert 150 < page[paper_].mean() < 250
     assert kinds

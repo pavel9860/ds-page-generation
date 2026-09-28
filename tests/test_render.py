@@ -26,7 +26,7 @@ def test_raster_plane_is_linear():
 def _samples(P, n):
     pw, ph = page_px(P.layout.sheet_mm, P.layout.canvas_px)
     yy, xx = np.mgrid[0:ph, 0:pw]
-    page = np.where(((xx // 6 + yy // 6) % 2 == 0)[..., None], 30, 230).astype(np.uint8).repeat(3, -1)
+    page = np.where((xx // 6 + yy // 6) % 2 == 0, 30, 230).astype(np.uint8)
     for k, spec in enumerate(plan(P, n, 1, 1)):
         cond = {key: spec[key] for key in ("combo", "flat", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
         surf = make_surface(np.random.default_rng(k), P.geometry, P.paper, cond)
@@ -50,4 +50,4 @@ def test_samples_in_frame_readable_consistent(name, demo, full_small):
         assert view["max_incidence_deg"] <= P.render.camera.incidence_deg + 1e-6
         assert o["map3d"].shape == (*reversed(P.render.map_px), 3)
         if name == "demo":
-            assert abs(o["warped"].mean(-1)[mask].mean() - page.mean()) < 20
+            assert abs(o["warped"][mask].mean() - page.mean()) < 20
