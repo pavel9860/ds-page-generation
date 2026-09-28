@@ -147,6 +147,14 @@ class PictureCfg:
 
 
 @dataclass(frozen=True)
+class TextFormatCfg:
+    columns: tuple = ((1, 0.55), (2, 0.35), (3, 0.10))
+    gutter_mm: tuple = (4.0, 10.0)
+    heading_prob: float = 0.3
+    heading_scale: tuple = (1.3, 2.2)
+
+
+@dataclass(frozen=True)
 class LayoutCfg:
     sheet_mm: tuple = (210.0, 297.0)
     canvas_px: tuple = (1024, 1365)                 # flat image (width, height); the sheet is fitted, rest padded
@@ -162,10 +170,12 @@ class LayoutCfg:
         "cjk": ("zh", "ja", "ko"),
         "other": ("el", "he", "ar", "fa", "hi", "bn", "th", "ka", "hy", "ta", "te", "ur"),
         "unknown": ("unknown", None)})
+    use_all: tuple = ("unknown",)                   # groups taking all their raster pages, outside script_mix
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
     grid: GridCfg = GridCfg()
     font_pt: tuple = (10.0, 16.0)
     book_page_chars: int = 12000                    # one book page: the text of a full A4 sheet at the smallest font
+    text_format: TextFormatCfg = TextFormatCfg()
     line_spacing: tuple = (1.15, 1.6)
     paper_tone: tuple = (0.88, 0.97)                # paper reflectance
     ink_tone: tuple = (0.04, 0.18)

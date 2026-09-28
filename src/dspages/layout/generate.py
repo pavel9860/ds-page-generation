@@ -8,7 +8,7 @@ from .content import bbox, content_mask, place_window
 from .pictures import picture_mask
 from .grid import crossings, grid_page
 from .sources import is_pdf, raster_page
-from .text import book_page, render_text
+from .text import book_snippet, render_text
 
 
 def _crop(src, x, y, w, h, pad):
@@ -48,8 +48,8 @@ def make_layout(rng, entry, P: Preset, fonts):
     c = P.layout
     pw, ph = page_px(c.sheet_mm, c.canvas_px)
     ppm = pw / c.sheet_mm[0]
-    meta = dict(source=entry["source_path"], page_index=entry["page_index"], kind=entry["kind"],
-                language=entry["language"], category=entry["category"])
+    meta = dict(source=entry["source_path"], page_index=entry["page_index"], offset=entry.get("offset", 0),
+                kind=entry["kind"], language=entry["language"], category=entry["category"])
     grid = rng.random() < c.grid_prob
     if entry["kind"] == "raster" and not grid:
         gray, m = _raster_sheet(rng, entry, pw, ph, c)
@@ -60,8 +60,8 @@ def make_layout(rng, entry, P: Preset, fonts):
         iw, ih = pw - 2 * mx, ph - 2 * my
         if not grid:
             pt, ls = rng.uniform(*c.font_pt), rng.uniform(*c.line_spacing)
-            text = book_page(entry["source_path"], entry["page_index"], c.book_page_chars)
-            inner = render_text(text, rng, iw, ih, ppm, fonts, pt, ls)
+            text = book_snippet(entry["source_path"], entry.get("offset", 0), c.book_page_chars)
+            inner = render_text(text, rng, iw, ih, ppm, fonts, pt, ls, c.text_format)
             meta.update(font_pt=float(pt), line_spacing=float(ls))
         else:
             inner = grid_page(iw, ih, ppm, c.grid)

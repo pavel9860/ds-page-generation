@@ -16,6 +16,15 @@ BOOKS = os.path.join(Paths().layouts, "books")
 OUT_ROOT = Paths().books
 SKIP_TOPICS = {os.path.basename(OUT_ROOT)}
 UNCATEGORIZED = "uncategorized"
+NUSX = str.maketrans("abgdevzTiklmnopJrstufqRySCcZwWxjh", "აბგდევზთიკლმნოპჟრსტუფქღყშჩცძწჭხჯჰ")
+
+
+def _georgian(name, text):
+    """Georgian text typed in a legacy Nusx font (Latin code points) back to Unicode, for Georgian-named files."""
+    if not any("\u10d0" <= c <= "\u10ff" for c in name):
+        return text
+    letters = [c for c in text if c.isalpha()]
+    return text.translate(NUSX) if sum("\u10d0" <= c <= "\u10ff" for c in letters) < 0.05 * len(letters) else text
 
 
 def main() -> None:
@@ -51,7 +60,7 @@ def main() -> None:
                     os.remove(out_path)
                 continue
             with open(out_path, "w", encoding="utf-8") as fh:
-                fh.write(join_pages(pages))
+                fh.write(_georgian(stem, join_pages(pages)))
             n_books += 1
             n_pages_total += len(pages)
             print(f"  {topic}/{base}: {len(pages)} pages in {time.time() - t0:.1f}s")

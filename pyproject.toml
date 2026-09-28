@@ -20,6 +20,7 @@ dependencies = [
     "pillow>=10.0",
     "fonttools>=4.40",
     "python-bidi>=0.6",
+    "arabic-reshaper>=3.0",
     "pypardiso>=0.4",
     "onnxruntime>=1.18",
 ]

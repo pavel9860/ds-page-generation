@@ -67,10 +67,7 @@ def cells(P: Preset, group):
 
 def _exact(rng, table, n):
     """n values with the table's proportions exactly (largest remainder), shuffled."""
-    w = np.array([x for _, x in table], float)
-    p = w / w.sum()
-    k = np.floor(n * p).astype(int)
-    k[np.argsort(-(n * p - k))[:n - k.sum()]] += 1
+    k = _counts([x for _, x in table], n)
     vals = [v for (v, _), m in zip(table, k) for _ in range(m)]
     return [vals[i] for i in rng.permutation(n)]
 
@@ -96,31 +93,52 @@ def entry_pools(P: Preset, manifest):
     return pools
 
 
-def _fill(rng, raster, books, q):
-    """Up to q entries, none repeated: raster pages first, book pages for the rest. A group short of both stays
-    under its quota."""
-    r = rng.permutation(raster)[:q]
-    return np.concatenate([r, rng.permutation(books)[:q - len(r)]]).astype(int)
+def _counts(w, n):
+    """Integer counts with sum n in proportion to w (largest remainder)."""
+    p = np.asarray(w, float) / np.sum(w)
+    k = np.floor(n * p).astype(int)
+    k[np.argsort(-(n * p - k))[:n - k.sum()]] += 1
+    return k
+
+
+def _fill(rng, raster, books, q, chars):
+    """q (entry, text offset) pairs: raster pages first, never repeated, then book snippets for the rest, spread over
+    the books by their length at evenly spaced offsets from a random phase (distinct text while a book holds
+    them). A group short of both stays under its quota."""
+    r = rng.permutation(raster)[:q].astype(int)
+    e, o = [r], [np.zeros(len(r), int)]
+    if q > len(r) and len(books):
+        for b, k in zip(books, _counts([chars[b] for b in books], q - len(r))):
+            e.append(np.full(k, b))
+            o.append((rng.integers(chars[b]) + np.arange(k) * chars[b] // max(k, 1)) % chars[b])
+    return np.concatenate(e), np.concatenate(o)
 
 
 def plan(P: Preset, n, seed, manifest):
-    """Up to n sample specs with exact factor marginals, script groups included. A group's entries are its raster
-    pages (never repeated), then books for the rest of its quota; groups without enough stay under quota, and their
-    missing samples are dropped."""
+    """Up to n sample specs with exact factor marginals, script groups included. Groups of use_all take all their
+    raster pages; script_mix shares the rest of n. A group's entries are its raster pages (never repeated), then
+    book snippets for the rest of its quota; groups without either stay under quota, their samples dropped."""
     rng = np.random.default_rng(seed)
+    c = P.layout
     pools = entry_pools(P, manifest)
-    mix = tuple((g, w) for g, w in P.layout.script_mix if any(pools.get(g, ((), ()))))
+    whole = {g: len(pools[g][0]) for g in c.use_all if g in pools and len(pools[g][0])}
+    rest = max(0, n - sum(whole.values()))
+    share = [(g, w) for g, w in c.script_mix if g not in whole and any(pools.get(g, ((), ())))]
+    wsum = sum(w for _, w in share)
+    mix = tuple((g, float(v)) for g, v in whole.items()) + tuple((g, rest * w / wsum) for g, w in share)
     cols = {k: _exact(rng, v, n) for k, v in (*factors(P).items(), ("script", mix))}
     rows = {g: np.flatnonzero(np.array(cols["script"]) == g) for g, _ in mix}
-    entry = np.full(n, -1)
+    chars = {i: manifest[i].get("chars", 1) for _, b in pools.values() for i in b}
+    entry, offset = np.full(n, -1), np.zeros(n, int)
     for g, idx in rows.items():
-        e = _fill(rng, *pools[g], len(idx))
-        entry[idx[:len(e)]] = rng.permutation(e)
+        e, o = _fill(rng, *pools[g], len(idx), chars)
+        perm = rng.permutation(len(e))
+        entry[idx[:len(e)]], offset[idx[:len(e)]] = e[perm], o[perm]
     specs = []
     for i in np.flatnonzero(entry >= 0):
         s = _canonical({k: cols[k][i] for k in cols})
         s["bend_dir"] = float(rng.uniform(*s.pop("bend_bin")))
-        s["entry"] = int(entry[i])
+        s["entry"], s["offset"] = int(entry[i]), int(offset[i])
         specs.append(s)
     return specs
 

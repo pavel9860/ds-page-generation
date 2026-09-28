@@ -21,8 +21,8 @@ from ..config import LayoutCfg, Paths
 from ..layout.content import bbox, content_mask
 from ..layout.deskew import detect_rotation, rotate90
 from ..layout.sources import RASTER_ZOOM
-from ..layout.text import _words
-from .text_extract import DOMINANT_IMAGE_AREA_FRAC, classify_language
+from ..layout.text import _words, book_text
+from .text_extract import DOMINANT_IMAGE_AREA_FRAC, book_language
 
 LAYOUTS = Paths().layouts
 BOOKS = Paths().books
@@ -244,14 +244,14 @@ def book_txt_paths():
 
 
 def _book_jobs():
-    return [(p, classify_language(p), LayoutCfg().book_page_chars) for p in book_txt_paths()]
+    return [(p, book_language(p, LayoutCfg().scripts)) for p in book_txt_paths()]
 
 
 def _job_book_text(args):
-    """One entry per book page of page_chars bytes."""
-    txt_path, bucket, page_chars = args
-    return [dict(source_path=txt_path, page_index=k, language=bucket, category="book", kind="book_text")
-            for k in range(os.path.getsize(txt_path) // page_chars)]
+    """One entry per book; the plan draws snippets at distinct offsets of its `chars` characters."""
+    txt_path, language = args
+    return [dict(source_path=txt_path, page_index=0, language=language, category="book", kind="book_text",
+                 chars=len(book_text(txt_path)))]
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +272,7 @@ def _run_group(name, jobs, job_fn, workers, out_f, counts, t0):
 
 def main(out_path: str, workers: int, limit_files: int = None):
     """Every usable page: PDF pages (PAGES_PER_PDF_CAP per document, all of rare-script ones), every image, and
-    one entry per book text (snippets are drawn per use)."""
+    one entry per book text."""
     meta_idx = load_metadata(os.path.join(LAYOUTS, "corpus", "metadata.jsonl"))
     overflow_pdf_jobs, overflow_img_jobs = corpus_overflow_jobs()
     groups = [

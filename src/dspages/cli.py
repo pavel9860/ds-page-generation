@@ -60,7 +60,8 @@ def _path(part, i):
 
 def _layout(i, save):
     spec = _W["plan"][i]
-    L = make_layout(_rng(i, "layout"), _W["manifest"][spec["entry"]], layout_preset(_W["P"], spec), _W["fonts"])
+    L = make_layout(_rng(i, "layout"), dict(_W["manifest"][spec["entry"]], offset=spec.get("offset", 0)),
+                    layout_preset(_W["P"], spec), _W["fonts"])
     if save:
         io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], L["page"])
     return L["page"]

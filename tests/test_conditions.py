@@ -51,3 +51,16 @@ def test_raster_pages_before_books(full_small):
     latin = [s["entry"] for s in specs if s["script"] == "latin"]
     raster = {i for i in latin if man[i]["kind"] == "raster"}
     assert len(raster) == len(entry_pools(full_small, man)["latin"][0])
+
+
+def test_books_fill_quota_at_distinct_offsets_and_unknown_uses_all(full_small):
+    man = fake_manifest()[::12] + [dict(source_path=f"b{i}.txt", page_index=0, kind="book_text", language="en",
+                                        category="book", chars=50000 * (i + 1)) for i in range(2)]
+    pools = entry_pools(full_small, man)
+    specs = plan(full_small, 300, 3, man)
+    unknown = [s for s in specs if s["script"] == "unknown"]
+    assert len(unknown) == len(pools["unknown"][0])
+    books = [(s["entry"], s["offset"]) for s in specs if man[s["entry"]]["kind"] == "book_text"]
+    assert len(books) == len(set(books)) > 0
+    k = Counter(e for e, _ in books)
+    assert abs(k[len(man) - 1] - 2 * k[len(man) - 2]) <= 2

@@ -113,3 +113,14 @@ def test_ruled_form_is_not_a_picture(full_small):
         cv2.rectangle(page, (60, y), (790, y + 40), 0, 2)
         cv2.putText(page, "Name / Date / Signature", (80, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 0, 2)
     assert picture_mask(page, page.shape, 1.0, full_small.layout.pictures).mean() <= full_small.layout.max_image
+
+
+def test_formatted_text_columns_and_rtl(full_small, fonts):
+    from dataclasses import replace
+    f = replace(full_small.layout.text_format, columns=((2, 1.0),), heading_prob=1.0)
+    for text in ("word " * 3000, "שלום עולם " * 1500):
+        pg = render_text(text, np.random.default_rng(1), 800, 1000, 4.0, fonts, 10, 1.3, f)
+        cols = (pg < 128).any(0)
+        mid = cols[380:420]
+        assert cols[:300].any() and cols[500:].any() and not mid.all()
+        assert (pg < 128).any(1)[-60:].any()

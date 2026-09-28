@@ -154,3 +154,29 @@ def classify_language(path: str) -> str:
         return "cyr"
     words = re.findall(r"[a-zA-Z]+", txt.lower())
     return "en" if sum(w in _STOP_EN for w in words) / max(1, len(words)) > 0.15 else "eu"
+
+
+_SCRIPT_LANG = dict(CYRILLIC="cyr", CJK="zh", HIRAGANA="ja", KATAKANA="ja", HANGUL="ko", GREEK="el", HEBREW="he",
+                    ARABIC="ar", THAI="th", DEVANAGARI="hi", BENGALI="bn", GEORGIAN="ka", ARMENIAN="hy", TAMIL="ta",
+                    TELUGU="te")
+
+
+def book_language(path: str, scripts: dict) -> str:
+    """Language of a book text: the file-name code (name.<code>.txt) when its script group matches the text's
+    dominant Unicode script, else that script's code; Latin text without a usable code by classify_language."""
+    import unicodedata
+    from collections import Counter
+    txt = open(path, encoding="utf-8", errors="ignore").read(200000)
+    names = Counter(unicodedata.name(c, "?").split()[0] for c in txt if c.isalpha())
+    if not names:
+        return "unknown"
+    lang = _SCRIPT_LANG.get(max(("HIRAGANA", "KATAKANA"), key=names.get) if names["HIRAGANA"] + names["KATAKANA"]
+                            > 0.05 * sum(names.values()) else names.most_common(1)[0][0], "latin")
+    m = re.search(r"\.([a-z]{2})(?:_\w+)?\.txt$", path)
+    code = m.group(1) if m else None
+
+    def group(c):
+        return next((g for g, ls in scripts.items() if c in ls), "latin")
+    if lang == "latin":
+        return code if code and group(code) == "latin" else classify_language(path)
+    return code if code and group(code) == group(lang) and code not in ("cyr",) else lang

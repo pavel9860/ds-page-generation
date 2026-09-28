@@ -1,12 +1,14 @@
 """Text pages: font discovery by real cmap coverage, snippets from book texts, glyph layout and blitting."""
 import glob
 import os
+import re
 from functools import lru_cache
 
 import numpy as np
 from fontTools.ttLib import TTFont
 from numba import njit
 from numba.typed import List as NumbaList
+from arabic_reshaper import reshape
 from bidi import get_display
 from PIL import ImageFont
 
@@ -88,14 +90,19 @@ def _words(path):
     return [w for w in raw if _has_letters(w)]
 
 
-def book_page(path, index, page_chars) -> str:
-    """Page `index` of a book: the words with letters of bytes [index, index + 1) * page_chars, a word cut at the
-    start dropped."""
-    with open(path, "rb") as f:
-        f.seek(index * page_chars)
-        raw = f.read(page_chars + 64)
-    words = raw.decode("utf-8", errors="ignore").split()
-    return " ".join(w for w in words[1 if index else 0:] if _has_letters(w))
+@lru_cache(maxsize=8)
+def book_text(path) -> str:
+    """The book's words with letters, space-joined, paragraph breaks (blank lines) kept as newlines."""
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        pars = re.split(r"\n\s*\n", f.read())
+    return "\n".join(p for p in (" ".join(w for w in q.split() if _has_letters(w)) for q in pars) if p)
+
+
+def book_snippet(path, offset, chars) -> str:
+    """`chars` characters of the book from `offset` (wrapping to the start), a word cut at the start dropped."""
+    t = book_text(path)
+    s = (t[offset:] + "\n" + t)[:chars + 64] if offset else t[:chars + 64]
+    return s.split(" ", 1)[-1] if offset else s
 
 
 @njit(cache=True)
@@ -194,53 +201,107 @@ def is_rtl(text):
     return bool(letters) and sum("\u0590" <= ch <= "\u08ff" for ch in letters) > 0.3 * len(letters)
 
 
-def render_text(text: str, rng, w_px: int, h_px: int, px_per_mm: float, font_files: tuple, font_pt, line_spacing):
-    """-> uint8 (h_px, w_px) page, 0 ink .. 255 paper. Single column filled to the bottom, no kerning;
-    left, right or justified alignment."""
-    font_px = max(4, round(font_pt * 0.3528 * px_per_mm))
-    font, font_path = _pick_font(rng, font_files, font_px, set(text) - {" ", "\n", "\t"})
-    rtl = is_rtl(text)
-    font_key = (font_path, font_px)
-    line_h = max(font_px + 1, round(font_px * line_spacing))
-    space_w = _glyph(font, font_key, " ")[2]
-    lines, line, line_w, y = [], [], 0.0, 0
-    for word in text.split():
-        glyphs = [_glyph(font, font_key, ch) for ch in (get_display(word) if rtl else word)]
-        for piece_word, piece_glyphs in _wrap_pieces(word, glyphs, w_px):
-            piece_w = sum(g[2] for g in piece_glyphs)
-            new_w = line_w + (space_w if line else 0.0) + piece_w
-            if new_w <= w_px:
-                line.append((piece_word, piece_glyphs))
-                line_w = new_w
+def _flow(tokens, k, glyphs, width, height, line_h, space_w, indent_w, rtl, par_gap=False):
+    """Lines of one column from tokens[k:] (None = paragraph break) -> (lines, next k). A line is
+    (pieces, indent, last line of its paragraph)."""
+    lines, line, lw, ind = [], [], 0.0, 0.0
+    while k < len(tokens) and (len(lines) + 1) * line_h <= height:
+        t = tokens[k]
+        if t is None:
+            if line:
+                lines.append((line, ind, True))
+                if par_gap and (len(lines) + 1) * line_h <= height:
+                    lines.append(([], 0.0, True))
+            line, lw, ind, k = [], indent_w, indent_w, k + 1
+            continue
+        t = get_display(reshape(t)) if rtl else t
+        pieces = list(_wrap_pieces(t, glyphs(t), width - ind))
+        done = True
+        for j, (pw_, pg) in enumerate(pieces):
+            w = sum(g[2] for g in pg)
+            if lw + (space_w if line else 0.0) + w <= width:
+                line.append((pw_, pg))
+                lw += (space_w if line[:-1] else 0.0) + w
                 continue
-            lines.append(line)
-            y += line_h
-            line, line_w = [(piece_word, piece_glyphs)], piece_w
-            if y + line_h > h_px:
+            lines.append((line, ind, False))
+            line, lw, ind = [(pw_, pg)], w, 0.0
+            if (len(lines) + 1) * line_h > height:
+                tokens[k] = "".join(p for p, _ in pieces[j:]) if j else t
+                done = False
                 break
-        if y + line_h > h_px:
-            break
-    else:
-        if line:
-            lines.append(line)
+        k += done
+    if line and (len(lines) + 1) * line_h <= height:
+        lines.append((line, ind, k >= len(tokens)))
+    return lines, k
 
-    page = np.full((h_px, w_px), 255, dtype=np.uint8)
-    items = []
-    align = rng.choice(("right", "justify")) if rtl else rng.choice(("left", "right", "justify"))
-    for i, ln in enumerate(lines):
+
+def _draw(items, lines, x0, y0, width, line_h, space_w, align, rtl):
+    for i, (ln, ind, last) in enumerate(lines):
         ln = ln[::-1] if rtl else ln
         natural = sum(g[2] for _, gl in ln for g in gl) + space_w * max(0, len(ln) - 1)
-        x, gap = 0.0, space_w
-        if align == "right":
-            x = float(w_px - natural)
-        elif align == "justify" and len(ln) > 1 and i < len(lines) - 1:
-            gap = space_w + (w_px - natural) / (len(ln) - 1)
+        free, gap = width - ind - natural, space_w
+        if align == "justify" and len(ln) > 1 and not last:
+            x, gap = (0.0 if rtl else ind), space_w + free / (len(ln) - 1)
+        elif align == "right" or rtl:
+            x = free + (0.0 if rtl else ind)
+        elif align == "center":
+            x = ind + free / 2
+        else:
+            x = ind
         for k, (_, glyphs) in enumerate(ln):
             x += gap if k else 0.0
             for arr, (ox, oy), advance in glyphs:
                 if arr.size:
-                    items.append((arr, round(x) + ox, i * line_h + oy))
+                    items.append((arr, x0 + round(x) + ox, y0 + i * line_h + oy))
                 x += advance
+
+
+def render_text(text: str, rng, w_px: int, h_px: int, px_per_mm: float, font_files: tuple, font_pt, line_spacing,
+                f=None):
+    """-> uint8 (h_px, w_px) page, 0 ink .. 255 paper, filled to the bottom. Formatting drawn from `f` (a
+    TextFormatCfg; None = one column, no headings, no indents): column count and gutter, an optional heading
+    across the columns, paragraph indents or blank lines between paragraphs, left / right / justified alignment
+    (right or justified for RTL). No kerning."""
+    font_px = max(4, round(font_pt * 0.3528 * px_per_mm))
+    font, font_path = _pick_font(rng, font_files, font_px, set(text) - {" ", "\n", "\t"})
+    rtl = is_rtl(text)
+
+    def glyph_fn(fnt, key):
+        return lambda word: [_glyph(fnt, key, ch) for ch in word]
+    body = glyph_fn(font, (font_path, font_px))
+    space_w = _glyph(font, (font_path, font_px), " ")[2]
+    line_h = max(font_px + 1, round(font_px * line_spacing))
+    ncol = int(rng.choice([c for c, _ in f.columns], p=_p(f.columns))) if f else 1
+    gutter = round(rng.uniform(*f.gutter_mm) * px_per_mm) if f and ncol > 1 else 0
+    col_w = (w_px - gutter * (ncol - 1)) // ncol
+    if col_w < 14 * font_px:
+        ncol, gutter, col_w = 1, 0, w_px
+    aligns = ("right", "justify") if rtl else ("left", "right", "justify") if ncol == 1 else ("left", "justify")
+    align = rng.choice(aligns)
+    indent_w = (rng.choice((0.0, rng.uniform(1.0, 3.0))) * font_px) if f else 0.0
+    par_gap = f is not None and indent_w == 0.0 and rng.random() < 0.5
+    tokens = []
+    for par in text.split("\n"):
+        tokens += par.split() + [None]
+    items, y0 = [], 0
+    if f and rng.random() < f.heading_prob:
+        hp = round(font_px * rng.uniform(*f.heading_scale))
+        hkey = (font_path, hp)
+        hfont = ImageFont.truetype(font_path, hp)
+        n = int(rng.integers(2, 9))
+        head = [t for t in tokens[:n] if t]
+        hl, _ = _flow(head, 0, glyph_fn(hfont, hkey), w_px, 3 * round(hp * 1.2), round(hp * 1.2),
+                      _glyph(hfont, hkey, " ")[2], 0.0, rtl)
+        _draw(items, hl, 0, 0, w_px, round(hp * 1.2), _glyph(hfont, hkey, " ")[2],
+              rng.choice(("left", "center")) if not rtl else "right", rtl)
+        y0 = len(hl) * round(hp * 1.2) + line_h
+        tokens = tokens[n:]
+    k = 0
+    for c in range(ncol):
+        x0 = (ncol - 1 - c if rtl else c) * (col_w + gutter)
+        lines, k = _flow(tokens, k, body, col_w, h_px - y0, line_h, space_w, indent_w, rtl, par_gap)
+        _draw(items, lines, x0, y0, col_w, line_h, space_w, align, rtl)
+    page = np.full((h_px, w_px), 255, dtype=np.uint8)
     if items:
         x0 = np.array([it[1] for it in items], np.int64)
         y0 = np.array([it[2] for it in items], np.int64)
@@ -253,3 +314,8 @@ def render_text(text: str, rng, w_px: int, h_px: int, px_per_mm: float, font_fil
             _blit_glyphs(page, NumbaList([items[i][0] for i in keep]), xs[keep], ys[keep], xe[keep], ye[keep],
                          x0[keep], y0[keep])
     return page
+
+
+def _p(table):
+    w = np.array([x for _, x in table], float)
+    return w / w.sum()
