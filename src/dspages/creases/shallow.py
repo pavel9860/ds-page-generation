@@ -9,7 +9,8 @@ fine-scale Kirchhoff plate with table contact; straight mountain creases L = 4..
     tips so the field has no kink there), d = distance to the centerline (radial past the tips).
 Distance-to-curve fields have a slope kink where two parts of a curve are equally near (inside an arch);
 the elastic solution has none, so away from the ridge each crease field is Gaussian-smoothed (sigma lam/4).
-Valley = the same profile negated. Crease severity k scales h (residual angle ~ yield strain).
+Valley = the same profile negated. An optional per-crease spread widens lam: gentler, broader flanks, the
+crest as sharp. Crease severity k scales h (residual angle ~ yield strain).
 Overlapping creases add, the total saturates smoothly: w_max tanh(w / w_max). All lengths in mm."""
 import cv2
 import numpy as np
@@ -207,7 +208,7 @@ def render(creases, W, H, h=0.5, w_max=1.0, reach=4.0, step=0.5):
         seg = np.r_[0, np.cumsum(np.linalg.norm(np.diff(ln, axis=0), axis=1))]
         L = seg[-1]
         Lf = min(L, 50.0)
-        lm = lam(Lf)
+        lm = lam(Lf) * c.get('spread', 1.0)
         dmax = reach * lm
         j0, j1 = max(int((ln[:, 0].min() - dmax) / h), 0), min(int((ln[:, 0].max() + dmax) / h) + 2, nx)
         i0, i1 = max(int((ln[:, 1].min() - dmax) / h), 0), min(int((ln[:, 1].max() + dmax) / h) + 2, ny)

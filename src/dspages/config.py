@@ -92,7 +92,11 @@ class DeepCreaseCfg:
     region_mm: tuple = (40.0, 120.0)              # size of the regions of equal scale / coverage
     density: float = 1.2                          # ridges per local length^2 of covered area
     k: dict = field(default_factory=lambda: {"light": (0.2, 0.6), "medium": (0.5, 1.2), "heavy": (0.7, 1.4)})
-    w_max_mm: dict = field(default_factory=lambda: {"light": 0.6, "medium": 1.0, "heavy": 1.4})
+    max_depth_mm: dict = field(default_factory=lambda: {"light": 3.0, "medium": 8.0, "heavy": 15.0})   # valley to peak
+    broad_n: dict = field(default_factory=lambda: {"light": (0, 2), "medium": (1, 3), "heavy": (2, 5)})
+    broad_length_mm: tuple = (80.0, 300.0)       # large creases: long, wide, low angle
+    broad_spread: tuple = (4.0, 12.0)            # width multiplier of the crease profile
+    broad_depth_frac: tuple = (0.2, 1.0)         # depth as a fraction of max_depth_mm
     kink_deg: float = 25.0
     pitch_mm: float = 0.5
 
