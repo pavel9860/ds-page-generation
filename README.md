@@ -20,6 +20,14 @@ pip install -e ".[dev]"
 
 Paths to the corpora, the manifest, fonts and the output root are in `dspages/config.py` (`Paths`).
 
+The layout finds pictures on source pages with YOLO11n trained on DocLayNet (ONNX). Its weights are AGPL-3.0 and not
+part of this repository; fetch and export them once:
+
+```bash
+pip install -e ".[export]"
+python -m dspages.prep.layout_model
+```
+
 ## Run
 
 ```bash
@@ -65,7 +73,8 @@ python tools/analyze.py OUT             # distributions and limits -> OUT/report
 python tools/gallery.py OUT             # contact sheet -> OUT/report/gallery.jpg
 ```
 
-Data preparation: `python -m dspages.prep.books` (book PDFs to text), `python -m dspages.prep.manifest`.
+Data preparation: `python -m dspages.prep.books` (book PDFs to text), `python -m dspages.prep.manifest` (one entry
+per page), `python tools/inventory.py` (pages per script and language against the plan's quotas).
 
 ## License
 

@@ -3,7 +3,7 @@
 Fields: source_path, page_index, language, category, kind (raster | book_text), content_frac, needs_deskew,
 rotate90, used_h, used_w (raster size the bbox refers to), bbox_y0, bbox_x0, bbox_h, bbox_w (content bbox).
 
-python -m dspages.prep.manifest --out <paths.manifest> --n 100000
+python -m dspages.prep.manifest --out <paths.manifest>
 """
 import argparse
 import glob
@@ -16,9 +16,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..config import Paths
+from ..conditions import script
+from ..config import LayoutCfg, Paths
 from ..layout.content import bbox, content_mask
 from ..layout.deskew import detect_rotation, rotate90
+from ..layout.sources import RASTER_ZOOM
 from ..layout.text import _words
 from .text_extract import DOMINANT_IMAGE_AREA_FRAC, classify_language
 
@@ -28,8 +30,8 @@ MIN_CONTENT_AREA_FRAC = 0.01
 MAX_MARGIN_FRAC = 0.50
 MIN_CONTENT_FRAC = 0.01
 MIN_BOOK_WORDS = 3000
-PAGES_PER_PDF_CAP = 10
-RASTER_ZOOM = 2.0
+PAGES_PER_PDF_CAP = 10                 # pages per PDF; all pages of rare-script documents
+RARE_SCRIPTS = ("cyrillic", "cjk", "other")
 
 
 def _init():
@@ -55,8 +57,8 @@ def _seed(path: str) -> int:
     return hash(path) & 0xFFFFFFFF
 
 
-def _page_indices(page_count: int, rng, cap: int = PAGES_PER_PDF_CAP) -> list:
-    if page_count <= cap:
+def _page_indices(page_count: int, rng, cap) -> list:
+    if cap is None or page_count <= cap:
         return list(range(page_count))
     return sorted(rng.choice(page_count, size=cap, replace=False).tolist())
 
@@ -143,7 +145,8 @@ def _job_pdf(args):
     rng = np.random.default_rng(seed)
     try:
         doc = fitz.open(pdf_path)
-        page_indices = _page_indices(doc.page_count, rng)
+        rare = script(dict(language=language), LayoutCfg().scripts) in RARE_SCRIPTS
+        page_indices = _page_indices(doc.page_count, rng, None if rare else PAGES_PER_PDF_CAP)
     except Exception:
         return []
     recs = []
@@ -240,65 +243,36 @@ def _book_txt_paths():
     return [p for p in paths if len(_words(p)) >= MIN_BOOK_WORDS]
 
 
-def _build_filler_jobs(target_lang_counts: dict, n_needed: int, seed0: int):
-    paths = _book_txt_paths()
-    if not paths:
-        return []
-    buckets = {"en": [], "eu": [], "cyr": []}
-    for p in paths:
-        buckets[classify_language(p)].append(p)
-    # coarse-map real-corpus language tags to en/eu(other)/cyr buckets
-    coarse = {"en": 0, "cyr": 0, "eu": 0}
-    for lang, c in target_lang_counts.items():
-        coarse["cyr" if lang == "cyr" else ("en" if lang == "en" else "eu")] += c
-    total = sum(coarse.values()) or 1
-    jobs = []
-    idx = 0
-    for bucket, frac_count in coarse.items():
-        n_bucket = round(n_needed * frac_count / total)
-        pool = buckets.get(bucket) or paths
-        for _ in range(n_bucket):
-            jobs.append((pool[idx % len(pool)], bucket, seed0 + idx))
-            idx += 1
-    return jobs
+def _book_jobs():
+    return [(p, classify_language(p), LayoutCfg().book_page_chars) for p in _book_txt_paths()]
 
 
 def _job_book_text(args):
-    txt_path, bucket, _ = args
-    return [dict(source_path=txt_path, page_index=0, language=bucket, category="book_filler", kind="book_text")]
+    """One entry per book page of page_chars bytes."""
+    txt_path, bucket, page_chars = args
+    return [dict(source_path=txt_path, page_index=k, language=bucket, category="book", kind="book_text")
+            for k in range(os.path.getsize(txt_path) // page_chars)]
 
 
 # ---------------------------------------------------------------------------
 # driver
 # ---------------------------------------------------------------------------
 
-def _run_group(name, jobs, job_fn, workers, out_f, kept, target, t0, lang_counts):
-    if kept[0] >= target or not jobs:
-        print(f"[{name}] skipped ({kept[0]}/{target} already, {len(jobs)} jobs)", flush=True)
-        return
+def _run_group(name, jobs, job_fn, workers, out_f, counts, t0):
     print(f"[{name}] {len(jobs)} jobs", flush=True)
-    done = 0
     with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
-        for recs in pool.map(job_fn, jobs, chunksize=8):
-            done += 1
+        for done, recs in enumerate(pool.map(job_fn, jobs, chunksize=8), 1):
             for rec in recs:
-                if kept[0] >= target:
-                    break
                 out_f.write(json.dumps(rec) + "\n")
-                lang_counts[rec["language"]] = lang_counts.get(rec["language"], 0) + 1
-                kept[0] += 1
-            if done % 1000 == 0 or kept[0] >= target:
-                el = time.time() - t0
-                print(f"[{name}] {done}/{len(jobs)} files, kept={kept[0]} elapsed={el:.0f}s", flush=True)
-            if kept[0] >= target:
-                break
-    print(f"[{name}] done: kept={kept[0]}", flush=True)
+                counts[rec["language"]] = counts.get(rec["language"], 0) + 1
+            if done % 1000 == 0:
+                print(f"[{name}] {done}/{len(jobs)} files, entries={sum(counts.values())} "
+                      f"elapsed={time.time() - t0:.0f}s", flush=True)
 
 
-SCIENTIFIC_PAPER_QUOTA_FRAC = 0.02
-
-
-def main(out_path: str, n: int, workers: int, limit_files: int = None):
+def main(out_path: str, workers: int, limit_files: int = None):
+    """Every usable page: PDF pages (PAGES_PER_PDF_CAP per document, all of rare-script ones), every image, and
+    one entry per book text (snippets are drawn per use)."""
     meta_idx = _load_metadata(os.path.join(LAYOUTS, "corpus", "metadata.jsonl"))
     overflow_pdf_jobs, overflow_img_jobs = _corpus_overflow_jobs()
     groups = [
@@ -308,35 +282,24 @@ def main(out_path: str, n: int, workers: int, limit_files: int = None):
         ("pdf_png_en", _pdf_png_jobs(), _job_image),
         ("xfund_funsd", _xfund_funsd_jobs(), _job_image),
         ("arxiv_en", _arxiv_jobs(), _job_pdf),
+        ("books", _book_jobs(), _job_book_text),
     ]
     if limit_files:
         groups = [(name, jobs[:limit_files], fn) for name, jobs, fn in groups]
-
-    kept = [0]
-    t0 = time.time()
-    lang_counts = {}
+    t0, counts = time.time(), {}
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as out_f:
         for name, jobs, fn in groups:
-            target = (min(n, kept[0] + round(n * SCIENTIFIC_PAPER_QUOTA_FRAC))
-                      if name == "arxiv_en" else n)
-            _run_group(name, jobs, fn, workers, out_f, kept, target, t0, lang_counts)
-
-        if kept[0] < n and not limit_files:
-            filler_jobs = _build_filler_jobs(lang_counts, round((n - kept[0]) * 1.2), seed0=12345)
-            _run_group("book_filler", filler_jobs, _job_book_text, workers, out_f, kept, n, t0,
-                       lang_counts)
-
-    print(f"TOTAL kept={kept[0]} wall={time.time() - t0:.0f}s", flush=True)
-    print("language distribution:", json.dumps(lang_counts, indent=2), flush=True)
+            _run_group(name, jobs, fn, workers, out_f, counts, t0)
+    print(f"TOTAL {sum(counts.values())} entries, wall={time.time() - t0:.0f}s", flush=True)
+    print("language distribution:", json.dumps(counts, indent=2), flush=True)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--n", type=int, default=100000)
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--limit_files", type=int, default=None,
                     help="cap per-source-group file count, for a fast dry run")
     args = ap.parse_args()
-    main(args.out, args.n, args.workers, args.limit_files)
+    main(args.out, args.workers, args.limit_files)

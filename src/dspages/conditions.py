@@ -13,7 +13,8 @@ from dataclasses import replace
 import numpy as np
 
 from .config import Preset, page_px
-from .layout.sources import is_pdf, min_window_px
+from .layout.content import window_limits
+from .layout.sources import is_pdf
 
 
 def _bins(lo, hi, n, log=False):
@@ -79,28 +80,47 @@ def script(entry, scripts):
 
 
 def entry_pools(P: Preset, manifest):
-    """Manifest indices per script group, of entries that fill the sheet without upscaling: book texts, PDF pages
-    (rendered at the needed zoom) and raster images whose largest sheet-shaped window is at least the sheet."""
-    pw, ph = page_px(P.layout.sheet_mm, P.layout.canvas_px)
-    pools = {g: [] for g, _ in P.layout.script_mix}
+    """Per script group: manifest indices of raster pages and of book texts. Raster pages count only when a window
+    of the sheet's aspect around their content (margins <= margin_frac[1]) reaches the sheet width at 1:1:
+    directly for images, within max_zoom for PDF pages."""
+    c = P.layout
+    pw, ph = page_px(c.sheet_mm, c.canvas_px)
+    pools = {g: ([], []) for g, _ in c.script_mix}
     for i, e in enumerate(manifest):
-        if e["kind"] == "book_text" or is_pdf(e) or min_window_px(e, pw / ph) >= pw:
-            pools.setdefault(script(e, P.layout.scripts), []).append(i)
+        g = pools.setdefault(script(e, c.scripts), ([], []))
+        if e["kind"] == "book_text":
+            g[1].append(i)
+        elif window_limits(e["bbox_w"], e["bbox_h"], pw / ph, c.margin_frac[1])[1] * (
+                c.max_zoom if is_pdf(e) else 1.0) >= pw:
+            g[0].append(i)
     return pools
 
 
+def _fill(rng, raster, books, q):
+    """Up to q entries, none repeated: raster pages first, book pages for the rest. A group short of both stays
+    under its quota."""
+    r = rng.permutation(raster)[:q]
+    return np.concatenate([r, rng.permutation(books)[:q - len(r)]]).astype(int)
+
+
 def plan(P: Preset, n, seed, manifest):
-    """n sample specs with exact factor marginals, script groups included; continuous values and the manifest
-    entry (uniform within its script group) drawn per sample."""
+    """Up to n sample specs with exact factor marginals, script groups included. A group's entries are its raster
+    pages (never repeated), then books for the rest of its quota; groups without enough stay under quota, and their
+    missing samples are dropped."""
     rng = np.random.default_rng(seed)
     pools = entry_pools(P, manifest)
-    mix = tuple((g, w) for g, w in P.layout.script_mix if pools.get(g))
+    mix = tuple((g, w) for g, w in P.layout.script_mix if any(pools.get(g, ((), ()))))
     cols = {k: _exact(rng, v, n) for k, v in (*factors(P).items(), ("script", mix))}
+    rows = {g: np.flatnonzero(np.array(cols["script"]) == g) for g, _ in mix}
+    entry = np.full(n, -1)
+    for g, idx in rows.items():
+        e = _fill(rng, *pools[g], len(idx))
+        entry[idx[:len(e)]] = rng.permutation(e)
     specs = []
-    for i in range(n):
+    for i in np.flatnonzero(entry >= 0):
         s = _canonical({k: cols[k][i] for k in cols})
         s["bend_dir"] = float(rng.uniform(*s.pop("bend_bin")))
-        s["entry"] = int(rng.choice(pools[s["script"]]))
+        s["entry"] = int(entry[i])
         specs.append(s)
     return specs
 

@@ -1,12 +1,11 @@
-import time
 
 import cv2
 import numpy as np
 
 from dspages.config import page_px
-from dspages.layout.content import content_mask, image_mask, select_window, window_fill
+from dspages.layout.content import content_mask, place_window, window_fill
 from dspages.layout.generate import make_layout
-from dspages.layout.text import char_budget, is_rtl, render_text
+from dspages.layout.text import is_rtl, render_text
 
 
 def _brute_fill(mask, win, grid):
@@ -25,16 +24,25 @@ def test_window_fill_matches_brute_force():
     assert np.allclose(window_fill(mask, 150, 10), _brute_fill(mask, 150, 10))
 
 
-def test_select_window_aspect_and_speed():
-    rng = np.random.default_rng(1)
-    for aspect in (0.5, 0.707, 1.0, 1.5):
-        mask = np.zeros((512, 400), bool)
-        mask[40:470:6, 30:380] = True
-        t = time.perf_counter()
-        (y0, x0, h, w), fill, _ = select_window(mask, aspect, rng, 0.8, 10)
-        assert time.perf_counter() - t < 0.05
-        assert abs(w / h - aspect) < 0.02 and fill >= 0.8
-        assert 40 <= y0 and y0 + h <= 470 and 30 <= x0 and x0 + w <= 380
+def _place(box, aspect, M, min_w, seed=0):
+    mask = np.ones((400, 300), bool)
+    return place_window(np.random.default_rng(seed), box, aspect, M, min_w, mask, 1.0, np.zeros_like(mask), 0.5, 10,
+                        0.6)
+
+
+def test_window_keeps_margins_within_limit():
+    for seed in range(20):
+        (x, y, w, h), _, _ = _place((50, 60, 200, 290), 0.707, 0.1, 0.0, seed)
+        assert abs(w / h - 0.707) < 1e-9
+        assert x <= 50 and y <= 60 and x + w >= 250 and y + h >= 350
+        assert max(50 - x, x + w - 250, 60 - y, y + h - 350) <= 0.1 * max(w, h) + 1e-9
+
+
+def test_window_crops_only_the_long_axis_and_respects_min_width():
+    (x, y, w, h), _, _ = _place((50, 10, 200, 380), 1.0, 0.0, 0.0)
+    assert w == h == 200 and x == 50 and 10 <= y and y + h <= 390
+    (x, y, w, h), _, _ = _place((50, 60, 100, 100), 1.0, 0.1, 150.0)
+    assert w == 150
 
 
 def test_content_mask_finds_text_and_images():
@@ -55,7 +63,6 @@ def test_text_fills_the_page(fonts):
     rows = (pg < 128).any(1)
     assert rows.mean() > 0.5 and rows[-60:].any()
     assert is_rtl("שלום עולם") and not is_rtl("hello")
-    assert char_budget(600, 800, 4.0, 10, 1.3) > 2000
 
 
 def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
@@ -68,7 +75,7 @@ def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
         kinds.add(m["kind"])
         assert page.shape == (ph, pw) and gray.shape == (ph, pw)
         mx, my = round(m["margin"] * pw), round(m["margin"] * ph)
-        if mx:
+        if mx and m["kind"] == "book_text":
             assert gray[:, :mx].min() == 255 and gray[:, -mx:].min() == 255
         inner = gray[my:ph - my, mx:pw - mx]
         mask, _ = content_mask(inner)
@@ -85,13 +92,24 @@ def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
     assert kinds
 
 
-def test_image_share_limit():
-    rng = np.random.default_rng(0)
-    page = np.full((1200, 400), 255, np.uint8)
-    page[:600] = 40
-    for y in range(620, 1190, 12):
-        page[y:y + 3, 20:380] = 0
-    mask, s = content_mask(page)
-    mask |= image_mask(page)
-    (y0, x0, h, w), fill, img = select_window(mask, 1.0, rng, 0.5, 10, image_mask(page), 0.6)
-    assert img <= 0.6
+def test_picture_share_limit():
+    mask = np.ones((400, 100), bool)
+    pictures = np.zeros_like(mask)
+    pictures[:200] = True
+    _, _, share = place_window(np.random.default_rng(0), (0, 0, 100, 400), 1.0, 0.0, 0.0, mask, 1.0, pictures, 0.5,
+                               10, 0.3)
+    assert share <= 0.3
+
+
+def test_ruled_form_is_not_a_picture(full_small):
+    from pathlib import Path
+
+    import pytest
+    from dspages.layout.pictures import picture_mask
+    if not Path(full_small.layout.pictures.model).expanduser().exists():
+        pytest.skip("picture model not installed")
+    page = np.full((1200, 850), 255, np.uint8)
+    for y in range(100, 1100, 40):
+        cv2.rectangle(page, (60, y), (790, y + 40), 0, 2)
+        cv2.putText(page, "Name / Date / Signature", (80, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 0, 2)
+    assert picture_mask(page, page.shape, 1.0, full_small.layout.pictures).mean() <= full_small.layout.max_image

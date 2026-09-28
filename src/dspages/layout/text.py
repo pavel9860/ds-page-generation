@@ -88,33 +88,14 @@ def _words(path):
     return [w for w in raw if _has_letters(w)]
 
 
-def char_budget(w_px, h_px, px_per_mm, font_pt, line_spacing):
-    """Upper bound of the characters a page holds at its densest packing."""
-    font_px = max(4, round(font_pt * 0.3528 * px_per_mm))
-    lines = h_px / max(font_px + 1, round(font_px * line_spacing))
-    return int(1.3 * lines * w_px / (0.5 * font_px))
-
-
-def sample_snippet(path, rng, budget) -> str:
-    """Words with letters from a random place of the text file, about budget characters, wrapping around.
-    Reads 4 budget bytes from a random offset instead of the whole file."""
-    size = os.path.getsize(path)
-    n = min(size, 4 * int(budget) + 64)
-    start = int(rng.integers(size)) if size else 0
+def book_page(path, index, page_chars) -> str:
+    """Page `index` of a book: the words with letters of bytes [index, index + 1) * page_chars, a word cut at the
+    start dropped."""
     with open(path, "rb") as f:
-        f.seek(start)
-        raw = f.read(n)
-        if len(raw) < n:
-            f.seek(0)
-            raw += f.read(n - len(raw))
-    words = [w for w in raw.decode("utf-8", errors="ignore").split()[1:] if _has_letters(w)]
-    out, total = [], 0
-    for w in words:
-        out.append(w)
-        total += len(w) + 1
-        if total >= budget:
-            break
-    return " ".join(out)
+        f.seek(index * page_chars)
+        raw = f.read(page_chars + 64)
+    words = raw.decode("utf-8", errors="ignore").split()
+    return " ".join(w for w in words[1 if index else 0:] if _has_letters(w))
 
 
 @njit(cache=True)

@@ -21,10 +21,12 @@ dependencies = [
     "fonttools>=4.40",
     "python-bidi>=0.6",
     "pypardiso>=0.4",
+    "onnxruntime>=1.18",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "matplotlib>=3.8"]
+export = ["ultralytics>=8.3"]
 
 [project.scripts]
 dspages = "dspages.cli:main"

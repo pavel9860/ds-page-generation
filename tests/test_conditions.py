@@ -8,8 +8,9 @@ from dspages.conditions import cells, entry_pools, factors, plan, script
 
 def test_plan_marginals_exact(full_small):
     n = 1000
-    man = fake_manifest()
+    man = [dict(e, source_path=f"{e['source_path']}.{k}") for k in range(40) for e in fake_manifest()]
     specs = plan(full_small, n, 0, man)
+    assert len(specs) == n
     f = factors(full_small)
     gsm = Counter(s["gsm"] for s in specs)
     assert set(gsm.values()) == {n // len(f["gsm"])}
@@ -32,10 +33,21 @@ def test_cells_are_a_distribution(full_small):
 def test_script_mix_and_eligibility(full_small):
     man = fake_manifest()
     pools = entry_pools(full_small, man)
-    assert all((i // 6) % 2 == 0 for p in pools.values() for i in p)
+    assert all((i // 6) % 2 == 0 for raster, _ in pools.values() for i in raster)
     n = 1000
     specs = plan(full_small, n, 1, man)
     got = Counter(s["script"] for s in specs)
     for g, w in full_small.layout.script_mix:
-        assert abs(got[g] - n * w) <= 1
+        assert got[g] == min(round(n * w), len(pools[g][0])) or abs(got[g] - n * w) <= 1
     assert all(script(man[s["entry"]], full_small.layout.scripts) == s["script"] for s in specs)
+    raster = [s["entry"] for s in specs if man[s["entry"]]["kind"] == "raster"]
+    assert len(raster) == len(set(raster))
+
+
+def test_raster_pages_before_books(full_small):
+    man = fake_manifest() + [dict(source_path=f"b{i}.txt", page_index=0, kind="book_text", language="en",
+                                  category="book_filler") for i in range(500)]
+    specs = plan(full_small, 400, 2, man)
+    latin = [s["entry"] for s in specs if s["script"] == "latin"]
+    raster = {i for i in latin if man[i]["kind"] == "raster"}
+    assert len(raster) == len(entry_pools(full_small, man)["latin"][0])

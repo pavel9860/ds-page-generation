@@ -137,13 +137,24 @@ class GridCfg:
 
 
 @dataclass(frozen=True)
+class PictureCfg:
+    model: str = "~/.cache/dspages/yolov11n-doclaynet.onnx"   # python -m dspages.prep.layout_model
+    weights_url: str = "https://huggingface.co/hantian/yolo-doclaynet/resolve/main/yolov11n-doclaynet.pt"  # AGPL-3.0
+    imgsz: int = 1024
+    picture_class: int = 6                          # DocLayNet "Picture"
+    conf: float = 0.3
+    iou: float = 0.5
+
+
+@dataclass(frozen=True)
 class LayoutCfg:
     sheet_mm: tuple = (210.0, 297.0)
     canvas_px: tuple = (1024, 1365)                 # flat image (width, height); the sheet is fitted, rest padded
     margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
     min_fill: float = 0.8                           # fraction of the content window's patches with ink
     fill_grid: int = 10
-    max_image: float = 0.6                          # max share of the window covered by images / solid areas
+    max_image: float = 0.3                          # max share of the window covered by pictures
+    pictures: PictureCfg = PictureCfg()
     max_zoom: float = 4.0                           # PDF re-render limit for a 1:1 window
     script_mix: tuple = (("latin", 0.5), ("unknown", 0.1), ("cyrillic", 0.15), ("cjk", 0.1), ("other", 0.15))
     scripts: dict = field(default_factory=lambda: {
@@ -154,6 +165,7 @@ class LayoutCfg:
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
     grid: GridCfg = GridCfg()
     font_pt: tuple = (10.0, 16.0)
+    book_page_chars: int = 12000                    # one book page: the text of a full A4 sheet at the smallest font
     line_spacing: tuple = (1.15, 1.6)
     paper_tone: tuple = (0.88, 0.97)                # paper reflectance
     ink_tone: tuple = (0.04, 0.18)

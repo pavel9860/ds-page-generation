@@ -9,11 +9,6 @@ from .deskew import estimate_deskew_angle, needs_deskew, rotate90, rotate_full_r
 RASTER_ZOOM = 2.0
 
 
-def min_window_px(entry, aspect):
-    """Width [px, manifest scale] of the largest window of aspect w/h inside the entry's content bbox."""
-    return min(entry["bbox_w"], entry["bbox_h"] * aspect)
-
-
 def load_manifest(path):
     with open(path, encoding="utf-8") as f:
         return [json.loads(line) for line in f]

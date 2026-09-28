@@ -116,9 +116,11 @@ def main(argv=None):
         P = get_preset(a.preset)
         out.mkdir(parents=True, exist_ok=True)
         with open(plan_path, "w") as f:
-            for s in plan(P, a.n, a.seed, load_manifest(P.paths.manifest)):
+            specs = plan(P, a.n, a.seed, load_manifest(P.paths.manifest))
+            for s in specs:
                 f.write(json.dumps(s) + "\n")
-        print(f"plan: {a.n} specs -> {plan_path}")
+        short = {g: round(a.n * w) - sum(s["script"] == g for s in specs) for g, w in P.layout.script_mix}
+        print(f"plan: {len(specs)} of {a.n} specs -> {plan_path}; short per script: {short}")
     if a.cmd == "plan":
         return
     n = sum(1 for _ in open(plan_path))
