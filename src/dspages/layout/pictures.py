@@ -23,7 +23,8 @@ def _session(path):
 
 def pictures(gray, c: PictureCfg):
     """Picture boxes (x0, y0, x1, y1) in page px of a uint8 gray page. Input as in training: longest side imgsz,
-    each side padded to a multiple of the stride (a square pad changes the predictions on portrait pages)."""
+    each side padded to a multiple of the stride (a square pad changes the predictions on portrait pages). Boxes
+    over large_area of the page are kept only at large_conf."""
     s = _session(str(Path(c.model).expanduser()))
     h, w = gray.shape
     k = c.imgsz / max(h, w)
@@ -41,7 +42,9 @@ def pictures(gray, c: PictureCfg):
     cx, cy, bw, bh = out[:4, keep]
     boxes = np.stack([cx - bw / 2 - x0, cy - bh / 2 - y0, bw, bh], -1) / k
     idx = cv2.dnn.NMSBoxes(boxes.tolist(), score[keep].tolist(), c.conf, c.iou)
-    b = boxes[np.ravel(idx)]
+    idx = np.ravel(idx)
+    b, sc = boxes[idx], score[keep][idx]
+    b = b[(sc >= c.large_conf) | (b[:, 2] * b[:, 3] <= c.large_area * h * w)]
     return np.clip(np.stack([b[:, 0], b[:, 1], b[:, 0] + b[:, 2], b[:, 1] + b[:, 3]], -1), 0, [w, h, w, h])
 
 

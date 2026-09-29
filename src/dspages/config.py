@@ -145,6 +145,8 @@ class PictureCfg:
     picture_class: int = 6                          # DocLayNet "Picture"
     conf: float = 0.3
     iou: float = 0.5
+    large_area: float = 0.3                         # boxes over this page share need large_conf (whole forms
+    large_conf: float = 0.75                        # come out as one low-score picture)
 
 
 @dataclass(frozen=True)
