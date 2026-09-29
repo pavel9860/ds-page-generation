@@ -18,10 +18,12 @@ import cv2
 import numpy as np
 
 from ..conditions import script
-from ..config import LayoutCfg, Paths
-from ..layout.content import bbox, content_mask
-from ..layout.deskew import detect_rotation, rotate90
-from ..layout.sources import RASTER_ZOOM
+from ..config import LayoutCfg, Paths, get_preset, page_px
+from ..layout.content import bbox, content_mask, window_limits
+from ..layout.generate import raster_window
+from ..layout.pictures import pictures
+from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90
+from ..layout.sources import RASTER_ZOOM, is_pdf, raster_page
 from ..layout.text import _words, book_text
 from .text_extract import DOMINANT_IMAGE_AREA_FRAC, book_language, script_language
 
@@ -61,12 +63,6 @@ def _seed(path: str) -> int:
     return hash(path) & 0xFFFFFFFF
 
 
-def _page_indices(page_count: int, rng, cap) -> list:
-    if cap is None or page_count <= cap:
-        return list(range(page_count))
-    return sorted(rng.choice(page_count, size=cap, replace=False).tolist())
-
-
 # ---------------------------------------------------------------------------
 # per-page processing, shared by pdf and image sources
 # ---------------------------------------------------------------------------
@@ -82,15 +78,38 @@ def _bbox_fields(b, s, h, w):
     return dict(bbox_y0=y0, bbox_x0=x0, bbox_h=min(h, y1 + 1) - y0, bbox_w=min(w, x1 + 1) - x0)
 
 
-def _process_gray(gray: np.ndarray, rng):
-    rot = detect_rotation(gray)
+def _process_gray(gray: np.ndarray, rng, born_digital=False):
+    """Content fields of a rasterized page; scans are turned upright (90-degree steps) and their skew angle is
+    stored, born-digital PDF pages are taken as they are."""
+    rot = 0 if born_digital else detect_rotation(gray)
     gray = rotate90(gray, rot)
     mask, s = content_mask(gray)
     b = bbox(mask)
     if b is None or not _bbox_keep(b, *mask.shape) or mask.mean() < MIN_CONTENT_FRAC:
         return None
-    return dict(content_frac=round(float(mask.mean()), 5), needs_deskew=True, rotate90=rot,
+    angle = 0.0 if born_digital else estimate_deskew_angle(gray)
+    return dict(content_frac=round(float(mask.mean()), 5), needs_deskew=not born_digital, rotate90=rot,
+                deskew_deg=round(angle if needs_deskew(angle) else 0.0, 2),
                 used_h=gray.shape[0], used_w=gray.shape[1], **_bbox_fields(b, s, *gray.shape))
+
+
+_LAYOUT = get_preset("full").layout
+
+
+def _window_fields(entry):
+    """The entry with the layout's checks on the source page for the full preset sheet: window_ok (a window
+    with fill >= min_fill and picture share <= max_image), its fill and picture share, and size_ok (a window
+    reaches the sheet width at 1:1, within max_zoom for PDF pages). None without content."""
+    c = _LAYOUT
+    pw, ph = page_px(c.sheet_mm, c.canvas_px)
+    entry = dict(entry, pictures=np.round(pictures(raster_page(entry), c.pictures), 1).tolist())
+    r = raster_window(np.random.default_rng(0), entry, pw, ph, c)
+    if r is None:
+        return None
+    _, _, (_, fill, share, ok) = r
+    size_ok = window_limits(entry["bbox_w"], entry["bbox_h"], pw / ph, c.margin_frac[1])[1] * (
+        c.max_zoom if is_pdf(entry) else 1.0) >= pw
+    return dict(entry, window_ok=ok, size_ok=bool(size_ok), fill=round(fill, 3), picture_share=round(share, 3))
 
 
 def _pdf_text_blocks_px(page, zoom: float) -> list:
@@ -128,7 +147,8 @@ def _pdf_text_page_info(page, rng, zoom: float = RASTER_ZOOM):
     b = bbox(mask)
     if b is None or not _bbox_keep(b, *mask.shape):
         return None
-    return dict(content_frac=round(float(mask.mean()), 5), needs_deskew=False, used_h=used_h, used_w=used_w,
+    return dict(content_frac=round(float(mask.mean()), 5), needs_deskew=False, deskew_deg=0.0,
+                used_h=used_h, used_w=used_w,
                 **_bbox_fields(b, s, used_h, used_w))
 
 
@@ -143,33 +163,39 @@ def _pdf_page_is_scan(page) -> bool:
                > DOMINANT_IMAGE_AREA_FRAC for info in page.get_image_info())
 
 
+def _reject(path, pi, language, reason):
+    return dict(kind="rejected", source_path=path, page_index=pi, language=language, reason=reason)
+
+
 def _job_pdf(args):
+    """Pages in random order until PAGES_PER_PDF_CAP pass (all pages for rare scripts); rejected pages are
+    returned as kind="rejected" records."""
     import pymupdf as fitz
     pdf_path, page_count_hint, language, category, seed = args
     rng = np.random.default_rng(seed)
     try:
         doc = fitz.open(pdf_path)
         rare = script(dict(language=language), LayoutCfg().scripts) in RARE_SCRIPTS
-        page_indices = _page_indices(doc.page_count, rng, None if rare else PAGES_PER_PDF_CAP)
+        order = rng.permutation(doc.page_count)
     except Exception:
         return []
-    recs = []
+    cap = None if rare else PAGES_PER_PDF_CAP
+    recs, n = [], 0
     try:
-        for pi in page_indices:
-            if pi >= doc.page_count:
-                continue
+        for pi in order.tolist():
+            if cap is not None and n >= cap:
+                break
             page = doc[pi]
-            has_text = bool(page.get_text().strip())
-            info = has_text and not _pdf_page_is_scan(page) and _pdf_text_page_info(page, rng)
+            scan = _pdf_page_is_scan(page)
+            info = bool(page.get_text().strip()) and not scan and _pdf_text_page_info(page, rng)
             if not info:
                 pix = page.get_pixmap(matrix=fitz.Matrix(RASTER_ZOOM, RASTER_ZOOM),
                                       colorspace=fitz.csGRAY, alpha=False)
                 gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
-                info = _process_gray(gray, rng)
-            if info is None:
-                continue
-            recs.append(dict(source_path=pdf_path, page_index=pi, language=language,
-                             category=category, kind="raster", **info))
+                info = _process_gray(gray, rng, born_digital=not scan)
+            rec = _page_record(pdf_path, pi, language, category, info)
+            recs.append(rec)
+            n += rec["kind"] == "raster"
     except Exception:
         return recs
     finally:
@@ -182,12 +208,24 @@ def _job_image(args):
     rng = np.random.default_rng(seed)
     gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
-        return []
-    info = _process_gray(gray, rng)
-    if info is None:
-        return []
-    return [dict(source_path=image_path, page_index=0, language=language,
-                 category=category, kind="raster", **info)]
+        return [_reject(image_path, 0, language, "unreadable")]
+    return [_page_record(image_path, 0, language, category, _process_gray(gray, rng))]
+
+
+def _page_record(path, pi, language, category, info):
+    """Manifest record of a page, or a rejected record naming the failed check."""
+    if not info:
+        return _reject(path, pi, language, "content box")
+    rec = _window_fields(dict(source_path=path, page_index=pi, language=language, category=category,
+                              kind="raster", **info))
+    if rec is None:
+        return _reject(path, pi, language, "no content")
+    if not rec["window_ok"]:
+        return dict(_reject(path, pi, language, "pictures" if rec["picture_share"] > _LAYOUT.max_image
+                            else "fill"), fill=rec["fill"], picture_share=rec["picture_share"])
+    if not rec["size_ok"]:
+        return _reject(path, pi, language, "too small")
+    return rec
 
 
 # ---------------------------------------------------------------------------
@@ -297,11 +335,14 @@ def _job_book_text(args):
 # driver
 # ---------------------------------------------------------------------------
 
-def _run_group(name, jobs, job_fn, workers, out_f, counts, t0):
+def _run_group(name, jobs, job_fn, workers, out_f, rej_f, counts, t0):
     print(f"[{name}] {len(jobs)} jobs", flush=True)
     with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
         for done, recs in enumerate(pool.map(job_fn, jobs, chunksize=8), 1):
             for rec in recs:
+                if rec["kind"] == "rejected":
+                    rej_f.write(json.dumps(rec) + "\n")
+                    continue
                 out_f.write(json.dumps(rec) + "\n")
                 counts[rec["language"]] = counts.get(rec["language"], 0) + 1
             if done % 1000 == 0:
@@ -328,9 +369,10 @@ def main(out_path: str, workers: int, limit_files: int = None):
         groups = [(name, jobs[:limit_files], fn) for name, jobs, fn in groups]
     t0, counts = time.time(), {}
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as out_f:
+    with open(out_path, "w", encoding="utf-8") as out_f, \
+            open(Path(out_path).with_suffix(".rejected.jsonl"), "w", encoding="utf-8") as rej_f:
         for name, jobs, fn in groups:
-            _run_group(name, jobs, fn, workers, out_f, counts, t0)
+            _run_group(name, jobs, fn, workers, out_f, rej_f, counts, t0)
     print(f"TOTAL {sum(counts.values())} entries, wall={time.time() - t0:.0f}s", flush=True)
     print("language distribution:", json.dumps(counts, indent=2), flush=True)
 

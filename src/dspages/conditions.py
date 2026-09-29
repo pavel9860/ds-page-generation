@@ -90,7 +90,7 @@ def entry_pools(P: Preset, manifest):
         g = pools.setdefault(script(e, c.scripts), ([], []))
         if e["kind"] == "book_text":
             g[1].append(i)
-        elif window_limits(e["bbox_w"], e["bbox_h"], pw / ph, c.margin_frac[1])[1] * (
+        elif e.get("window_ok", True) and window_limits(e["bbox_w"], e["bbox_h"], pw / ph, c.margin_frac[1])[1] * (
                 c.max_zoom if is_pdf(e) else 1.0) >= pw:
             g[0].append(i)
     return pools

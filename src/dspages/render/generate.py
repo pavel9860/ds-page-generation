@@ -48,10 +48,11 @@ def make_sample(rng, page, surf, P: Preset):
     uu, vv = np.meshgrid(np.linspace(0, 1, nu), np.linspace(0, 1, nv))
     shading = c.effects["shading"].prob > 0 and rng.random() < c.effects["shading"].prob
     light = photo.sample_light(rng, c.light, 0.5 * (Pts.min(0) + Pts.max(0))) if shading else None
-    coarse = np.stack([X[::2, ::2], Y[::2, ::2], Z[::2, ::2]], -1)
-    maps = photo.shadow_maps(light, coarse.reshape(-1, 3), grid_faces(*coarse.shape[:2]),
-                             0.5 * (Pts.min(0) + Pts.max(0))) if shading else None
-    lit = photo.shade(Pts, N, cam["eye"], light, maps) if shading else np.ones(len(Pts))
+    maps = photo.shadow_maps(light, Pts, faces, 0.5 * (Pts.min(0) + Pts.max(0))) if shading else None
+    occ = photo.sample_occluders(rng, light, 0.5 * (Pts.min(0) + Pts.max(0)), c.light.occluder_prob,
+                                 float(np.ptp(Pts[:, :2], 0).max())) if shading else []
+    lit = photo.shade(Pts, N, cam["eye"], light, maps) * photo.occlusion(Pts, light, occ) if shading else \
+        np.ones(len(Pts))
     uv, lf, zmap = rasterize(pix, depth, np.stack([uu.ravel(), vv.ravel(), lit], -1), faces, c.px)
     mask = np.isfinite(uv[..., 0])
 
@@ -68,7 +69,8 @@ def make_sample(rng, page, surf, P: Preset):
             q = photo.table_points(cam, c.px, BG_STEP)
             ok = np.isfinite(q[..., 0])
             t = np.ones(q.shape[:2], np.float32)
-            t[ok] = photo.shade(q[ok], np.tile([0.0, 0.0, 1.0], (int(ok.sum()), 1)), cam["eye"], light, maps)
+            t[ok] = photo.shade(q[ok], np.tile([0.0, 0.0, 1.0], (int(ok.sum()), 1)), cam["eye"], light, maps) * \
+                photo.occlusion(q[ok], light, occ)
             bg = bg * cv2.resize(t, c.px, interpolation=cv2.INTER_LINEAR)
         img = np.where(mask, img, bg)
     else:

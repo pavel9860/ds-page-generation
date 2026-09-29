@@ -33,8 +33,7 @@ def raster_page(entry, scale=1.0):
     h, w = round(entry["used_h"] * scale), round(entry["used_w"] * scale)
     if gray.shape != (h, w):
         gray = cv2.resize(gray, (w, h), interpolation=cv2.INTER_AREA if gray.size > h * w else cv2.INTER_LINEAR)
-    if entry["needs_deskew"]:
-        angle = estimate_deskew_angle(gray)
-        if needs_deskew(angle):
-            gray = rotate_full_res(gray, angle, fill_value=255)
+    angle = entry.get("deskew_deg", estimate_deskew_angle(gray) if entry["needs_deskew"] else 0.0)
+    if needs_deskew(angle):
+        gray = rotate_full_res(gray, angle, fill_value=255)
     return gray

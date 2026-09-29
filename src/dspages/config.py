@@ -61,7 +61,7 @@ class SceneCfg:
     fold_k_sigma: float = 0.7
     fold_k: tuple = (0.003, 0.05)
     fold_side_b_angle_jitter: float = 0.25
-    near_flat_prob: float = 0.15
+    near_flat_prob: float = 0.0
     flat_support_h: tuple = (0.001, 0.005)
     flat_fold_deg: tuple = (1.0, 8.0)
     flat_clamp_deg: tuple = (2.0, 10.0)
@@ -77,7 +77,7 @@ class ShallowCreaseCfg:
     spread_deg: float = 25.0
     singles_per_group: tuple = (3.0, 4.0)
     k: tuple = (0.15, 0.9)
-    w_max_mm: float = 1.0
+    w_max_mm: float = 2.0
     pitch_mm: float = 0.5
     fold_clear_mm: float = 8.0
 
@@ -93,7 +93,7 @@ class DeepCreaseCfg:
     region_mm: tuple = (40.0, 120.0)              # size of the regions of equal scale / coverage
     density: float = 1.2                          # ridges per local length^2 of covered area
     k: dict = field(default_factory=lambda: {"light": (0.2, 0.6), "medium": (0.5, 1.2), "heavy": (0.7, 1.4)})
-    max_depth_mm: dict = field(default_factory=lambda: {"light": 3.0, "medium": 8.0, "heavy": 15.0})   # valley to peak
+    max_depth_mm: dict = field(default_factory=lambda: {"light": 5.0, "medium": 8.0, "heavy": 15.0})   # valley to peak
     broad_n: dict = field(default_factory=lambda: {"light": (0, 2), "medium": (1, 3), "heavy": (2, 5)})
     max_length_mm: float = 150.0                 # longest crease; the shortest is the 3D grid pitch
     broad_length_mm: tuple = (80.0, 150.0)       # large creases: long, wide, low angle
@@ -162,7 +162,7 @@ class LayoutCfg:
     margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
     min_fill: float = 0.8                           # fraction of the content window's patches with ink
     fill_grid: int = 10
-    max_image: float = 0.3                          # max share of the window covered by pictures
+    max_image: float = 0.25                         # max share of the window covered by pictures
     pictures: PictureCfg = PictureCfg()
     max_zoom: float = 4.0                           # PDF re-render limit for a 1:1 window
     script_mix: tuple = (("latin", 0.5), ("unknown", 0.1), ("cyrillic", 0.15), ("cjk", 0.1), ("other", 0.15))
@@ -181,16 +181,17 @@ class LayoutCfg:
     paper_tone: tuple = (0.88, 0.97)                # paper reflectance
     ink_tone: tuple = (0.04, 0.18)
     effects: dict = field(default_factory=lambda: {
-        "paper_texture": _fx(1.0, fiber_amp=(0.01, 0.04), fiber_sigma=(0.6, 1.6), grain_amp=(0.005, 0.02),
-                             cloud_amp=(0.0, 0.03), cloud_scale_mm=(8.0, 40.0)),
-        "yellowing": _fx(0.15, strength=(0.03, 0.12), edge_mm=(5.0, 40.0)),
-        "print_spread": _fx(0.5, sigma_px=(0.3, 1.2), gain=(-0.25, 0.25)),
-        "ink_fade": _fx(0.3, strength=(0.05, 0.35), scale_mm=(10.0, 60.0)),
-        "toner_speckle": _fx(0.3, density=(1e-5, 2e-4), size_px=(1, 3)),
-        "banding": _fx(0.15, period_mm=(2.0, 12.0), amp=(0.01, 0.05)),
-        "show_through": _fx(0.15, strength=(0.02, 0.08), blur_px=(1.5, 4.0)),
-        "stains": _fx(0.1, n=(1, 3), size_mm=(10.0, 50.0), strength=(0.03, 0.12)),
-        "old_creases": _fx(0.25, darken=(0.02, 0.08), shade=(0.02, 0.10), ink_loss=(0.0, 0.3)),
+        "paper_texture": _fx(1.0, fiber_amp=(0.0, 0.02), fiber_mm=(0.3, 1.5), fiber_stretch=(1.0, 8.0),
+                             cloud_amp=(0.0, 0.02), cloud_mm=(2.0, 80.0), fleck_prob=0.2, fleck_amp=(0.03, 0.15),
+                             grain_amp=(0.0, 0.012)),
+        "yellowing": _fx(0.15, strength=(0.02, 0.08), edge_mm=(5.0, 40.0)),
+        "print_spread": _fx(0.5, sigma_px=(0.3, 1.0), gain=(-0.2, 0.2)),
+        "ink_fade": _fx(0.3, strength=(0.03, 0.2), scale_mm=(5.0, 100.0)),
+        "toner_speckle": _fx(0.3, density=(1e-5, 1e-4), size_px=(1, 3)),
+        "banding": _fx(0.15, period_mm=(1.0, 20.0), amp=(0.005, 0.03)),
+        "show_through": _fx(0.15, strength=(0.01, 0.05), blur_px=(1.0, 5.0)),
+        "stains": _fx(0.1, n=(1, 3), size_mm=(5.0, 60.0), strength=(0.02, 0.08)),
+        "old_creases": _fx(0.25, darken=(0.01, 0.05), shade=(0.01, 0.06), ink_loss=(0.0, 0.2)),
         "local_blur": _fx(0.25, n=(1, 3), size_mm=(15.0, 70.0), sigma_px=(0.8, 3.5)),
     })
 
@@ -199,17 +200,19 @@ class LayoutCfg:
 class CameraCfg:
     dist_mm: tuple = (200.0, 600.0)                 # camera to page centre
     tilt_deg: tuple = (0.0, 50.0)                   # optical axis to the table normal
-    roll_deg: tuple = (-8.0, 8.0)
+    roll_deg: tuple = (-4.8, 4.8)
     fill: tuple = (0.93, 1.0)                       # page bbox to frame, along the tighter side
+    max_offset: float = 0.3                         # camera's horizontal offset from the page centre / page size
     shift: float = 0.3                              # page centre offset, fraction of the free space
     incidence_deg: float = 50.0                     # max view angle to the surface normal, anywhere on the page
 
 
 @dataclass(frozen=True)
 class LightCfg:
-    ambient: tuple = (0.25, 0.6)
+    ambient: tuple = (0.05, 0.35)
+    occluder_prob: float = 0.5                      # shadows of hands, arms, phones, heads over the page
     dist_mm: tuple = (300.0, 2000.0)
-    elev_deg: tuple = (30.0, 90.0)
+    elev_deg: tuple = (20.0, 80.0)
     sharp_prob: float = 0.4                         # point light with hard cast shadows, else area light
     area_mm: tuple = (100.0, 600.0)
     specular: tuple = (0.0, 0.15)

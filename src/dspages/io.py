@@ -1,4 +1,4 @@
-"""Sample files: one .npz per sample and part (arrays + meta as JSON), a .jpg preview beside it."""
+"""Sample files: one .npz per sample and part (arrays + meta as JSON), a .jpg preview where asked."""
 import json
 from pathlib import Path
 
@@ -14,11 +14,14 @@ def _json(o):
     raise TypeError(type(o))
 
 
-def save(path: Path, arrays: dict, meta: dict, preview=None):
+def save(path: Path, arrays: dict, meta: dict, preview=None, preview_path: Path = None):
+    """preview is written to preview_path (default: beside the .npz)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(path, meta=np.array(json.dumps(meta, default=_json)), **arrays)
     if preview is not None:
-        cv2.imwrite(str(path.with_suffix(".jpg")), preview[..., ::-1] if preview.ndim == 3 else preview,
+        preview_path = Path(preview_path or path.with_suffix(".jpg"))
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(preview_path), preview[..., ::-1] if preview.ndim == 3 else preview,
                     [cv2.IMWRITE_JPEG_QUALITY, 90])
 
 

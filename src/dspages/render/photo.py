@@ -8,10 +8,11 @@ motion blur, vignetting, exposure and gamma, sensor noise at an ISO, JPEG.
 """
 import cv2
 import numpy as np
-from numba import njit, vectorize
+from numba import njit
 
 from ..config import LightCfg, RenderCfg
 from ..layout.paper import variable_blur
+from ..noise import _lattice, fbm, value_noise, warp, worley
 from .camera import look_at, project
 from .raster import rasterize
 
@@ -37,6 +38,57 @@ def sample_light(rng, c: LightCfg, target):
         pts = centre + rad * np.stack([np.cos(a), np.sin(a), np.zeros_like(a)], -1)
     return dict(points=pts, sharp=bool(sharp), ambient=_u(rng, c.ambient), specular=_u(rng, c.specular),
                 shininess=_u(rng, c.shininess))
+
+
+def sample_occluders(rng, light, target, prob, size_mm):
+    """Things between the light and the page (hands, arms, phones, heads): 1-2 shapes of blobs on a plane at
+    height hz, placed so their shadow falls near the page centre. -> list of dicts, empty with 1 - prob."""
+    if rng.random() >= prob:
+        return []
+    L = light["points"].mean(0)
+    out = []
+    for _ in range(rng.integers(1, 3)):
+        hz = rng.uniform(40, 0.6 * L[2])
+        t = hz / L[2]
+        aim = target[:2] + rng.uniform(-0.5, 0.5, 2) * size_mm
+        c = aim + t * (L[:2] - aim)
+        kind = rng.integers(3)
+        n = (3, 1, 1)[kind]
+        th = rng.uniform(0, np.pi)
+        blobs = []
+        for k in range(n):
+            ax = (rng.uniform(30, 90), rng.uniform(8, 25)) if kind == 0 else \
+                (rng.uniform(35, 80), rng.uniform(15, 40)) if kind == 1 else (rng.uniform(60, 110),) * 2
+            off = rng.uniform(-40, 40, 2) if k else np.zeros(2)
+            blobs.append((c + off, ax, th + rng.uniform(-0.4, 0.4), kind == 1))
+        out.append(dict(hz=hz, blobs=blobs, strength=rng.uniform(0.35, 0.85)))
+    return out
+
+
+def occlusion(Q, light, occ):
+    """Light factor in [0, 1] of points Q (n, 3) from occluder shadows: each point's ray to the light centre
+    meets the occluder plane; the shadow edge softens with the light size and the point's distance below it."""
+    f = np.ones(len(Q), np.float32)
+    if not occ:
+        return f
+    L = light["points"].mean(0)
+    size = float(np.ptp(light["points"][:, :2], 0).max()) if len(light["points"]) > 1 else 2.0
+    for o in occ:
+        t = (o["hz"] - Q[:, 2]) / (L[2] - Q[:, 2])
+        X = Q[:, :2] + t[:, None] * (L[:2] - Q[:, :2])
+        pen = np.maximum(size * (o["hz"] - Q[:, 2]) / max(L[2] - o["hz"], 1.0), 0.5)
+        cover = np.zeros(len(Q), np.float32)
+        for c, (a, b), th, box in o["blobs"]:
+            d = X - c
+            u = d[:, 0] * np.cos(th) + d[:, 1] * np.sin(th)
+            v = -d[:, 0] * np.sin(th) + d[:, 1] * np.cos(th)
+            if box:
+                sd = np.maximum(np.abs(u) - a, np.abs(v) - b)
+            else:
+                sd = (np.hypot(u / a, v / b) - 1) * min(a, b)
+            cover = np.maximum(cover, np.clip(0.5 - sd / pen, 0, 1))
+        f *= 1 - o["strength"] * cover * (t > 0)
+    return f
 
 
 def shadow_maps(light, P, faces, target):
@@ -71,14 +123,24 @@ def _shade(Q, N, eye, pts, Rs, cams, depths, ambient, specular, shininess, bias)
             cx = Rs[k, 0, 0] * qx + Rs[k, 0, 1] * qy + Rs[k, 0, 2] * qz
             cy = Rs[k, 1, 0] * qx + Rs[k, 1, 1] * qy + Rs[k, 1, 2] * qz
             cz = Rs[k, 2, 0] * qx + Rs[k, 2, 1] * qy + Rs[k, 2, 2] * qz
-            xi = min(max(int(cams[k, 0] * cx / cz + cams[k, 1]), 0), s - 1)
-            yi = min(max(int(cams[k, 0] * cy / cz + cams[k, 2]), 0), s - 1)
-            if cz > depths[k, yi, xi] + bias:
+            nl = nx * lx + ny * ly + nz * lz
+            if nl <= 0.0:
+                continue
+            tan_t = min(np.sqrt(max(1.0 - nl * nl, 0.0)) / nl, 5.0)
+            b = bias + 1.5 * cz / cams[k, 0] * tan_t
+            fx, fy = cams[k, 0] * cx / cz + cams[k, 1], cams[k, 0] * cy / cz + cams[k, 2]
+            xi, yi = int(fx), int(fy)
+            lit = 0.0
+            for dy in range(-1, 2):
+                for dx in range(-1, 2):
+                    xx, yy = min(max(xi + dx, 0), s - 1), min(max(yi + dy, 0), s - 1)
+                    lit += cz <= depths[k, yy, xx] + b
+            if lit == 0.0:
                 continue
             hx, hy, hz = lx + vx, ly + vy, lz + vz
             hn = np.sqrt(hx * hx + hy * hy + hz * hz)
             nh = max((nx * hx + ny * hy + nz * hz) / hn, 0.0)
-            acc += max(nx * lx + ny * ly + nz * lz, 0.0) + specular * nh ** shininess
+            acc += lit / 9.0 * (nl + specular * nh ** shininess)
         out[i] = ambient + (1 - ambient) * acc / m
     return out
 
@@ -106,86 +168,6 @@ def table_points(cam, size, step=1, xs=None, ys=None):
     Q = cam["eye"] + t[..., None] * d
     Q[t <= 0] = np.nan
     return Q
-
-
-@njit(cache=True, inline="always")
-def _hash(seed, i, j):
-    h = (i * 374761393 + j * 668265263 + seed * 2246822519) & 0xFFFFFFFF
-    h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
-    return np.float32((h ^ (h >> 16)) & 0xFFFF) / np.float32(65535.0)
-
-
-@vectorize(["float32(int64, float64, float64)"], cache=True)
-def _lattice(seed, i, j):
-    return _hash(seed, np.int64(i), np.int64(j))
-
-
-@njit(cache=True, inline="always")
-def _value(seed, x, y):
-    fi, fj = np.floor(x), np.floor(y)
-    i, j = np.int64(fi), np.int64(fj)
-    fx, fy = x - fi, y - fj
-    fx, fy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
-    a, b = _hash(seed, i, j), _hash(seed, i + 1, j)
-    c, d = _hash(seed, i, j + 1), _hash(seed, i + 1, j + 1)
-    return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy
-
-
-@vectorize(["float32(int64, float64, float64)"], cache=True)
-def value_noise(seed, x, y):
-    """Smooth value noise in [0, 1] at arbitrary coordinates (lattice pitch 1)."""
-    return _value(seed, x, y)
-
-
-@njit(cache=True, fastmath=True)
-def _fbm(seed, x, y, scale, octaves, gain):
-    out = np.empty(x.size, np.float32)
-    for k in range(x.size):
-        acc, amp, f, tot = 0.0, 1.0, 1.0 / scale, 0.0
-        for o in range(octaves):
-            acc += amp * (_value(seed + o, x[k] * f, y[k] * f) * 2 - 1)
-            tot += amp
-            amp, f = amp * gain, f * 2.03
-        out[k] = acc / tot
-    return out
-
-
-def fbm(seed, x, y, scale, octaves=5, gain=0.5):
-    """Fractal noise in about [-1, 1], feature size `scale` (same units as x, y)."""
-    x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
-    return _fbm(int(seed), x.ravel(), y.ravel(), float(scale), int(octaves), float(gain)).reshape(x.shape)
-
-
-@njit(cache=True, fastmath=True)
-def _worley(seed, x, y, scale):
-    n = x.size
-    d1, d2, cid = np.empty(n, np.float32), np.empty(n, np.float32), np.empty(n, np.float32)
-    for k in range(n):
-        px, py = x[k] / scale, y[k] / scale
-        i0, j0 = np.int64(np.floor(px)), np.int64(np.floor(py))
-        a, b, c = 9.0, 9.0, 0.0
-        for di in range(-1, 2):
-            for dj in range(-1, 2):
-                i, j = i0 + di, j0 + dj
-                d = np.hypot(i + _hash(seed, i, j) - px, j + _hash(seed + 1, i, j) - py)
-                if d < a:
-                    a, b, c = d, a, _hash(seed + 2, i, j)
-                elif d < b:
-                    b = d
-        d1[k], d2[k], cid[k] = a, b, c
-    return d1, d2, cid
-
-
-def worley(seed, x, y, scale):
-    """Cellular noise: distances to the nearest and second nearest jittered lattice point (feature size `scale`)
-    and the nearest point's cell id in [0, 1]."""
-    x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
-    return tuple(r.reshape(x.shape) for r in _worley(int(seed), x.ravel(), y.ravel(), float(scale)))
-
-
-def warp(seed, x, y, scale, amount):
-    """Domain warping: coordinates displaced by fractal noise."""
-    return x + amount * fbm(seed, x, y, scale, 4), y + amount * fbm(seed + 50, x, y, scale, 4)
 
 
 def _cells(x, y, w, h, off):
@@ -419,12 +401,40 @@ def _clutter(rng, x, y, g, reach):
     return g
 
 
+PLAIN_PAPER_PROB = 0.05
+PLAIN_GRAY_PROB = 0.05
+
+
+def _plain(rng, x, y, lvl, paper):
+    """Uniform level, or a linear or radial gradient from it; faint paper structure when paper."""
+    kind = rng.integers(3)
+    th = rng.uniform(0, 2 * np.pi)
+    if kind == 1:
+        g = lvl * (1 + rng.uniform(0.05, 0.3) * np.tanh((x * np.cos(th) + y * np.sin(th)) / rng.uniform(100, 500)))
+    elif kind == 2:
+        c = rng.uniform(-200, 200, 2)
+        g = lvl * (1 - rng.uniform(0.05, 0.35) * np.clip(np.hypot(x - c[0], y - c[1]) / rng.uniform(200, 600), 0, 1))
+    else:
+        g = np.full(x.shape, lvl, np.float32)
+    if not paper:
+        return np.clip(g, 0, 1).astype(np.float32)
+    sd = int(rng.integers(1 << 30))
+    g = g * (1 + rng.uniform(0, 0.02) * fbm(sd, x, y, rng.uniform(0.5, 3), 3)
+             + rng.uniform(0, 0.02) * fbm(sd + 1, x, y, rng.uniform(10, 80), 4))
+    return np.clip(g, 0, 1).astype(np.float32)
+
+
 def table_texture(rng, Q):
     """Table luminance at table points Q (h, w, 3) mm, evaluated per point (sharp at any distance). One of the
     TEXTURES (fractal, cellular, domain-warped, woven, printed and tiled patterns) at a random base level, contrast
     and stains; sometimes a second surface beyond a straight table edge, things lying around the page, a broad
     brightness gradient and a random tone curve."""
     x, y = np.nan_to_num(Q[..., 0]).astype(np.float32), np.nan_to_num(Q[..., 1]).astype(np.float32)
+    r = rng.random()
+    if r < PLAIN_PAPER_PROB:
+        return _plain(rng, x, y, rng.uniform(0.55, 0.97), True)
+    if r < PLAIN_PAPER_PROB + PLAIN_GRAY_PROB:
+        return _plain(rng, x, y, rng.uniform(0.1, 0.9), False)
     g = _surface(rng, x, y)
     if rng.random() < 0.3:
         th, off = rng.uniform(0, 2 * np.pi), rng.uniform(150, 400)

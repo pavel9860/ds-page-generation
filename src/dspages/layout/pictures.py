@@ -45,9 +45,9 @@ def pictures(gray, c: PictureCfg):
     return np.clip(np.stack([b[:, 0], b[:, 1], b[:, 0] + b[:, 2], b[:, 1] + b[:, 3]], -1), 0, [w, h, w, h])
 
 
-def picture_mask(gray, shape, s, c: PictureCfg):
-    """Picture boxes of the page rasterized on a mask of shape at scale s."""
+def picture_mask(boxes, shape, s):
+    """Picture boxes (x0, y0, x1, y1) in page px rasterized on a mask of shape at scale s."""
     m = np.zeros(shape, bool)
-    for x0, y0, x1, y1 in pictures(gray, c) * s:
+    for x0, y0, x1, y1 in np.asarray(boxes, float).reshape(-1, 4) * s:
         m[int(y0):int(np.ceil(y1)), int(x0):int(np.ceil(x1))] = True
     return m

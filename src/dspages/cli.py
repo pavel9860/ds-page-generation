@@ -1,11 +1,12 @@
 """python -m dspages {plan,layout,geometry,render,all} --preset NAME --out DIR [--n N] [--seed S] [--workers W]
 
 plan      DIR/plan.jsonl: n stratified sample specs (written by the other commands too when missing)
-layout    DIR/layouts/<i>.npz   page (sheet luminance), gray (clean sheet) + .jpg
-geometry  DIR/geometry/<i>.npz  X, Y, Z [mm] page grid + .jpg height map
-render    DIR/samples/<i>.npz   flat, warped, uv, map3d, mask + .jpg flat | warped; reads layouts/ and geometry/
+layout    DIR/layouts/<i>.npz   page (sheet luminance), gray (clean sheet)
+geometry  DIR/geometry/<i>.npz  X, Y, Z [mm] page grid
+render    DIR/samples/<i>.npz   flat, warped, uv, map3d, mask; reads layouts/ and geometry/
           of the same index when present, else makes them in memory
 all       layout, geometry and render of each sample, all saved
+Previews (sheet, height map, flat | warped) go to DIR_preview/<part>/<i>.jpg, outside the dataset.
 Each part of sample i draws from its own stream (seed, i, part): the parts are reproducible independently.
 """
 import argparse
@@ -58,12 +59,17 @@ def _path(part, i):
     return _W["out"] / {"layout": "layouts", "geometry": "geometry", "render": "samples"}[part] / f"{i:07d}.npz"
 
 
+def _preview(part, i):
+    """Previews live outside the dataset: DIR_preview/<part>/<i>.jpg."""
+    return _W["out"].with_name(_W["out"].name + "_preview") / _path(part, i).parent.name / f"{i:07d}.jpg"
+
+
 def _layout(i, save):
     spec = _W["plan"][i]
     L = make_layout(_rng(i, "layout"), dict(_W["manifest"][spec["entry"]], offset=spec.get("offset", 0)),
                     layout_preset(_W["P"], spec), _W["fonts"])
     if save:
-        io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], L["page"])
+        io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], L["page"], _preview("layout", i))
     return L["page"]
 
 
@@ -74,7 +80,7 @@ def _geometry(i, save):
     if save:
         meta = dict(label=s["label"], cond=s["cond"], paper=s["paper"], scene_a=s["scene_a"], scene_b=s["scene_b"],
                     n_creases=len(s["creases"]), box_strain=s["box_strain"])
-        io.save(_path("geometry", i), surf, meta, io.height_preview(surf["Z"]))
+        io.save(_path("geometry", i), surf, meta, io.height_preview(surf["Z"]), _preview("geometry", i))
     return surf
 
 
@@ -87,7 +93,8 @@ def _render(i, save_parts, dt):
     dt["geometry"], t = time.time() - t, time.time()
     o = make_sample(_rng(i, "render"), page, surf, view_preset(_W["P"], _W["plan"][i]))
     preview = np.hstack([cv2.resize(o["flat"], o["warped"].shape[1::-1]), o["warped"]])
-    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "uv", "map3d", "mask")}, o["meta"], preview)
+    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "uv", "map3d", "mask")}, o["meta"], preview,
+            _preview("render", i))
     dt["render"] = time.time() - t
 
 

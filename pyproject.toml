@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "matplotlib>=3.8"]
+dev = ["pytest>=8", "pytest-xdist>=3.5", "matplotlib>=3.8"]
 export = ["ultralytics>=8.3"]
 
 [project.scripts]
@@ -37,3 +37,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-n auto"

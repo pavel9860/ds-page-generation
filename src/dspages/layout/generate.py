@@ -5,7 +5,7 @@ import numpy as np
 from ..config import Preset, page_px
 from . import paper
 from .content import bbox, content_mask, place_window
-from .pictures import picture_mask
+from .pictures import picture_mask, pictures
 from .grid import crossings, grid_page
 from .sources import is_pdf, raster_page
 from .text import book_snippet, render_text
@@ -21,17 +21,27 @@ def _crop(src, x, y, w, h, pad):
     return out
 
 
-def _raster_sheet(rng, entry, pw, ph, c):
-    """Sheet from a raster page: the window of place_window, PDF pages re-rendered so the window is >= 1:1."""
+def raster_window(rng, entry, pw, ph, c):
+    """The source page (before any effect), its content box (x0, y0, x1, y1) and place_window's window, fill,
+    picture share and ok for a pw x ph sheet; None without content."""
     src = raster_page(entry)
     mask, s = content_mask(src)
     b = bbox(mask)
+    if b is None:
+        return None
     y0, y1, x0, x1 = (v / s for v in b)
     cap = c.max_zoom if is_pdf(entry) else 1.0
-    pics = picture_mask(src, mask.shape, s, c.pictures)
-    (x, y, w, h), fill, img = place_window(rng, (x0, y0, x1 - x0 + 1 / s, y1 - y0 + 1 / s), pw / ph,
-                                           c.margin_frac[1], pw / cap, mask, s, pics, c.min_fill, c.fill_grid,
-                                           c.max_image)
+    boxes = entry["pictures"] if "pictures" in entry else pictures(src, c.pictures)
+    pics = picture_mask(boxes, mask.shape, s)
+    return src, (x0, y0, x1, y1), place_window(rng, (x0, y0, x1 - x0 + 1 / s, y1 - y0 + 1 / s), pw / ph,
+                                               c.margin_frac[1], pw / cap, mask, s, pics, c.min_fill,
+                                               c.fill_grid, c.max_image)
+
+
+def _raster_sheet(rng, entry, pw, ph, c):
+    """Sheet from a raster page: the window of place_window, PDF pages re-rendered so the window is >= 1:1."""
+    src, (x0, y0, x1, y1), ((x, y, w, h), fill, img, ok) = raster_window(rng, entry, pw, ph, c)
+    cap = c.max_zoom if is_pdf(entry) else 1.0
     k = min(max(pw / w, 1.0), cap)
     if k > 1:
         src = raster_page(entry, k)
@@ -39,7 +49,8 @@ def _raster_sheet(rng, entry, pw, ph, c):
     crop = _crop(src, *(round(v * k) for v in (x, y, w, h)), pad)
     gray = cv2.resize(crop, (pw, ph), interpolation=cv2.INTER_AREA if crop.shape[1] >= pw else cv2.INTER_CUBIC)
     margin = float(max(x0 - x, x + w - x1, y0 - y, y + h - y1, 0.0) / w)
-    return gray, dict(window=(x, y, w, h), zoom=k, fill=fill, image_share=img, upscale=float(pw / crop.shape[1]),
+    return gray, dict(window=(x, y, w, h), window_ok=ok, zoom=k, fill=fill, image_share=img,
+                      upscale=float(pw / crop.shape[1]),
                       margin=margin)
 
 

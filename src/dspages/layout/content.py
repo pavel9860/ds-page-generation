@@ -26,25 +26,6 @@ def bbox(mask):
             int(cols.argmax()), len(cols) - 1 - int(cols[::-1].argmax()))
 
 
-def window_fill(mask, win, grid):
-    """Fill of every window position sliding along axis 0 of mask (window spans axis 1 fully): the fraction
-    of its grid x grid patches holding ink. win = window length along axis 0."""
-    ii = cv2.integral(mask.astype(np.uint8)).astype(np.int64)
-    n = mask.shape[0] - win + 1
-    rows = np.arange(n)[:, None] + np.round(np.linspace(0, win, grid + 1)).astype(int)[None, :]
-    cols = np.round(np.linspace(0, mask.shape[1], grid + 1)).astype(int)
-    c = ii[rows[:, :, None], cols[None, None, :]]
-    s = c[:, 1:, 1:] - c[:, :-1, 1:] - c[:, 1:, :-1] + c[:, :-1, :-1]
-    area = np.diff(rows, axis=1)[:, :, None] * np.diff(cols)[None, None, :]
-    return (s > PATCH_INK_EPS * area).mean(axis=(1, 2))
-
-
-def _window_share(mask, win):
-    """Share of mask inside every window position sliding along axis 0 (window spans axis 1)."""
-    rows = np.concatenate([[0], np.cumsum(mask.sum(1))])
-    return (rows[win:] - rows[:-win]) / (win * mask.shape[1])
-
-
 def window_limits(bw, bh, aspect, max_margin):
     """Widths [lo, hi] of a window of aspect w/h around a content box bw x bh: lo contains all of it; hi keeps the
     margins <= max_margin of the window on the axis where the content is relatively narrower (the other axis is
@@ -52,34 +33,54 @@ def window_limits(bw, bh, aspect, max_margin):
     return max(bw, bh * aspect), min(bw, bh * aspect) / (1 - 2 * max_margin)
 
 
-def place_window(rng, box, aspect, max_margin, min_w, mask, s, images, min_fill, grid, max_image):
-    """Window (x, y, w, h) in page px of aspect w/h for a content box (x0, y0, bw, bh) in page px: width drawn in
-    [max(lo, min_w), hi] when the content fits (all of it inside, margins <= max_margin), else hi, cropping the
-    content along its relatively longer axis at a position with fill >= min_fill and picture share
-    <= max_image (masks at scale s; images = picture boxes). The window may reach past the page: those parts are
-    padded. -> window, fill, picture share."""
+WIDTHS = 6
+POSITIONS = 9
+
+
+def window_stats(ink, pics, s, wins, grid):
+    """Fill (share of the window's grid x grid patches holding ink) and picture share of windows (k, 4) of
+    (x, y, w, h) in page px; ink and pics are integral images of masks at scale s. Parts past the page count as
+    empty. -> (fill (k,), share (k,))."""
+    wins = np.asarray(wins, float).reshape(-1, 4) * s
+    x, y, w, h = wins.T
+    H, W = ink.shape[0] - 1, ink.shape[1] - 1
+    t = np.linspace(0, 1, grid + 1)
+    ys = np.round(y[:, None] + h[:, None] * t).astype(int)
+    xs = np.round(x[:, None] + w[:, None] * t).astype(int)
+    area = np.maximum(np.diff(ys)[:, :, None] * np.diff(xs)[:, None, :], 1)
+    yc, xc = np.clip(ys, 0, H), np.clip(xs, 0, W)
+    c = ink[yc[:, :, None], xc[:, None, :]]
+    cells = c[:, 1:, 1:] - c[:, :-1, 1:] - c[:, 1:, :-1] + c[:, :-1, :-1]
+    fill = (cells > PATCH_INK_EPS * area).mean(axis=(1, 2))
+    y0, y1, x0, x1 = yc[:, 0], yc[:, -1], xc[:, 0], xc[:, -1]
+    p = pics[y1, x1] - pics[y0, x1] - pics[y1, x0] + pics[y0, x0]
+    return fill, p / np.maximum(w * h, 1.0)
+
+
+def _axis(c0, cn, d, max_margin):
+    """Window starts along one axis: around the content with margins <= max_margin when it fits, else crops."""
+    if d >= cn:
+        m = min(max_margin * d, d - cn)
+        a = max(0.0, d - cn - m)
+        return c0 - np.linspace(a, m, POSITIONS) if a <= m else np.array([c0 - (d - cn) / 2])
+    return c0 + np.linspace(0, cn - d, POSITIONS)
+
+
+def place_window(rng, box, aspect, max_margin, min_w, mask, s, pics, min_fill, grid, max_image):
+    """Window (x, y, w, h) in page px of aspect w/h for a content box (x0, y0, bw, bh) in page px, drawn among the
+    candidates (WIDTHS widths in [max(lo, min_w), hi], POSITIONS starts per cropped or margin axis) with fill >=
+    min_fill and picture share <= max_image (masks at scale s). The window may reach past the page: those parts
+    are padded and count as empty. -> window, fill, picture share, whether it meets both limits (else the
+    candidate of highest fill among the lowest picture share)."""
     x0, y0, bw, bh = box
     lo, hi = window_limits(bw, bh, aspect, max_margin)
-    w = rng.uniform(max(lo, min_w), hi) if max(lo, min_w) <= hi else max(hi, min_w)
-    h = w / aspect
-    pos, fill, img = [], 1.0, 0.0
-    for c0, cn, d, axis in ((x0, bw, w, 1), (y0, bh, h, 0)):
-        if d >= cn:
-            m = min(max_margin * d, d - cn)
-            a = rng.uniform(max(0.0, d - cn - m), m) if d - cn <= 2 * m else (d - cn) / 2
-            pos.append(c0 - a)
-            continue
-        m0, m1 = (round(v * s) for v in (y0, y0 + bh)) if axis == 0 else (round(v * s) for v in (x0, x0 + bw))
-        other = (round(x0 * s), round((x0 + bw) * s)) if axis == 0 else (round(y0 * s), round((y0 + bh) * s))
-        sub = mask[m0:m1, other[0]:other[1]] if axis == 0 else mask[other[0]:other[1], m0:m1].T
-        isub = (images[m0:m1, other[0]:other[1]] if axis == 0 else images[other[0]:other[1], m0:m1].T)
-        win = max(1, min(sub.shape[0], round(d * s)))
-        f = window_fill(sub, win, grid)
-        im = _window_share(isub, win)
-        fits = im <= max_image
-        ok = np.flatnonzero((f >= min_fill) & fits)
-        pool = np.flatnonzero(fits) if fits.any() else np.arange(len(f))
-        o = int(rng.choice(ok)) if ok.size else int(pool[f[pool].argmax()])
-        pos.append(c0 + o / s)
-        fill, img = float(f[o]), float(im[o])
-    return (pos[0], pos[1], w, h), fill, img
+    a = max(lo, min_w)
+    widths = np.linspace(a, hi, WIDTHS) if a <= hi else np.array([max(hi, min_w)])
+    ink = cv2.integral(mask.astype(np.uint8)).astype(np.int64)
+    pic = cv2.integral(pics.astype(np.uint8)).astype(np.int64)
+    wins = np.array([(x, y, w, w / aspect) for w in widths for x in _axis(x0, bw, w, max_margin)
+                     for y in _axis(y0, bh, w / aspect, max_margin)])
+    fill, share = window_stats(ink, pic, s, wins, grid)
+    ok = np.flatnonzero((fill >= min_fill) & (share <= max_image))
+    k = int(ok[rng.integers(len(ok))]) if ok.size else int(np.lexsort((-fill, np.maximum(share - max_image, 0)))[0])
+    return tuple(float(v) for v in wins[k]), float(fill[k]), float(share[k]), bool(ok.size)

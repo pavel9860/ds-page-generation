@@ -1,13 +1,13 @@
 """Pinhole camera over the page: pose from the view pool, focal length and principal point so the page fills
 the frame. Table plane z = 0, page above it, all lengths in mm; camera axes x right, y down, z forward."""
 import numpy as np
+from numba import njit
 
 from ..config import CameraCfg
 
 DIRECTIONS = 64
 DIST_STEPS = 12
 DIST_GROWTH = 1.3
-SELECT_POINTS = 4000
 
 
 def vertex_normals(X, Y, Z):
@@ -37,10 +37,27 @@ def project(P, cam):
     return np.stack([cam["f"] * q[:, 0] / q[:, 2] + cam["cx"], cam["f"] * q[:, 1] / q[:, 2] + cam["cy"]], -1), q[:, 2]
 
 
+@njit(cache=True, fastmath=True)
+def _worst_cos(eyes, P, N):
+    """Smallest cosine between the ray to each eye and the surface normal over all points."""
+    out = np.empty(eyes.shape[0])
+    for t in range(eyes.shape[0]):
+        m = 1.0
+        ex, ey, ez = eyes[t, 0], eyes[t, 1], eyes[t, 2]
+        for i in range(P.shape[0]):
+            rx, ry, rz = ex - P[i, 0], ey - P[i, 1], ez - P[i, 2]
+            c = (rx * N[i, 0] + ry * N[i, 1] + rz * N[i, 2]) / np.sqrt(rx * rx + ry * ry + rz * rz)
+            if c < m:
+                m = c
+        out[t] = m
+    return out
+
+
 def make_camera(rng, P, N, size, c: CameraCfg):
     """P, N: (n, 3) surface points and unit normals. -> camera dict (eye, R, f, cx, cy) and view parameters.
     Distance, tilt, azimuth, roll and fill are drawn. The pose is the one nearest to the drawn direction, among
-    DIRECTIONS view directions within tilt_deg, at the smallest of DIST_STEPS distances from the drawn one up
+    DIRECTIONS view directions within tilt_deg with the camera's horizontal offset from the page centre <=
+    max_offset x the page size, at the smallest of DIST_STEPS distances from the drawn one up
     (x DIST_GROWTH each) where every point is seen within incidence_deg of its normal (the least oblique pose if
     none is). The focal length sets the fill. min_px_per_mm reports the smallest local image scale
     f cos(incidence) / depth on the page."""
@@ -57,23 +74,22 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     azs = np.concatenate([[az0], k * np.pi * (3 - np.sqrt(5))])
     dirs = np.stack([np.sin(tilts) * np.cos(azs), np.sin(tilts) * np.sin(azs), np.cos(tilts)], -1)
     d0 = dirs[0]
-    sub = slice(None, None, max(1, len(P) // SELECT_POINTS))
+    reach = c.max_offset * float(np.ptp(P[:, :2], 0).max())
     cos_max = np.cos(np.radians(c.incidence_deg))
     best = None
     for dist in dist0 * DIST_GROWTH ** np.arange(DIST_STEPS):
         eyes = target + dist * dirs
-        rays = eyes[:, None, :] - P[sub][None]
-        cos_i = np.einsum("tnk,nk->tn", rays, N[sub]) / np.linalg.norm(rays, axis=-1)
-        worst = cos_i.min(1)
+        worst = np.where(dist * np.sin(tilts) <= reach, _worst_cos(eyes, P, N), -1.0)
         ok = np.flatnonzero(worst >= cos_max)
         if ok.size:
-            j = int(ok[np.argmax(dirs[ok] @ d0)])
-            best = (dist, j, eyes, cos_i, worst)
+            best = (dist, int(ok[np.argmax(dirs[ok] @ d0)]), eyes, worst)
             break
         j = int(worst.argmax())
-        if best is None or worst[j] > best[4][best[1]]:
-            best = (dist, j, eyes, cos_i, worst)
-    dist, k, eyes, cos_i, worst = best
+        if best is None or worst[j] > best[3][best[1]]:
+            best = (dist, j, eyes, worst)
+    dist, k, eyes, worst = best
+    ray = eyes[k] - P
+    cos_k = np.einsum("nk,nk->n", ray, N) / np.linalg.norm(ray, axis=1)
     cam = dict(eye=eyes[k], R=look_at(eyes[k], target, roll), f=1.0, cx=0.0, cy=0.0)
     xy, z = project(P, cam)
     lo, hi = xy.min(0), xy.max(0)
@@ -84,5 +100,5 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     view = dict(dist_mm=float(dist), tilt_deg=float(np.degrees(tilts[k])), azimuth_deg=float(np.degrees(azs[k])),
                 roll_deg=float(np.degrees(roll)), fill=float(fill), fov_deg=float(np.degrees(2 * np.arctan(h / 2 / f))),
                 max_incidence_deg=float(np.degrees(np.arccos(np.clip(worst[k], -1, 1)))),
-                min_px_per_mm=float((f * np.clip(cos_i[k], 0, 1) / z[sub]).min()))
+                min_px_per_mm=float((f * np.clip(cos_k, 0, 1) / z).min()))
     return cam, view

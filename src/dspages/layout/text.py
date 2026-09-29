@@ -1,8 +1,10 @@
 """Text pages: font discovery by real cmap coverage, snippets from book texts, glyph layout and blitting."""
 import glob
 import os
+import pickle
 import re
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 from fontTools.ttLib import TTFont
@@ -30,17 +32,44 @@ _MIN_SCRIPT_CMAP_SIZE = 40
 
 
 _CMAP_CACHE = {}
+_CMAP_FILE = Path("~/.cache/dspages/cmaps.pkl").expanduser()
+_cmap_dirty = False
+
+
+def _load_cmaps():
+    """Font cmaps cached on disk as {path: (mtime, cmap)}; reading every font's cmap takes seconds."""
+    if not _CMAP_CACHE and _CMAP_FILE.exists():
+        try:
+            with open(_CMAP_FILE, "rb") as f:
+                _CMAP_CACHE.update(pickle.load(f))
+        except Exception:
+            pass
+
+
+def _save_cmaps():
+    global _cmap_dirty
+    if _cmap_dirty:
+        _CMAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _CMAP_FILE.with_suffix(f".{os.getpid()}.tmp")
+        with open(tmp, "wb") as f:
+            pickle.dump(_CMAP_CACHE, f)
+        os.replace(tmp, _CMAP_FILE)
+        _cmap_dirty = False
 
 
 def _font_cmap(path: str) -> set:
-    cmap = _CMAP_CACHE.get(path)
-    if cmap is None:
+    global _cmap_dirty
+    _load_cmaps()
+    mtime = os.path.getmtime(path)
+    hit = _CMAP_CACHE.get(path)
+    if hit is None or hit[0] != mtime:
         try:
-            cmap = set(TTFont(path, fontNumber=0, lazy=True).getBestCmap() or ())
+            cmap = frozenset(TTFont(path, fontNumber=0, lazy=True).getBestCmap() or ())
         except Exception:
-            cmap = set()
-        _CMAP_CACHE[path] = cmap
-    return cmap
+            cmap = frozenset()
+        hit = _CMAP_CACHE[path] = (mtime, cmap)
+        _cmap_dirty = True
+    return hit[1]
 
 
 def _is_general_font(path: str) -> bool:
@@ -70,6 +99,7 @@ def find_fonts(font_dirs: tuple) -> tuple:
     candidates = sorted(p for d in dirs if os.path.isdir(d) for ext in ("ttf", "ttc", "otf")
                         for p in glob.glob(f"{d}/**/*.{ext}", recursive=True))
     found = tuple(p for p in candidates if _is_general_font(p) or _is_script_font(p))
+    _save_cmaps()
     if not found:
         raise FileNotFoundError(f"no supported fonts under {dirs}")
     return found

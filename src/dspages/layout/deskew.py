@@ -21,6 +21,10 @@ _SKIP_ANGLE_DEG = 0.25
 # structure dominating the variance metric, not real page skew) and
 # dropped rather than applied.
 _MAX_APPLIED_DEG = 10.0
+_MIN_STRIP_INK = 0.01
+_MIN_GAIN = 1.1
+_MIN_STRIPS = 3
+_MAX_SPREAD_DEG = 1.0
 
 
 def _row_variance_at_angle(bw: np.ndarray, angle_deg: float) -> float:
@@ -52,10 +56,10 @@ def _best_angle(bw: np.ndarray, max_deg: float) -> float:
 
 def estimate_deskew_angle(gray: np.ndarray, downscale_px: int = _DOWNSCALE_PX,
                           max_deg: float = _MAX_DEG, n_strips: int = _N_STRIPS) -> float:
-    """gray: uint8 2D. -> angle in degrees (rotate by +angle to deskew),
-    the median of independent per-strip estimates -- a single region's
-    spurious peak (a table border, a stray mark) skews the whole-page
-    variance metric, but can't move the median of several strips."""
+    """gray: uint8 2D. -> angle in degrees (rotate by +angle to deskew): the median of per-strip estimates over
+    strips with >= _MIN_STRIP_INK ink, a strip's angle counting only when it sharpens the row profile by
+    _MIN_GAIN over 0 deg (else 0); 0 unless >= _MIN_STRIPS strips agree within _MAX_SPREAD_DEG. Frame and rule
+    lines without text lines give sharp but spurious peaks; they fail the ink, gain or agreement test."""
     scale = min(1.0, downscale_px / max(gray.shape))
     small = (cv2.resize(gray, (round(gray.shape[1] * scale), round(gray.shape[0] * scale)),
                         interpolation=cv2.INTER_AREA) if scale < 1.0 else gray)
@@ -63,8 +67,18 @@ def estimate_deskew_angle(gray: np.ndarray, downscale_px: int = _DOWNSCALE_PX,
 
     h = bw.shape[0]
     strip_h = max(1, h // n_strips)
-    angles = [_best_angle(bw[i * strip_h:min(h, (i + 1) * strip_h)], max_deg)
-              for i in range(n_strips)]
+    angles = []
+    for i in range(n_strips):
+        strip = bw[i * strip_h:min(h, (i + 1) * strip_h)]
+        if (strip > 0).mean() < _MIN_STRIP_INK:
+            continue
+        a = _best_angle(strip, max_deg)
+        if _row_variance_at_angle(strip, a) >= _MIN_GAIN * _row_variance_at_angle(strip, 0.0):
+            angles.append(a)
+        else:
+            angles.append(0.0)
+    if len(angles) < _MIN_STRIPS or np.ptp(angles) > _MAX_SPREAD_DEG:
+        return 0.0
     return float(np.median(angles))
 
 
