@@ -1,7 +1,11 @@
 """Distributions, limits and errors of a generated run.
 
-python tools/analyze.py RUN_DIR [--preset full]
-Writes RUN_DIR/report/*.png and RUN_DIR/report/summary.json (counts, quantiles, samples outside the limits).
+python tools/analyze.py RUN_DIR [--preset full] [--manifest M] [--n_check 300] [--workers 6]
+Plan and part metas: distributions and samples outside the limits. With the manifest: the page conditions of the
+raster pages used (fill, picture share, skew) and the repetition of pages, snippets and documents. On n_check
+samples: UV maps (the warped image mapped back to the flat page, tools/uv_check.py) and 3D maps (isometry: edge
+lengths of map3d against the sheet grid).
+Writes RUN_DIR/report/*.png and RUN_DIR/report/summary.json.
 """
 import argparse
 import json
@@ -15,7 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from dspages import io  # noqa: E402
-from dspages.config import get_preset  # noqa: E402
+from dspages.config import get_preset, page_px  # noqa: E402
 
 INK, MUTED, BAR = "#1f2328", "#6e7781", "#3a6fd8"
 
@@ -55,13 +59,58 @@ def _grid(n, out, name, draw):
 
 
 def _metas(d):
-    return [io.load(p)[1] for p in sorted(d.glob("*.npz"))] if d.exists() else []
+    """Metas only (np.load reads an .npz member on access)."""
+    out = []
+    for p in sorted(d.glob("*.npz")) if d.exists() else []:
+        with np.load(p) as f:
+            out.append(json.loads(str(f["meta"])))
+    return out
+
+
+ISO_STEP = 10     # grid nodes per measured chord: float16 map3d resolves 0.125 mm at 128-256 mm (1 node = ~1 mm)
+
+
+def isometry(path, sheet_mm):
+    """Chord lengths over ISO_STEP grid nodes of the 3D map against the sheet grid (a lower bound of the arc, exact
+    on flat parts): -> (max |strain| along u, along v, mean |strain|)."""
+    with np.load(path) as f:
+        m = f["map3d"].astype(np.float32)
+    h, w = m.shape[:2]
+    k = ISO_STEP
+    su = np.linalg.norm(m[:, k:] - m[:, :-k], axis=-1) / (k * sheet_mm[0] / (w - 1)) - 1
+    sv = np.linalg.norm(m[k:] - m[:-k], axis=-1) / (k * sheet_mm[1] / (h - 1)) - 1
+    return float(np.abs(su).max()), float(np.abs(sv).max()), float(np.r_[np.abs(su).ravel(), np.abs(sv).ravel()].mean())
+
+
+def _uv(args):
+    import uv_check
+    return uv_check.check(*args)
+
+
+def repetition(plan, man):
+    """Uses per raster page, per book snippet (entry, offset) and per source document."""
+    raster = Counter((s["entry"]) for s in plan if man[s["entry"]]["kind"] == "raster")
+    snip = Counter((s["entry"], s["offset"]) for s in plan if man[s["entry"]]["kind"] == "book_text")
+    docs = Counter(man[s["entry"]]["source_path"] for s in plan)
+    return raster, snip, docs
+
+
+def conditions(plan, man, c):
+    """Raster pages used that break the manifest's page conditions."""
+    used = [man[i] for i in sorted({s["entry"] for s in plan}) if man[i]["kind"] == "raster"]
+    return dict(raster_pages_used=len(used),
+                fill_below_min=sum(e.get("fill", 1) < c.min_fill for e in used),
+                pictures_over_max=sum(e.get("picture_share", 0) > c.max_image for e in used),
+                skew_ge_3deg=sum(abs(e.get("deskew_deg", 0)) >= 3 for e in used)), used
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run")
     ap.add_argument("--preset", default="full")
+    ap.add_argument("--manifest", default=None)
+    ap.add_argument("--n_check", type=int, default=300)
+    ap.add_argument("--workers", type=int, default=6)
     a = ap.parse_args()
     run, P = Path(a.run), get_preset(a.preset)
     out = run / "report"
@@ -117,6 +166,44 @@ def main():
                   "light")])
         summary["over_incidence"] = [i for i, x in enumerate(v) if x["max_incidence_deg"] > cam.incidence_deg]
         summary["px_per_mm_q"] = np.quantile([x["min_px_per_mm"] for x in v], [0, 0.05, 0.5]).round(2).tolist()
+
+    if a.manifest:
+        from dspages.layout.sources import load_manifest
+        man = load_manifest(a.manifest)
+        cond, used = conditions(plan, man, P.layout)
+        raster, snip, docs = repetition(plan, man)
+        summary.update(cond, raster_page_max_uses=max(raster.values(), default=0),
+                       raster_pages_repeated=sum(v > 1 for v in raster.values()),
+                       snippets_repeated=sum(v > 1 for v in snip.values()),
+                       docs_used=len(docs), doc_uses_q=np.quantile(list(docs.values()), [0.5, 0.9, 0.99, 1]).tolist())
+        _grid(6, out, "pages", lambda ax: [
+            _hist(ax[0], [e.get("fill") for e in used], "fill of the raster pages used", P.layout.min_fill),
+            _hist(ax[1], [e.get("picture_share") for e in used], "picture share of the raster pages used",
+                  P.layout.max_image),
+            _hist(ax[2], [e.get("deskew_deg", 0) for e in used], "stored deskew [deg]", 3.0),
+            _bars(ax[3], Counter(min(v, 5) for v in raster.values()), "uses per raster page (5 = 5+)"),
+            _bars(ax[4], Counter(min(v, 5) for v in snip.values()), "uses per book snippet (5 = 5+)"),
+            _hist(ax[5], list(docs.values()), "samples per source document")])
+
+    paths = sorted((run / "samples").glob("*.npz"))
+    if paths and a.n_check:
+        from concurrent.futures import ProcessPoolExecutor
+        pick = [paths[i] for i in np.random.default_rng(0).choice(len(paths), min(a.n_check, len(paths)), False)]
+        pw, ph = page_px(P.layout.sheet_mm, P.layout.canvas_px)
+        with ProcessPoolExecutor(a.workers) as pool:
+            iso = list(pool.map(isometry, pick, [P.layout.sheet_mm] * len(pick)))
+            uv = list(pool.map(_uv, [(p, (ph, pw)) for p in pick]))
+        shift = [r["shift_rms_px"] for r in uv if r["shift_rms_px"] is not None]
+        summary.update(n_checked=len(pick),
+                       iso_max_strain_q=np.quantile([max(x[:2]) for x in iso], [0.5, 0.9, 1]).round(4).tolist(),
+                       iso_mean_strain_median=float(np.median([x[2] for x in iso])),
+                       uv_seen_q=np.quantile([r["seen"] for r in uv], [0, 0.5]).round(3).tolist(),
+                       uv_shift_rms_px_q=np.quantile(shift, [0.5, 0.9, 1]).round(3).tolist(),
+                       uv_rmse_gain_q=np.quantile([r["rmse_gain"] for r in uv], [0.5, 0.9]).round(1).tolist())
+        _grid(3, out, "checks", lambda ax: [
+            _hist(ax[0], [100 * max(x[:2]) for x in iso], "3D map: max chord strain over 10 nodes [%]"),
+            _hist(ax[1], shift, "UV back map: RMS tile shift [px]"),
+            _hist(ax[2], [r["seen"] for r in uv], "UV back map: share of the page seen")])
 
     json.dump(summary, open(out / "summary.json", "w"), indent=1)
     print(json.dumps(summary, indent=1))

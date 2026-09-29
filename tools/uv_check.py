@@ -20,18 +20,20 @@ TILE = 128
 WINDOW = cv2.createHanningWindow((TILE, TILE), cv2.CV_32F)
 
 
-def check(path):
+def check(path, page_hw=None):
+    """page_hw: the page raster size when the run has no layouts/ (render only)."""
     a, _ = io.load(path)
-    page = io.load(path.parents[1] / "layouts" / path.name)[0]["page"]
-    flat = page_of(a["flat"], page.shape).astype(np.float32)
-    back = back_map(a["warped"], a["uv"].astype(np.float32), page.shape)
+    lay = path.parents[1] / "layouts" / path.name
+    page_hw = io.load(lay)[0]["page"].shape if lay.exists() else page_hw
+    flat = page_of(a["flat"], page_hw).astype(np.float32)
+    back = back_map(a["warped"], a["uv"].astype(np.float32), page_hw)
     ok = np.isfinite(back)
     f, b = flat[ok], back[ok]
     A = np.c_[b, np.ones_like(b)]
     fit = A @ np.linalg.lstsq(A, f, rcond=None)[0]
     shifts = []
-    for y in range(0, page.shape[0] - TILE + 1, TILE):
-        for x in range(0, page.shape[1] - TILE + 1, TILE):
+    for y in range(0, page_hw[0] - TILE + 1, TILE):
+        for x in range(0, page_hw[1] - TILE + 1, TILE):
             t_ok = ok[y:y + TILE, x:x + TILE]
             tf = flat[y:y + TILE, x:x + TILE]
             if not t_ok.all() or tf.std() < 10:
