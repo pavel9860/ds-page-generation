@@ -15,8 +15,6 @@ from concurrent.futures import ProcessPoolExecutor
 from dspages.conditions import script
 from dspages.config import get_preset
 from dspages.prep import manifest as M
-from dspages.layout.text import book_text
-from dspages.prep.text_extract import book_language
 
 
 def _pdf_pages(args):
@@ -28,11 +26,6 @@ def _pdf_pages(args):
     except Exception:
         return lang, 0
     return lang, min(n, M.PAGES_PER_PDF_CAP)
-
-
-def _book_pages(args):
-    path, page_chars = args
-    return book_language(path, M.LayoutCfg().scripts), len(book_text(path)) // page_chars
 
 
 def main():
@@ -47,14 +40,15 @@ def main():
     over_pdf, over_img = M.corpus_overflow_jobs()
     pdfs = [(j[0], j[2]) for j in M.corpus_pdf_jobs(meta) + over_pdf + M.arxiv_jobs() + M.book_scan_jobs()]
     images = [(j[0], j[1]) for j in over_img + M.pdf_png_jobs() + M.xfund_funsd_jobs()]
-    books = [(p, P.layout.book_page_chars) for p in M.book_txt_paths()]
+    books = [e for e in M.book_index() if e["kind"] == "text"]
 
     pages = defaultdict(Counter)                   # (group, language) -> {pdf, image, book}
     with ProcessPoolExecutor(a.workers) as pool:
         for lang, n in pool.map(_pdf_pages, pdfs, chunksize=16):
             pages[(script(dict(language=lang), sc), lang)]["pdf"] += n
-        for lang, n in pool.map(_book_pages, books, chunksize=16):
-            pages[(script(dict(language=lang), sc), lang)]["book"] += n
+    for e in books:
+        lang = e["language"]
+        pages[(script(dict(language=lang), sc), lang)]["book"] += e["chars"] // P.layout.book_page_chars
     for _, lang in images:
         pages[(script(dict(language=lang), sc), lang)]["image"] += 1
 
