@@ -162,8 +162,8 @@ class LayoutCfg:
     sheet_mm: tuple = (210.0, 297.0)
     canvas_px: tuple = (1024, 1365)                 # flat image (width, height); the sheet is fitted, rest padded
     margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
-    min_fill: float = 0.8                           # fraction of the content window's patches with ink
-    fill_grid: int = 10
+    min_fill: float = 0.75                          # fraction of the content window's patches with ink
+    fill_grid: int = 16
     max_image: float = 0.25                         # max share of the window covered by pictures
     pictures: PictureCfg = PictureCfg()
     max_zoom: float = 4.0                           # PDF re-render limit for a 1:1 window
