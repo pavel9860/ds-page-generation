@@ -2,9 +2,9 @@
 
 flat   (canvas h, w) uint8: the layout sheet (luminance) centred on a black canvas
 warped (h, w) uint8: the photo (luminance)
-uv     (uv h, uv w, 2) float16: page coordinates in [0, 1] (u across the width, v down the height) of each photo
+uv     (uv h, uv w, 2) float32: page coordinates in [0, 1] (u across the width, v down the height) of each photo
        pixel, at the photo's aspect, NaN off the page
-map3d  (map h, map w, 3) float16: X, Y, Z [mm] of the page grid (rows down the sheet height), table z = 0
+map3d  (map h, map w, 3) float32: X, Y, Z [mm] of the page grid (rows down the sheet height), table z = 0
 mask   (h, w) bool: photo pixels on the page
 """
 import cv2
@@ -81,5 +81,5 @@ def make_sample(rng, page, surf, P: Preset):
                      for A in (X, Y, Z)], -1)
     meta = dict(view=view, light=None if light is None else dict(sharp=light["sharp"], ambient=light["ambient"]),
                 effects=effects, page_frac=float(mask.mean()))
-    return dict(flat=canvas(page, P.layout.canvas_px), warped=warped, uv=_uv_map(uv, mask, uv_size).astype(np.float16),
-                map3d=map3d.astype(np.float16), mask=mask, meta=meta)
+    return dict(flat=canvas(page, P.layout.canvas_px), warped=warped, uv=_uv_map(uv, mask, uv_size).astype(np.float32),
+                map3d=map3d.astype(np.float32), mask=mask, meta=meta)

@@ -67,7 +67,7 @@ def _metas(d):
     return out
 
 
-ISO_STEP = 10     # grid nodes per measured chord: float16 map3d resolves 0.125 mm at 128-256 mm (1 node = ~1 mm)
+ISO_STEP = 10     # grid nodes per measured chord (1 node = ~1 mm)
 
 
 def isometry(path, sheet_mm):
