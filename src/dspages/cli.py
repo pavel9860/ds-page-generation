@@ -40,7 +40,7 @@ def load_plan(path):
         return [{k: _tuples(v) for k, v in json.loads(line).items()} for line in f]
 
 
-def _init(preset, out, seed):
+def _init(preset, out, seed, manifest=None):
     import numba
     from threadpoolctl import threadpool_limits
     cv2.setNumThreads(1)
@@ -48,7 +48,7 @@ def _init(preset, out, seed):
     threadpool_limits(1)
     P = get_preset(preset)
     _W.update(P=P, out=Path(out), seed=seed, plan=load_plan(Path(out) / "plan.jsonl"),
-              manifest=load_manifest(P.paths.manifest), fonts=find_fonts(P.paths.font_dirs))
+              manifest=load_manifest(manifest or P.paths.manifest), fonts=find_fonts(P.paths.font_dirs))
 
 
 def _rng(i, part):
@@ -126,6 +126,7 @@ def main(argv=None):
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--count", type=int, default=None)
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--manifest", default=None, help="manifest path (default: the preset's)")
     a = ap.parse_args(argv)
     out = Path(a.out)
     plan_path = out / "plan.jsonl"
@@ -133,7 +134,7 @@ def main(argv=None):
         P = get_preset(a.preset)
         out.mkdir(parents=True, exist_ok=True)
         with open(plan_path, "w") as f:
-            specs = plan(P, a.n, a.seed, load_manifest(P.paths.manifest))
+            specs = plan(P, a.n, a.seed, load_manifest(a.manifest or P.paths.manifest))
             for s in specs:
                 f.write(json.dumps(s) + "\n")
         per = {g: sum(s["script"] == g for s in specs) for g, _ in P.layout.script_mix}
@@ -143,7 +144,7 @@ def main(argv=None):
     n = sum(1 for _ in open(plan_path))
     idx = range(a.start, min(n, a.start + (a.count or n)))
     t0, times = time.time(), {}
-    with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed)) as pool:
+    with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed, a.manifest)) as pool:
         for k, (i, dt) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=1), 1):
             for step, v in dt.items():
                 times.setdefault(step, []).append(v)

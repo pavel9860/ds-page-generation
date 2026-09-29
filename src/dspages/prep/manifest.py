@@ -19,7 +19,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..conditions import script
 from ..config import LayoutCfg, Paths, get_preset, page_px
 from ..layout.content import bbox, content_mask, place_window, window_limits
 from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90, rotate_full_res
@@ -36,8 +35,7 @@ MIN_BOOK_WORDS = 3000
 BOOK_SCAN_LANGUAGES = {"Bakht Novel": "ur", "Dana Pani": "ur", "Yaaram novel": "ur", "Kandukondaen": "ta",
                        "Yoga Vasistam": "ta", "Nagaon_Ka_Rahasya": "hi", "kupdf.net_1-1-": "el", "Kusadikika": "sw"}
 SCAN_CHARS_PER_PAGE = 300                  # book PDFs with less text per page are used as raster pages
-PAGES_PER_PDF_CAP = 10                 # pages per PDF; all pages of rare-script documents
-RARE_SCRIPTS = ("cyrillic", "cjk", "other")
+PAGES_PER_PDF_CAP = 10                 # accepted pages per PDF
 
 
 def _init():
@@ -132,20 +130,19 @@ def _pdf_page_is_scan(page) -> bool:
 
 
 def _job_pdf(args):
-    """Pages in random order until PAGES_PER_PDF_CAP pass, or all pages of a chunk (start, end) of a rare-script
-    document; each page rendered once. Rejected pages come back as kind="rejected" records."""
+    """Pages in random order, each rendered once, until PAGES_PER_PDF_CAP pass; the rest of the document is not
+    touched. Rejected pages come back as kind="rejected" records."""
     import pymupdf as fitz
-    pdf_path, _, language, category, seed, *chunk = args
+    pdf_path, _, language, category, seed = args
     try:
         doc = fitz.open(pdf_path)
-        order = np.arange(*chunk[0]) if chunk else np.random.default_rng(seed).permutation(doc.page_count)
+        order = np.random.default_rng(seed).permutation(doc.page_count)
     except Exception:
         return []
-    cap = None if chunk else PAGES_PER_PDF_CAP
     recs, n = [], 0
     try:
         for pi in order.tolist():
-            if cap is not None and n >= cap:
+            if n >= PAGES_PER_PDF_CAP:
                 break
             page = doc[pi]
             pix = page.get_pixmap(matrix=fitz.Matrix(RASTER_ZOOM, RASTER_ZOOM), colorspace=fitz.csGRAY, alpha=False)
@@ -166,27 +163,6 @@ def _job_image(args):
     if gray is None:
         return [_reject(image_path, 0, language, "unreadable")]
     return [_page_record(gray, image_path, 0, language, category, True)]
-
-
-RARE_CHUNK = 50                       # pages per job of rare-script documents (all pages are used)
-
-
-def _chunk_rare(jobs):
-    """PDF jobs with rare-script documents split into RARE_CHUNK-page jobs, so one long book does not hold a
-    worker for the whole run."""
-    import pymupdf as fitz
-    out = []
-    for j in jobs:
-        if script(dict(language=j[2]), LayoutCfg().scripts) not in RARE_SCRIPTS:
-            out.append(j)
-            continue
-        try:
-            with fitz.open(j[0]) as d:
-                n = d.page_count
-        except Exception:
-            continue
-        out += [(*j, (a, min(a + RARE_CHUNK, n))) for a in range(0, n, RARE_CHUNK)]
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -312,8 +288,7 @@ def _run_group(name, jobs, job_fn, workers, out_f, rej_f, counts, t0):
 
 
 def main(out_path: str, workers: int, limit_files: int = None):
-    """Every usable page: PDF pages (PAGES_PER_PDF_CAP per document, all of rare-script ones), every image, and
-    one entry per book text."""
+    """Usable pages: up to PAGES_PER_PDF_CAP per PDF, every image, and one entry per book text."""
     meta_idx = load_metadata(os.path.join(LAYOUTS, "corpus", "metadata.jsonl"))
     overflow_pdf_jobs, overflow_img_jobs = corpus_overflow_jobs()
     groups = [
@@ -328,7 +303,6 @@ def main(out_path: str, workers: int, limit_files: int = None):
     ]
     if limit_files:
         groups = [(name, jobs[:limit_files], fn) for name, jobs, fn in groups]
-    groups = [(name, _chunk_rare(jobs) if fn is _job_pdf else jobs, fn) for name, jobs, fn in groups]
     t0, counts = time.time(), {}
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as out_f, \

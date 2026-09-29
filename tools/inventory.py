@@ -1,7 +1,7 @@
 """What the source folders hold against a plan's quotas: pages per script group and language, what to download.
 
 python tools/inventory.py [--preset full] [--n 100000] [--workers 12]
-Counts without rendering: PDF pages (PAGES_PER_PDF_CAP per document, all of rare-script ones), one page per image,
+Counts without rendering: PDF pages (PAGES_PER_PDF_CAP per document), one page per image,
 distinct book pages of book_page_chars characters. Upper bounds: pages that later fail the content and size checks
 are included. Groups of use_all take all their raster pages; the others share the rest of n by script_mix, raster
 pages first, then book snippets (repeating text beyond the distinct book pages, in other formatting).
@@ -27,8 +27,7 @@ def _pdf_pages(args):
             n = d.page_count
     except Exception:
         return lang, 0
-    rare = script(dict(language=lang), M.LayoutCfg().scripts) in M.RARE_SCRIPTS
-    return lang, n if rare else min(n, M.PAGES_PER_PDF_CAP)
+    return lang, min(n, M.PAGES_PER_PDF_CAP)
 
 
 def _book_pages(args):

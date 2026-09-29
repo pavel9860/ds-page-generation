@@ -141,7 +141,7 @@ class GridCfg:
 class PictureCfg:
     model: str = "~/.cache/dspages/yolov11n-doclaynet.onnx"   # python -m dspages.prep.layout_model
     weights_url: str = "https://huggingface.co/hantian/yolo-doclaynet/resolve/main/yolov11n-doclaynet.pt"  # AGPL-3.0
-    imgsz: int = 1024
+    imgsz: int = 640
     picture_class: int = 6                          # DocLayNet "Picture"
     conf: float = 0.3
     iou: float = 0.5
