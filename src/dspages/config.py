@@ -30,13 +30,21 @@ def paper_props(p: PaperCfg, gsm):
 
 @dataclass(frozen=True)
 class SceneCfg:
-    combos: tuple = (                               # (clamp, n_supports, folds, crumple): weight
+    combos: tuple = (                               # (clamp, n_supports, folds, crumple): weight; clamp "book":
         ((False, 0, True, False), 0.16),
         ((False, 1, False, False), 0.09), ((False, 2, False, False), 0.09), ((False, 3, False, False), 0.05),
         ((False, 1, True, False), 0.09), ((False, 2, True, False), 0.09), ((False, 3, True, False), 0.04),
         ((True, 0, False, False), 0.09), ((True, 1, False, False), 0.05), ((True, 2, False, False), 0.03),
         ((True, 0, True, False), 0.06), ((True, 1, True, False), 0.04),
-        ((False, 0, False, True), 0.0463))            # crumple: 5% of all
+        ((False, 0, False, True), 0.0463),            # crumple
+        (("book", 0, False, False), 0.3288))          # book page: 25% of all
+    book_deg: tuple = (10.0, 45.0)                  # book page: spine edge angle; the rest lies on a plane of
+    book_h: tuple = (0.0, 0.040)                    # height book_h (<= book_reach of the rise to it) from
+    book_plane: tuple = (0.4, 0.8)                  # book_plane of the length on
+    book_reach: float = 0.8
+    book_bend_deg: float = 15.0                     # book page: bend direction within +-book_bend_deg of a page axis
+    book_along_long_prob: float = 1 / 3             # profile along the long axis (bend lines across it): 1/3,
+                                                    # bend lines along the long axis (spine on the long side): 2/3
     clamp_deg: tuple = (5.0, 35.0)
     clamp_free_len: float = 0.03
     support_edge: float = 0.05
@@ -212,7 +220,8 @@ class CameraCfg:
 @dataclass(frozen=True)
 class LightCfg:
     ambient: tuple = (0.05, 0.35)
-    occluder_prob: float = 0.5                      # shadows of hands, arms, phones, heads over the page
+    occluder_prob: float = 0.0                      # shadows of hands, arms, phones, heads over the page (off:
+                                                    # the square and round shapes look unrealistic)
     dist_mm: tuple = (300.0, 2000.0)
     elev_deg: tuple = (20.0, 80.0)
     sharp_prob: float = 0.4                         # point light with hard cast shadows, else area light

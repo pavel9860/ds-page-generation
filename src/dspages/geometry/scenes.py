@@ -1,6 +1,7 @@
 """Scenes: what shapes the page profile, with parameters drawn feasible by construction.
 
-A scene holds, for one page end: clamp (edge tangent angle at s = 0, edge on the table, or None), supports
+A scene holds, for one page end: clamp (edge tangent angle at s = 0, edge on the table, or None), base (s_p, H):
+a book page, the part beyond s_p on a plane at height H, or None), supports
 [(s, h)] (line supports at arc length s, height h, sorted), folds [(s, theta, k)] (theta > 0 valley, k hinge
 stiffness), flat (near-flat variant) and crumple (flat page with a deep crease network).
 Feasibility:
@@ -74,7 +75,12 @@ def sample_scene(rng, c: SceneCfg, length, combo=None, flat=None):
     has_clamp, n_sup, has_folds, crumple = combo or pick(rng, c.combos)
     flat = rng.random() < c.near_flat_prob if flat is None else flat
     c = _near_flat(c) if flat else c
-    clamp = float(np.radians(rng.uniform(*c.clamp_deg))) if has_clamp else None
+    book = has_clamp == "book"
+    clamp = float(np.radians(rng.uniform(*(c.book_deg if book else c.clamp_deg)))) if has_clamp else None
+    base = None
+    if book:
+        sp = rng.uniform(*c.book_plane) * length
+        base = (float(sp), float(rng.uniform(c.book_h[0], min(c.book_h[1], c.book_reach * sp * np.sin(clamp)))))
     lo, hi = _support_bounds(c, length, clamp)
     s = lo + _spread(rng, n_sup, hi - lo, c.support_min_gap)
     supports = list(zip(s.tolist(), _heights(rng, c, s, clamp)))
@@ -83,18 +89,22 @@ def sample_scene(rng, c: SceneCfg, length, combo=None, flat=None):
     if has_folds and budget >= c.fold_angle_deg[0]:
         folds = [f for f in _folds(rng, c, length, budget)
                  if all(abs(f[0] - p) >= c.fold_min_gap for p, _ in supports)]
-    return dict(clamp=clamp, supports=supports, folds=folds, flat=flat, crumple=crumple)
+    return dict(clamp=clamp, supports=supports, folds=folds, flat=flat, crumple=crumple, base=base)
 
 
 def _side_b(rng, c: SceneCfg, sa, length, width):
     """Other page end: supports turned and re-heighted, clamp and fold angles jittered; fold lines stay straight.
     -> (end a without the folds a turning support line would cross, end b)."""
     c = _near_flat(c) if sa["flat"] else c
-    hi_clamp = c.clamp_deg[1]
+    lo_clamp, hi_clamp = c.book_deg if sa["base"] else c.clamp_deg
     if sa["folds"]:
         hi_clamp = min(hi_clamp, _fold_budget(c, sa["supports"], 0.0) - c.fold_angle_deg[0])
     clamp = None if sa["clamp"] is None else float(np.clip(
-        sa["clamp"] * (1 + c.side_b_jitter * rng.uniform(-1, 1)), np.radians(c.clamp_deg[0]), np.radians(hi_clamp)))
+        sa["clamp"] * (1 + c.side_b_jitter * rng.uniform(-1, 1)), np.radians(lo_clamp), np.radians(hi_clamp)))
+    base = None
+    if sa["base"]:
+        sp, H = sa["base"]
+        base = (sp, float(min(H * (1 + c.height_jitter * rng.uniform(-1, 1)), c.book_reach * sp * np.sin(clamp))))
     lo, hi = _support_bounds(c, length, clamp)
     n = len(sa["supports"])
     pa = [p for p, _ in sa["supports"]]
@@ -117,7 +127,7 @@ def _side_b(rng, c: SceneCfg, sa, length, width):
              for p, t, k in sa["folds"]]
     f = min(1.0, budget / max(sum(abs(t) for _, t, _ in folds), 1e-12))
     return sa, dict(clamp=clamp, supports=supports, folds=[(p, t * f, k) for p, t, k in folds],
-                    flat=sa["flat"], crumple=sa["crumple"])
+                    flat=sa["flat"], crumple=sa["crumple"], base=base)
 
 
 def sample_ends(rng, c: SceneCfg, length, width, two, combo=None, flat=None):
@@ -132,11 +142,13 @@ def lerp_scene(a, b, t):
     return dict(clamp=None if a["clamp"] is None else lerp(a["clamp"], b["clamp"]),
                 supports=[(lerp(s0, s1), lerp(h0, h1)) for (s0, h0), (s1, h1) in zip(a["supports"], b["supports"])],
                 folds=[(s0, lerp(t0, t1), k0) for (s0, t0, k0), (_, t1, _) in zip(a["folds"], b["folds"])],
-                flat=a["flat"], crumple=a["crumple"])
+                flat=a["flat"], crumple=a["crumple"],
+                base=None if a["base"] is None else (a["base"][0], lerp(a["base"][1], b["base"][1])))
 
 
 def scene_label(sc):
     return "+".join(filter(None, ["flat" if sc["flat"] else "", "crumple" if sc["crumple"] else "",
-                                  "clamp" if sc["clamp"] is not None else "",
+                                  "book" if sc.get("base") else "",
+                                  "clamp" if sc["clamp"] is not None and not sc.get("base") else "",
                                   f"{len(sc['supports'])}sup" if sc["supports"] else "",
                                   f"{len(sc['folds'])}fold" if sc["folds"] else ""])) or "flat_table"

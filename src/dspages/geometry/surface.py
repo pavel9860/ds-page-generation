@@ -85,7 +85,7 @@ def make_surface(rng, g: GeometryCfg, paper, cond):
     for tk in t:
         sc = lerp_scene(sa, sb, tk)
         s, x, z, y = solve_strip(lp, pp["q"], pp["bending"], sc["folds"], sc["supports"], sc["clamp"],
-                                 g.strip_segments, y)
+                                 g.strip_segments, y, sc["base"])
         slices.append((np.interp(up, s, x), np.interp(up, s, z)))
     k = np.clip(np.searchsorted(t, vg / wg, side="right") - 1, 0, max(len(t) - 2, 0))
     wt = ((vg / wg - t[k]) / (t[min(1, len(t) - 1)] - t[0] or 1.0))[:, None]

@@ -70,24 +70,25 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     fill = rng.uniform(*c.fill)
     tmax = np.radians(c.tilt_deg[1])
     k = np.arange(DIRECTIONS)
-    tilts = np.concatenate([[tilt0], tmax * np.sqrt((k + 0.5) / DIRECTIONS)])
     azs = np.concatenate([[az0], k * np.pi * (3 - np.sqrt(5))])
-    dirs = np.stack([np.sin(tilts) * np.cos(azs), np.sin(tilts) * np.sin(azs), np.cos(tilts)], -1)
-    d0 = dirs[0]
+    d0 = np.array([np.sin(tilt0) * np.cos(az0), np.sin(tilt0) * np.sin(az0), np.cos(tilt0)])
     reach = c.max_offset * float(np.ptp(P[:, :2], 0).max())
     cos_max = np.cos(np.radians(c.incidence_deg))
     best = None
     for dist in dist0 * DIST_GROWTH ** np.arange(DIST_STEPS):
+        t_d = min(tmax, np.arcsin(min(1.0, reach / dist)))      # directions spread over the tilts the offset allows
+        tilts = np.concatenate([[tilt0], t_d * np.sqrt((k + 0.5) / DIRECTIONS)])
+        dirs = np.stack([np.sin(tilts) * np.cos(azs), np.sin(tilts) * np.sin(azs), np.cos(tilts)], -1)
         eyes = target + dist * dirs
-        worst = np.where(dist * np.sin(tilts) <= reach, _worst_cos(eyes, P, N), -1.0)
+        worst = np.where(dist * np.sin(tilts) <= reach * (1 + 1e-9), _worst_cos(eyes, P, N), -1.0)
         ok = np.flatnonzero(worst >= cos_max)
         if ok.size:
-            best = (dist, int(ok[np.argmax(dirs[ok] @ d0)]), eyes, worst)
+            best = (dist, int(ok[np.argmax(dirs[ok] @ d0)]), eyes, worst, tilts)
             break
         j = int(worst.argmax())
         if best is None or worst[j] > best[3][best[1]]:
-            best = (dist, j, eyes, worst)
-    dist, k, eyes, worst = best
+            best = (dist, j, eyes, worst, tilts)
+    dist, k, eyes, worst, tilts = best
     ray = eyes[k] - P
     cos_k = np.einsum("nk,nk->n", ray, N) / np.linalg.norm(ray, axis=1)
     cam = dict(eye=eyes[k], R=look_at(eyes[k], target, roll), f=1.0, cx=0.0, cy=0.0)

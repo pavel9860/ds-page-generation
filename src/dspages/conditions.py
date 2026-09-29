@@ -141,6 +141,10 @@ def plan(P: Preset, n, seed, manifest):
     for i in np.flatnonzero(entry >= 0):
         s = _canonical({k: cols[k][i] for k in cols})
         s["bend_dir"] = float(rng.uniform(*s.pop("bend_bin")))
+        if s["combo"][0] == "book":
+            sc = P.geometry.scene
+            s["bend_dir"] = float(rng.uniform(-sc.book_bend_deg, sc.book_bend_deg))
+            s["along_long"] = bool(rng.random() < sc.book_along_long_prob)
         s["entry"], s["offset"] = int(entry[i]), int(offset[i])
         specs.append(s)
     return specs
