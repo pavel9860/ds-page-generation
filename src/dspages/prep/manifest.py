@@ -207,7 +207,7 @@ def xfund_funsd_jobs():
 
 
 def sheet_music_jobs():
-    return [(p, None, "unknown", "sheet_music", _seed(p))
+    return [(p, None, "xx", "sheet_music", _seed(p))
             for p in sorted(glob.glob(os.path.join(LAYOUTS, "sheet_music", "*.pdf")))]
 
 
