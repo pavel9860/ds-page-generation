@@ -4,7 +4,7 @@ import json
 import cv2
 import numpy as np
 
-from .deskew import estimate_deskew_angle, needs_deskew, rotate90, rotate_full_res
+from .deskew import rotate90, rotate_full_res
 
 RASTER_ZOOM = 2.0
 
@@ -19,8 +19,8 @@ def is_pdf(entry):
 
 
 def raster_page(entry, scale=1.0):
-    """uint8 gray page of a raster entry at scale x the manifest's size, turned upright and deskewed. PDF pages
-    are rendered at that scale (vector sharp); images are resized."""
+    """uint8 gray page of a raster entry at scale x the manifest's size, turned upright and deskewed by the
+    manifest's angles. PDF pages are rendered at that scale (vector sharp); images are resized."""
     if is_pdf(entry):
         import pymupdf as fitz
         with fitz.open(entry["source_path"]) as doc:
@@ -33,7 +33,6 @@ def raster_page(entry, scale=1.0):
     h, w = round(entry["used_h"] * scale), round(entry["used_w"] * scale)
     if gray.shape != (h, w):
         gray = cv2.resize(gray, (w, h), interpolation=cv2.INTER_AREA if gray.size > h * w else cv2.INTER_LINEAR)
-    angle = entry.get("deskew_deg", estimate_deskew_angle(gray) if entry["needs_deskew"] else 0.0)
-    if needs_deskew(angle):
-        gray = rotate_full_res(gray, angle, fill_value=255)
+    if entry.get("deskew_deg"):
+        gray = rotate_full_res(gray, entry["deskew_deg"], fill_value=255)
     return gray

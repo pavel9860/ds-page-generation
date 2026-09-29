@@ -4,8 +4,8 @@ import numpy as np
 
 from ..config import Preset, page_px
 from . import paper
-from .content import bbox, content_mask, place_window
-from .pictures import picture_mask, pictures
+from .content import SCAN_MAX_SIDE, bbox, content_mask, place_window
+from .pictures import picture_mask
 from .grid import crossings, grid_page
 from .sources import is_pdf, raster_page
 from .text import book_snippet, render_text
@@ -21,29 +21,26 @@ def _crop(src, x, y, w, h, pad):
     return out
 
 
-def raster_window(rng, entry, pw, ph, c):
-    """The source page (before any effect), its content box (x0, y0, x1, y1) and place_window's window, fill,
-    picture share and ok for a pw x ph sheet; None without content."""
-    src = raster_page(entry)
-    mask, s = content_mask(src)
-    b = bbox(mask)
-    if b is None:
-        return None
-    y0, y1, x0, x1 = (v / s for v in b)
-    cap = c.max_zoom if is_pdf(entry) else 1.0
-    boxes = entry["pictures"] if "pictures" in entry else pictures(src, c.pictures)
-    pics = picture_mask(boxes, mask.shape, s)
-    return src, (x0, y0, x1, y1), place_window(rng, (x0, y0, x1 - x0 + 1 / s, y1 - y0 + 1 / s), pw / ph,
+def _raster_sheet(rng, entry, pw, ph, c):
+    """Sheet from a raster page: the window of place_window (fill, pictures) on the page's content. PDF pages are
+    rendered twice: small for the content mask, then once at the zoom that makes the window >= 1:1 (within
+    max_zoom); images are read once."""
+    pdf = is_pdf(entry)
+    if pdf:
+        q = min(1.0, SCAN_MAX_SIDE / max(entry["used_h"], entry["used_w"]))
+        mask, s = content_mask(raster_page(entry, q))
+        s *= q
+    else:
+        src = raster_page(entry)
+        mask, s = content_mask(src)
+    y0, y1, x0, x1 = (v / s for v in bbox(mask))
+    cap = c.max_zoom if pdf else 1.0
+    pics = picture_mask(entry.get("pictures", ()), mask.shape, s)
+    (x, y, w, h), fill, img, ok = place_window(rng, (x0, y0, x1 - x0 + 1 / s, y1 - y0 + 1 / s), pw / ph,
                                                c.margin_frac[1], pw / cap, mask, s, pics, c.min_fill,
                                                c.fill_grid, c.max_image)
-
-
-def _raster_sheet(rng, entry, pw, ph, c):
-    """Sheet from a raster page: the window of place_window, PDF pages re-rendered so the window is >= 1:1."""
-    src, (x0, y0, x1, y1), ((x, y, w, h), fill, img, ok) = raster_window(rng, entry, pw, ph, c)
-    cap = c.max_zoom if is_pdf(entry) else 1.0
     k = min(max(pw / w, 1.0), cap)
-    if k > 1:
+    if pdf:
         src = raster_page(entry, k)
     pad = int(np.percentile(src, 95))
     crop = _crop(src, *(round(v * k) for v in (x, y, w, h)), pad)

@@ -1,7 +1,9 @@
 """Source manifest: one JSON line per usable page of the layout corpora (PDF pages, images, book texts).
 
-Fields: source_path, page_index, language, category, kind (raster | book_text), content_frac, needs_deskew,
-rotate90, used_h, used_w (raster size the bbox refers to), bbox_y0, bbox_x0, bbox_h, bbox_w (content bbox).
+Raster fields: source_path, page_index, language, category, kind, rotate90, deskew_deg, used_h, used_w (raster
+size before deskew), bbox_y0, bbox_x0, bbox_h, bbox_w (content box after deskew), pictures (boxes), fill and
+picture_share of the layout's window check. Book texts: one entry each with chars. Rejected pages (and the check
+they failed) go to <out>.rejected.jsonl.
 
 python -m dspages.prep.manifest --out <paths.manifest>
 """
@@ -19,11 +21,10 @@ import numpy as np
 
 from ..conditions import script
 from ..config import LayoutCfg, Paths, get_preset, page_px
-from ..layout.content import bbox, content_mask, window_limits
-from ..layout.generate import raster_window
-from ..layout.pictures import pictures
-from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90
-from ..layout.sources import RASTER_ZOOM, is_pdf, raster_page
+from ..layout.content import bbox, content_mask, place_window, window_limits
+from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90, rotate_full_res
+from ..layout.pictures import picture_mask, pictures
+from ..layout.sources import RASTER_ZOOM
 from ..layout.text import _words, book_text
 from .text_extract import DOMINANT_IMAGE_AREA_FRAC, book_language, script_language
 
@@ -31,7 +32,6 @@ LAYOUTS = Paths().layouts
 BOOKS = Paths().books
 MIN_CONTENT_AREA_FRAC = 0.01
 MAX_MARGIN_FRAC = 0.50
-MIN_CONTENT_FRAC = 0.01
 MIN_BOOK_WORDS = 3000
 BOOK_SCAN_LANGUAGES = {"Bakht Novel": "ur", "Dana Pani": "ur", "Yaaram novel": "ur", "Kandukondaen": "ta",
                        "Yoga Vasistam": "ta", "Nagaon_Ka_Rahasya": "hi", "kupdf.net_1-1-": "el", "Kusadikika": "sw"}
@@ -67,95 +67,63 @@ def _seed(path: str) -> int:
 # per-page processing, shared by pdf and image sources
 # ---------------------------------------------------------------------------
 
+_LAYOUT = get_preset("full").layout
+
+
+def _reject(path, pi, language, reason, **kw):
+    return dict(kind="rejected", source_path=path, page_index=pi, language=language, reason=reason, **kw)
+
+
+def _page_record(gray, path, pi, language, category, scan):
+    """Manifest record of a rasterized page (RASTER_ZOOM for PDFs), or a rejected record naming the first failed
+    check, cheapest first: content box, size (a window reaches the sheet width at 1:1, within max_zoom for PDF
+    pages), fill without pictures, then pictures (the detector runs only on pages that passed the rest). Scans
+    are turned upright and deskewed first (the stored angles are replayed by raster_page); born-digital PDF
+    pages are taken as they are."""
+    c = _LAYOUT
+    pw, ph = page_px(c.sheet_mm, c.canvas_px)
+    rot = detect_rotation(gray) if scan else 0
+    gray = rotate90(gray, rot)
+    used_h, used_w = gray.shape
+    angle = estimate_deskew_angle(gray) if scan else 0.0
+    angle = angle if needs_deskew(angle) else 0.0
+    if angle:
+        gray = rotate_full_res(gray, angle, fill_value=255)
+    mask, s = content_mask(gray)
+    b = bbox(mask)
+    if b is None or not _bbox_keep(b, *mask.shape):
+        return _reject(path, pi, language, "content box")
+    y0, y1, x0, x1 = (v / s for v in b)
+    box = (x0, y0, x1 - x0 + 1 / s, y1 - y0 + 1 / s)
+    pdf = path.lower().endswith(".pdf")
+    cap = c.max_zoom if pdf else 1.0
+    if window_limits(box[2], box[3], pw / ph, c.margin_frac[1])[1] * cap < pw:
+        return _reject(path, pi, language, "too small")
+    args = (pw / ph, c.margin_frac[1], pw / cap, mask, s)
+    none = np.zeros_like(mask)
+    _, fill, _, ok = place_window(np.random.default_rng(0), box, *args, none, c.min_fill, c.fill_grid, 1.0)
+    if not ok:
+        return _reject(path, pi, language, "fill", fill=round(fill, 3))
+    boxes = pictures(gray, c.pictures)
+    _, fill, share, ok = place_window(np.random.default_rng(0), box, *args, picture_mask(boxes, mask.shape, s),
+                                      c.min_fill, c.fill_grid, c.max_image)
+    if not ok:
+        return _reject(path, pi, language, "pictures", fill=round(fill, 3), picture_share=round(share, 3))
+    y0, x0 = round(y0), round(x0)
+    return dict(source_path=path, page_index=pi, language=language, category=category, kind="raster",
+                rotate90=rot, deskew_deg=round(angle, 2), used_h=used_h, used_w=used_w,
+                bbox_y0=y0, bbox_x0=x0, bbox_h=round(box[3]), bbox_w=round(box[2]),
+                pictures=np.round(boxes, 1).tolist(), fill=round(fill, 3), picture_share=round(share, 3))
+
+
 def _bbox_keep(b, h, w):
     y0, y1, x0, x1 = b
     return ((y1 - y0 + 1) * (x1 - x0 + 1) >= MIN_CONTENT_AREA_FRAC * h * w
             and 1 - (y1 - y0 + 1) / h <= MAX_MARGIN_FRAC and 1 - (x1 - x0 + 1) / w <= MAX_MARGIN_FRAC)
 
 
-def _bbox_fields(b, s, h, w):
-    y0, y1, x0, x1 = (round(v / s) for v in b)
-    return dict(bbox_y0=y0, bbox_x0=x0, bbox_h=min(h, y1 + 1) - y0, bbox_w=min(w, x1 + 1) - x0)
-
-
-def _process_gray(gray: np.ndarray, rng, born_digital=False):
-    """Content fields of a rasterized page; scans are turned upright (90-degree steps) and their skew angle is
-    stored, born-digital PDF pages are taken as they are."""
-    rot = 0 if born_digital else detect_rotation(gray)
-    gray = rotate90(gray, rot)
-    mask, s = content_mask(gray)
-    b = bbox(mask)
-    if b is None or not _bbox_keep(b, *mask.shape) or mask.mean() < MIN_CONTENT_FRAC:
-        return None
-    angle = 0.0 if born_digital else estimate_deskew_angle(gray)
-    return dict(content_frac=round(float(mask.mean()), 5), needs_deskew=not born_digital, rotate90=rot,
-                deskew_deg=round(angle if needs_deskew(angle) else 0.0, 2),
-                used_h=gray.shape[0], used_w=gray.shape[1], **_bbox_fields(b, s, *gray.shape))
-
-
-_LAYOUT = get_preset("full").layout
-
-
-def _window_fields(entry):
-    """The entry with the layout's checks on the source page for the full preset sheet: window_ok (a window
-    with fill >= min_fill and picture share <= max_image), its fill and picture share, and size_ok (a window
-    reaches the sheet width at 1:1, within max_zoom for PDF pages). None without content."""
-    c = _LAYOUT
-    pw, ph = page_px(c.sheet_mm, c.canvas_px)
-    entry = dict(entry, pictures=np.round(pictures(raster_page(entry), c.pictures), 1).tolist())
-    r = raster_window(np.random.default_rng(0), entry, pw, ph, c)
-    if r is None:
-        return None
-    _, _, (_, fill, share, ok) = r
-    size_ok = window_limits(entry["bbox_w"], entry["bbox_h"], pw / ph, c.margin_frac[1])[1] * (
-        c.max_zoom if is_pdf(entry) else 1.0) >= pw
-    return dict(entry, window_ok=ok, size_ok=bool(size_ok), fill=round(fill, 3), picture_share=round(share, 3))
-
-
-def _pdf_text_blocks_px(page, zoom: float) -> list:
-    """Word-level boxes, not paragraph-level "blocks" -- a block's own
-    bbox spans its full line height/spacing and reads as much denser
-    content than it visually is, letting sparse pages clear the patch-
-    coverage bar that the pixel-based raster path would reject them on."""
-    return [(w[0] * zoom, w[1] * zoom, w[2] * zoom, w[3] * zoom) for w in page.get_text("words")]
-
-
-def _occupancy(blocks: list, width: int, height: int, x_off: float = 0.0,
-               y_off: float = 0.0, scale: float = 1.0) -> np.ndarray:
-    mask = np.zeros((height, width), dtype=bool)
-    for x0, y0, x1, y1 in blocks:
-        gx0 = max(0, int((x0 - x_off) * scale))
-        gy0 = max(0, int((y0 - y_off) * scale))
-        gx1 = min(width, int(np.ceil((x1 - x_off) * scale)))
-        gy1 = min(height, int(np.ceil((y1 - y_off) * scale)))
-        if gx1 > gx0 and gy1 > gy0:
-            mask[gy0:gy1, gx0:gx1] = True
-    return mask
-
-
-def _pdf_text_page_info(page, rng, zoom: float = RASTER_ZOOM):
-    """Content bbox from the page's word boxes (no rasterization); None for landscape pages."""
-    pw_pt, ph_pt = page.rect.width, page.rect.height
-    if pw_pt > ph_pt:
-        return None
-    used_w, used_h = round(pw_pt * zoom), round(ph_pt * zoom)
-    blocks = _pdf_text_blocks_px(page, zoom)
-    if not blocks:
-        return None
-    s = min(1.0, 512 / max(used_w, used_h))
-    mask = _occupancy(blocks, max(1, round(used_w * s)), max(1, round(used_h * s)), scale=s)
-    b = bbox(mask)
-    if b is None or not _bbox_keep(b, *mask.shape):
-        return None
-    return dict(content_frac=round(float(mask.mean()), 5), needs_deskew=False, deskew_deg=0.0,
-                used_h=used_h, used_w=used_w,
-                **_bbox_fields(b, s, used_h, used_w))
-
-
 def _pdf_page_is_scan(page) -> bool:
-    """A page with a real text layer can still be a scanned image with an
-    OCR text overlay -- its own text bbox says nothing about visual skew
-    in that case, so it needs the raster/deskew path, not the vector one."""
+    """A page dominated by an image (a scan, possibly with an OCR text layer) needs upright/deskew handling."""
     page_area = page.rect.width * page.rect.height
     if not page_area:
         return False
@@ -163,37 +131,26 @@ def _pdf_page_is_scan(page) -> bool:
                > DOMINANT_IMAGE_AREA_FRAC for info in page.get_image_info())
 
 
-def _reject(path, pi, language, reason):
-    return dict(kind="rejected", source_path=path, page_index=pi, language=language, reason=reason)
-
-
 def _job_pdf(args):
-    """Pages in random order until PAGES_PER_PDF_CAP pass (all pages for rare scripts); rejected pages are
-    returned as kind="rejected" records."""
+    """Pages in random order until PAGES_PER_PDF_CAP pass, or all pages of a chunk (start, end) of a rare-script
+    document; each page rendered once. Rejected pages come back as kind="rejected" records."""
     import pymupdf as fitz
-    pdf_path, page_count_hint, language, category, seed = args
-    rng = np.random.default_rng(seed)
+    pdf_path, _, language, category, seed, *chunk = args
     try:
         doc = fitz.open(pdf_path)
-        rare = script(dict(language=language), LayoutCfg().scripts) in RARE_SCRIPTS
-        order = rng.permutation(doc.page_count)
+        order = np.arange(*chunk[0]) if chunk else np.random.default_rng(seed).permutation(doc.page_count)
     except Exception:
         return []
-    cap = None if rare else PAGES_PER_PDF_CAP
+    cap = None if chunk else PAGES_PER_PDF_CAP
     recs, n = [], 0
     try:
         for pi in order.tolist():
             if cap is not None and n >= cap:
                 break
             page = doc[pi]
-            scan = _pdf_page_is_scan(page)
-            info = bool(page.get_text().strip()) and not scan and _pdf_text_page_info(page, rng)
-            if not info:
-                pix = page.get_pixmap(matrix=fitz.Matrix(RASTER_ZOOM, RASTER_ZOOM),
-                                      colorspace=fitz.csGRAY, alpha=False)
-                gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
-                info = _process_gray(gray, rng, born_digital=not scan)
-            rec = _page_record(pdf_path, pi, language, category, info)
+            pix = page.get_pixmap(matrix=fitz.Matrix(RASTER_ZOOM, RASTER_ZOOM), colorspace=fitz.csGRAY, alpha=False)
+            gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
+            rec = _page_record(gray, pdf_path, pi, language, category, _pdf_page_is_scan(page))
             recs.append(rec)
             n += rec["kind"] == "raster"
     except Exception:
@@ -204,28 +161,32 @@ def _job_pdf(args):
 
 
 def _job_image(args):
-    image_path, language, category, seed = args
-    rng = np.random.default_rng(seed)
+    image_path, language, category, _ = args
     gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         return [_reject(image_path, 0, language, "unreadable")]
-    return [_page_record(image_path, 0, language, category, _process_gray(gray, rng))]
+    return [_page_record(gray, image_path, 0, language, category, True)]
 
 
-def _page_record(path, pi, language, category, info):
-    """Manifest record of a page, or a rejected record naming the failed check."""
-    if not info:
-        return _reject(path, pi, language, "content box")
-    rec = _window_fields(dict(source_path=path, page_index=pi, language=language, category=category,
-                              kind="raster", **info))
-    if rec is None:
-        return _reject(path, pi, language, "no content")
-    if not rec["window_ok"]:
-        return dict(_reject(path, pi, language, "pictures" if rec["picture_share"] > _LAYOUT.max_image
-                            else "fill"), fill=rec["fill"], picture_share=rec["picture_share"])
-    if not rec["size_ok"]:
-        return _reject(path, pi, language, "too small")
-    return rec
+RARE_CHUNK = 50                       # pages per job of rare-script documents (all pages are used)
+
+
+def _chunk_rare(jobs):
+    """PDF jobs with rare-script documents split into RARE_CHUNK-page jobs, so one long book does not hold a
+    worker for the whole run."""
+    import pymupdf as fitz
+    out = []
+    for j in jobs:
+        if script(dict(language=j[2]), LayoutCfg().scripts) not in RARE_SCRIPTS:
+            out.append(j)
+            continue
+        try:
+            with fitz.open(j[0]) as d:
+                n = d.page_count
+        except Exception:
+            continue
+        out += [(*j, (a, min(a + RARE_CHUNK, n))) for a in range(0, n, RARE_CHUNK)]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +328,7 @@ def main(out_path: str, workers: int, limit_files: int = None):
     ]
     if limit_files:
         groups = [(name, jobs[:limit_files], fn) for name, jobs, fn in groups]
+    groups = [(name, _chunk_rare(jobs) if fn is _job_pdf else jobs, fn) for name, jobs, fn in groups]
     t0, counts = time.time(), {}
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as out_f, \
