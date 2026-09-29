@@ -8,7 +8,7 @@ motion blur, vignetting, exposure and gamma, sensor noise at an ISO, JPEG.
 """
 import cv2
 import numpy as np
-from numba import njit
+from numba import njit, vectorize
 
 from ..config import LightCfg, RenderCfg
 from ..layout.paper import variable_blur
@@ -93,11 +93,13 @@ def shade(Q, N, eye, light, maps):
                   light["shininess"], SHADOW_BIAS_MM)
 
 
-def table_points(cam, size, step=1):
-    """Where the rays of every step-th pixel meet the table plane z = 0 (NaN if they do not)."""
+def table_points(cam, size, step=1, xs=None, ys=None):
+    """Where the rays of every step-th pixel (or of the pixel coordinates xs, ys) meet the table plane z = 0 (NaN
+    if they do not)."""
     w, h = size
-    xs, ys = np.meshgrid(np.arange(0, w, step, dtype=np.float32) + step / 2,
-                         np.arange(0, h, step, dtype=np.float32) + step / 2)
+    if xs is None:
+        xs, ys = np.meshgrid(np.arange(0, w, step, dtype=np.float32) + step / 2,
+                             np.arange(0, h, step, dtype=np.float32) + step / 2)
     d = np.stack([(xs - cam["cx"]) / cam["f"], (ys - cam["cy"]) / cam["f"],
                  np.ones_like(xs)], -1) @ cam["R"].astype(np.float32)
     t = -cam["eye"][2] / d[..., 2]
@@ -106,48 +108,79 @@ def table_points(cam, size, step=1):
     return Q
 
 
-def _lattice(seed, i, j):
-    h = (i.astype(np.int64) * 374761393 + j.astype(np.int64) * 668265263 + seed * 2246822519) & 0xFFFFFFFF
+@njit(cache=True, inline="always")
+def _hash(seed, i, j):
+    h = (i * 374761393 + j * 668265263 + seed * 2246822519) & 0xFFFFFFFF
     h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
-    return ((h ^ (h >> 16)) & 0xFFFF).astype(np.float32) / 65535.0
+    return np.float32((h ^ (h >> 16)) & 0xFFFF) / np.float32(65535.0)
 
 
+@vectorize(["float32(int64, float64, float64)"], cache=True)
+def _lattice(seed, i, j):
+    return _hash(seed, np.int64(i), np.int64(j))
+
+
+@njit(cache=True, inline="always")
+def _value(seed, x, y):
+    fi, fj = np.floor(x), np.floor(y)
+    i, j = np.int64(fi), np.int64(fj)
+    fx, fy = x - fi, y - fj
+    fx, fy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
+    a, b = _hash(seed, i, j), _hash(seed, i + 1, j)
+    c, d = _hash(seed, i, j + 1), _hash(seed, i + 1, j + 1)
+    return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy
+
+
+@vectorize(["float32(int64, float64, float64)"], cache=True)
 def value_noise(seed, x, y):
     """Smooth value noise in [0, 1] at arbitrary coordinates (lattice pitch 1)."""
-    i, j = np.floor(x), np.floor(y)
-    fx, fy = x - i, y - j
-    fx, fy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
-    a, b = _lattice(seed, i, j), _lattice(seed, i + 1, j)
-    c, d = _lattice(seed, i, j + 1), _lattice(seed, i + 1, j + 1)
-    return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy
+    return _value(seed, x, y)
+
+
+@njit(cache=True, fastmath=True)
+def _fbm(seed, x, y, scale, octaves, gain):
+    out = np.empty(x.size, np.float32)
+    for k in range(x.size):
+        acc, amp, f, tot = 0.0, 1.0, 1.0 / scale, 0.0
+        for o in range(octaves):
+            acc += amp * (_value(seed + o, x[k] * f, y[k] * f) * 2 - 1)
+            tot += amp
+            amp, f = amp * gain, f * 2.03
+        out[k] = acc / tot
+    return out
 
 
 def fbm(seed, x, y, scale, octaves=5, gain=0.5):
     """Fractal noise in about [-1, 1], feature size `scale` (same units as x, y)."""
-    out, amp, f, tot = 0.0, 1.0, 1.0 / scale, 0.0
-    for o in range(octaves):
-        out = out + amp * (value_noise(seed + o, x * f, y * f) * 2 - 1)
-        tot += amp
-        amp, f = amp * gain, f * 2.03
-    return out / tot
+    x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
+    return _fbm(int(seed), x.ravel(), y.ravel(), float(scale), int(octaves), float(gain)).reshape(x.shape)
+
+
+@njit(cache=True, fastmath=True)
+def _worley(seed, x, y, scale):
+    n = x.size
+    d1, d2, cid = np.empty(n, np.float32), np.empty(n, np.float32), np.empty(n, np.float32)
+    for k in range(n):
+        px, py = x[k] / scale, y[k] / scale
+        i0, j0 = np.int64(np.floor(px)), np.int64(np.floor(py))
+        a, b, c = 9.0, 9.0, 0.0
+        for di in range(-1, 2):
+            for dj in range(-1, 2):
+                i, j = i0 + di, j0 + dj
+                d = np.hypot(i + _hash(seed, i, j) - px, j + _hash(seed + 1, i, j) - py)
+                if d < a:
+                    a, b, c = d, a, _hash(seed + 2, i, j)
+                elif d < b:
+                    b = d
+        d1[k], d2[k], cid[k] = a, b, c
+    return d1, d2, cid
 
 
 def worley(seed, x, y, scale):
     """Cellular noise: distances to the nearest and second nearest jittered lattice point (feature size `scale`)
     and the nearest point's cell id in [0, 1]."""
-    x, y = x / scale, y / scale
-    i0, j0 = np.floor(x), np.floor(y)
-    d1 = np.full(x.shape, 9.0, np.float32)
-    d2, cid = d1.copy(), np.zeros(x.shape, np.float32)
-    for di in (-1, 0, 1):
-        for dj in (-1, 0, 1):
-            i, j = i0 + di, j0 + dj
-            d = np.hypot(i + _lattice(seed, i, j) - x, j + _lattice(seed + 1, i, j) - y)
-            near = d < d1
-            d2 = np.where(near, d1, np.minimum(d2, d))
-            cid = np.where(near, _lattice(seed + 2, i, j), cid)
-            d1 = np.minimum(d1, d)
-    return d1, d2, cid
+    x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
+    return tuple(r.reshape(x.shape) for r in _worley(int(seed), x.ravel(), y.ravel(), float(scale)))
 
 
 def warp(seed, x, y, scale, amount):
