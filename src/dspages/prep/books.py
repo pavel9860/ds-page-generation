@@ -18,7 +18,8 @@ import pymupdf as fitz
 from ..config import Paths
 from ..config import LayoutCfg
 from ..layout.text import book_text
-from .text_extract import book_language, extract_pdf_page_text, is_degenerate_repetition, join_pages, script_language
+from .text_extract import (book_language, extract_pdf_page_text, is_degenerate_repetition, join_pages, name_language,
+                           script_language)
 
 BOOKS = os.path.join(Paths().layouts, "books")
 OUT_ROOT = Paths().books
@@ -33,10 +34,10 @@ SCAN_LANGUAGES = {"Bakht Novel": "ur", "Dana Pani": "ur", "Yaaram novel": "ur", 
 def _scan_language(name):
     """SCAN_LANGUAGES (checked by eye), else the name's code (name.<code>.pdf), else a non-Latin script in the
     name, else "unknown"."""
-    code = re.search(r"\.([a-z]{2})(?:_\w+)?\.pdf$", name)
+    code = name_language(name)
     other = script_language("".join(c for c in name if not c.isascii()))
     return next((v for k, v in SCAN_LANGUAGES.items() if name.startswith(k)), None) or (
-        code.group(1) if code else other if other not in ("latin", "unknown") else "unknown")
+        code if code else other if other not in ("latin", "unknown") else "unknown")
 
 
 def _index_entry(pdf_path, txt_path, n_pages):

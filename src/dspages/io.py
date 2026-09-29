@@ -1,5 +1,6 @@
 """Sample files: one .npz per sample and part (arrays + meta as JSON), a .jpg preview where asked."""
 import json
+import zipfile
 from pathlib import Path
 
 import cv2
@@ -17,7 +18,10 @@ def _json(o):
 def save(path: Path, arrays: dict, meta: dict, preview=None, preview_path: Path = None):
     """preview is written to preview_path (default: beside the .npz)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, meta=np.array(json.dumps(meta, default=_json)), **arrays)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:   # np.load-able .npz; level 1:
+        for k, v in dict(meta=np.array(json.dumps(meta, default=_json)), **arrays).items():   # 2x faster, +5%
+            with z.open(k + ".npy", "w", force_zip64=True) as f:
+                np.lib.format.write_array(f, np.asarray(v))
     if preview is not None:
         preview_path = Path(preview_path or path.with_suffix(".jpg"))
         preview_path.parent.mkdir(parents=True, exist_ok=True)

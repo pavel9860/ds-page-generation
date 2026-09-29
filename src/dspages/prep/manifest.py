@@ -23,6 +23,7 @@ from ..layout.content import bbox, content_mask, place_window, window_limits
 from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90
 from ..layout.pictures import picture_mask, pictures
 from ..layout.sources import RASTER_ZOOM
+from .text_extract import name_language
 
 LAYOUTS = Paths().layouts
 BOOKS = Paths().books
@@ -94,7 +95,7 @@ def _page_record(gray, path, pi, language, category, scan, f=1.0):
     fill, _, ok = window(np.zeros_like(mask), 1.0)
     if not ok:
         return _reject(path, pi, language, "fill", fill=round(fill, 3))
-    boxes = pictures(gray, c.pictures) * f
+    boxes = pictures(gray, c.pictures) * f if category != "sheet_music" else np.zeros((0, 4))  # staves read as pictures
     fill, share, ok = window(picture_mask(boxes, mask.shape, s), c.max_image)
     if not ok:
         return _reject(path, pi, language, "pictures", fill=round(fill, 3), picture_share=round(share, 3))
@@ -127,6 +128,7 @@ def _job_pdf(args):
     touched. Rejected pages come back as kind="rejected" records."""
     import pymupdf as fitz
     pdf_path, _, language, category, seed = args
+    language = name_language(pdf_path) or language
     try:
         doc = fitz.open(pdf_path)
         order = np.random.default_rng(seed).permutation(doc.page_count)
@@ -154,6 +156,7 @@ def _job_pdf(args):
 
 def _job_image(args):
     image_path, language, category, _ = args
+    language = name_language(image_path) or language
     gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         return [_reject(image_path, 0, language, "unreadable")]
@@ -203,6 +206,11 @@ def xfund_funsd_jobs():
     return jobs
 
 
+def sheet_music_jobs():
+    return [(p, None, "unknown", "sheet_music", _seed(p))
+            for p in sorted(glob.glob(os.path.join(LAYOUTS, "sheet_music", "*.pdf")))]
+
+
 def arxiv_jobs():
     return [(p, None, "en", "scientific_paper", _seed(p))
             for p in sorted(glob.glob(os.path.join(LAYOUTS, "scientific_paper", "arxiv_pdfs", "*.pdf")))]
@@ -250,6 +258,7 @@ def main(out_path: str, workers: int, limit_files: int = None):
         (pdf_png_jobs(), _job_image),
         (xfund_funsd_jobs(), _job_image),
         (arxiv_jobs(), _job_pdf),
+        (sheet_music_jobs(), _job_pdf),
         (book_scan_jobs(books), _job_pdf),
     ]
     tasks = [(fn, job) for jobs, fn in groups for job in jobs[:limit_files]]

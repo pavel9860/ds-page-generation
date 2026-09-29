@@ -172,14 +172,19 @@ def script_language(text: str) -> str:
                             > 0.05 * sum(names.values()) else names.most_common(1)[0][0], "latin")
 
 
+def name_language(path: str):
+    """The language code in a file name (name.<code>.<ext>, name.<code>_<suffix>.<ext>), or None."""
+    m = re.search(r"\.([a-z]{2}|cyr|xx)(?:_\w+)?\.[A-Za-z0-9]+$", path)
+    return m.group(1) if m and m.group(1) != "xx" else None
+
+
 def book_language(path: str, scripts: dict) -> str:
     """Language of a book text: the file-name code (name.<code>.txt) when its script group matches the text's
     dominant Unicode script, else that script's code; Latin text without a usable code by classify_language."""
     lang = script_language(open(path, encoding="utf-8", errors="ignore").read(200000))
     if lang == "unknown":
         return lang
-    m = re.search(r"\.([a-z]{2})(?:_\w+)?\.txt$", path)
-    code = m.group(1) if m else None
+    code = name_language(path)
 
     def group(c):
         return next((g for g, ls in scripts.items() if c in ls), "latin")
