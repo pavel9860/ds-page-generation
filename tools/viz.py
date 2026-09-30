@@ -47,7 +47,7 @@ def shaded(map3d):
 
 def sample_figure(path, out):
     a, meta = io.load(path)
-    flat, warped, uv, map3d = a["flat"], a["warped"], a["uv"].astype(np.float32), a["map3d"].astype(np.float32)
+    flat, warped, uv, map3d = a["flat"], a["warped"], a["uv"].astype(np.float32), a["xyz"].astype(np.float32)
     fig, ax = plt.subplots(2, 3, figsize=(15, 13))
     ax = ax.ravel()
     ax[0].imshow(flat, cmap="gray", vmin=0, vmax=255)

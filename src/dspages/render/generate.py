@@ -6,6 +6,8 @@ warped (h, w) uint8: the photo (luminance)
 uv     (mesh h, mesh w, 2) float32: page coordinates in [0, 1] (u across the width, v down the height) of the photo,
        NaN off the page
 map3d  (mesh h, mesh w, 3) float32: X, Y, Z [mm] of the page grid (rows down the sheet height), table z = 0
+xyz    (mesh h, mesh w, 3) float32: map3d at the page coordinates uv of each photo node (same grid as uv), NaN off
+       the page
 mask   (h, w) bool: photo pixels on the page
 """
 import cv2
@@ -73,5 +75,8 @@ def make_sample(rng, page, surf, P: Preset):
     map3d = np.stack([X, Y, Z], -1).astype(np.float32)
     meta = dict(view=view, light=None if light is None else dict(sharp=light["sharp"], ambient=light["ambient"]),
                 effects=effects, page_frac=float(mask.mean()))
-    return dict(flat=page, warped=warped, uv=_uv_map(uv, mask, (nu, nv)).astype(np.float32), map3d=map3d, mask=mask,
-                meta=meta)
+    uvm = _uv_map(uv, mask, (nu, nv)).astype(np.float32)
+    xyz = cv2.remap(map3d, uvm[..., 0] * (nu - 1), uvm[..., 1] * (nv - 1), cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_REPLICATE)
+    xyz[np.isnan(uvm[..., 0])] = np.nan
+    return dict(flat=page, warped=warped, uv=uvm, map3d=map3d, xyz=xyz, mask=mask, meta=meta)

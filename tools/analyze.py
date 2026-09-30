@@ -3,8 +3,7 @@
 python tools/analyze.py RUN_DIR [--preset full] [--manifest M] [--n_check 300] [--workers 6]
 Plan and part metas: distributions and samples outside the limits. With the manifest: the page conditions of the
 raster pages used (fill, picture share, skew) and the repetition of pages, snippets and documents. On n_check
-samples: UV maps (the warped image mapped back to the flat page, tools/uv_check.py) and 3D maps (isometry: edge
-lengths of map3d against the sheet grid).
+samples: UV maps (the warped image mapped back to the flat page, tools/uv_check.py).
 Writes RUN_DIR/report/*.png and RUN_DIR/report/summary.json.
 """
 import argparse
@@ -65,21 +64,6 @@ def _metas(d):
         with np.load(p) as f:
             out.append(json.loads(str(f["meta"])))
     return out
-
-
-ISO_STEP = 10     # grid nodes per measured chord (1 node = ~1 mm)
-
-
-def isometry(path, sheet_mm):
-    """Chord lengths over ISO_STEP grid nodes of the 3D map against the sheet grid (a lower bound of the arc, exact
-    on flat parts): -> (max |strain| along u, along v, mean |strain|)."""
-    with np.load(path) as f:
-        m = f["map3d"].astype(np.float32)
-    h, w = m.shape[:2]
-    k = ISO_STEP
-    su = np.linalg.norm(m[:, k:] - m[:, :-k], axis=-1) / (k * sheet_mm[0] / (w - 1)) - 1
-    sv = np.linalg.norm(m[k:] - m[:-k], axis=-1) / (k * sheet_mm[1] / (h - 1)) - 1
-    return float(np.abs(su).max()), float(np.abs(sv).max()), float(np.r_[np.abs(su).ravel(), np.abs(sv).ravel()].mean())
 
 
 def _uv(path):
@@ -192,19 +176,15 @@ def main():
         from concurrent.futures import ProcessPoolExecutor
         pick = [paths[i] for i in np.random.default_rng(0).choice(len(paths), min(a.n_check, len(paths)), False)]
         with ProcessPoolExecutor(a.workers) as pool:
-            iso = list(pool.map(isometry, pick, [P.layout.sheet_mm] * len(pick)))
             uv = list(pool.map(_uv, pick))
         shift = [r["shift_rms_px"] for r in uv if r["shift_rms_px"] is not None]
         summary.update(n_checked=len(pick),
-                       iso_max_strain_q=np.quantile([max(x[:2]) for x in iso], [0.5, 0.9, 1]).round(4).tolist(),
-                       iso_mean_strain_median=float(np.median([x[2] for x in iso])),
                        uv_seen_q=np.quantile([r["seen"] for r in uv], [0, 0.5]).round(3).tolist(),
                        uv_shift_rms_px_q=np.quantile(shift, [0.5, 0.9, 1]).round(3).tolist(),
                        uv_rmse_gain_q=np.quantile([r["rmse_gain"] for r in uv], [0.5, 0.9]).round(1).tolist())
-        _grid(3, out, "checks", lambda ax: [
-            _hist(ax[0], [100 * max(x[:2]) for x in iso], "3D map: max chord strain over 10 nodes [%]"),
-            _hist(ax[1], shift, "UV back map: RMS tile shift [px]"),
-            _hist(ax[2], [r["seen"] for r in uv], "UV back map: share of the page seen")])
+        _grid(2, out, "checks", lambda ax: [
+            _hist(ax[0], shift, "UV back map: RMS tile shift [px]"),
+            _hist(ax[1], [r["seen"] for r in uv], "UV back map: share of the page seen")])
 
     json.dump(summary, open(out / "summary.json", "w"), indent=1)
     print(json.dumps(summary, indent=1))

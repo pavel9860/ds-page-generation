@@ -374,21 +374,14 @@ def _surface(rng, x, y):
 
 
 def _clutter(rng, x, y, g, reach):
-    """Things on the table around the page: other papers with text-like lines, and dark or light objects (mugs,
-    phones, pens) as discs, rounded boxes and bars."""
+    """Things on the table around the page: dark or light objects (mugs, phones, pens) as discs, rounded boxes and
+    bars."""
     for k in range(rng.poisson(2.0)):
         cx, cy = rng.uniform(-reach, reach, 2)
         th = rng.uniform(0, np.pi)
         a, b = (x - cx) * np.cos(th) + (y - cy) * np.sin(th), -(x - cx) * np.sin(th) + (y - cy) * np.cos(th)
-        kind = rng.integers(4)
-        if kind == 0:
-            w, h = rng.uniform(60, 220), rng.uniform(80, 300)
-            inside = (np.abs(a) < w / 2) & (np.abs(b) < h / 2)
-            lp = rng.uniform(4, 9)
-            line = ((b / lp) % 1 < 0.35) & (np.abs(a) < w / 2 - 12) & (np.abs(b) < h / 2 - 15) & (
-                value_noise(k, a / 3, np.floor(b / lp)) > 0.3)
-            g = np.where(inside, np.where(line, rng.uniform(0.2, 0.5), rng.uniform(0.75, 0.95)), g)
-        elif kind == 1:
+        kind = rng.integers(1, 4)
+        if kind == 1:
             r = rng.uniform(25, 60)
             d = np.hypot(a, b)
             g = np.where(d < r, np.where(d > r * 0.85, rng.uniform(0.6, 1), rng.uniform(0.05, 0.9)), g)

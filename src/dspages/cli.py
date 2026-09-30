@@ -3,7 +3,7 @@
 plan      DIR/plan.jsonl: n stratified sample specs (written by the other commands too when missing)
 layout    DIR/layouts/<i>.npz   page (sheet luminance), gray (clean sheet)
 geometry  DIR/geometry/<i>.npz  X, Y, Z [mm] page grid
-render    DIR/samples/<i>.npz   flat, warped, uv, map3d, mask (no metadata); reads layouts/ and geometry/
+render    DIR/samples/<i>.npz   flat, warped, uv, xyz, mask (no metadata); reads layouts/ and geometry/
           of the same index when present, else makes them in memory; DIR/meta.jsonl: one row per sample, the
           render metadata and its layout's (source page, window, fill, fonts, effects)
 all       layout, geometry and render of each sample, all saved
@@ -100,7 +100,7 @@ def _render(i, save_parts, dt):
     dt["geometry"], t = time.time() - t, time.time()
     o = make_sample(_rng(i, "render"), page, surf, view_preset(_W["P"], _W["plan"][i]))
     preview = np.hstack([cv2.resize(o["flat"], o["warped"].shape[1::-1]), o["warped"]])
-    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "uv", "map3d", "mask")}, None, preview,
+    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "uv", "xyz", "mask")}, None, preview,
             _preview("render", i))
     dt["render"] = time.time() - t
     return dict(sample=f"{i:07d}", **o["meta"], layout=lmeta)
