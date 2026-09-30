@@ -12,7 +12,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from .config import Preset, sheet_px
+from .config import Preset
 from .layout.content import window_limits
 from .layout.sources import is_pdf
 
@@ -84,7 +84,7 @@ def entry_pools(P: Preset, manifest):
     of the sheet's aspect around their content (margins <= margin_frac[1]) reaches the sheet width at 1:1:
     directly for images, within max_zoom for PDF pages."""
     c = P.layout
-    pw, ph = sheet_px(c.sheet_mm, c.page_w)
+    pw, ph = c.page_px
     pools = {g: ([], []) for g, _ in c.script_mix}
     for i, e in enumerate(manifest):
         g = pools.setdefault(script(e, c.scripts), ([], []))

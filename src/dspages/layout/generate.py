@@ -2,7 +2,7 @@
 import cv2
 import numpy as np
 
-from ..config import Preset, sheet_px
+from ..config import Preset
 from . import paper
 from .content import SCAN_MAX_SIDE, bbox, content_mask, place_window, window_stats
 from .pictures import picture_mask
@@ -61,7 +61,7 @@ def sheet_fill(gray, grid):
 def make_layout(rng, entry, P: Preset, fonts):
     """-> dict(page: uint8 luminance sheet, gray: uint8 clean sheet before effects, meta)."""
     c = P.layout
-    pw, ph = sheet_px(c.sheet_mm, c.page_w)
+    pw, ph = c.page_px
     ppm = pw / c.sheet_mm[0]
     meta = dict(source=entry["source_path"], page_index=entry["page_index"], offset=entry.get("offset", 0),
                 kind=entry["kind"], language=entry["language"], category=entry["category"])

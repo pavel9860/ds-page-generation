@@ -114,8 +114,8 @@ class DeepCreaseCfg:
 @dataclass(frozen=True)
 class GeometryCfg:
     sheet_mm: tuple = (210.0, 297.0)                # (width, height)
-    mesh_w: int = 256                               # page grid nodes across the width (height: sheet aspect),
-                                                    # layout page_w / 4: the 3D and UV maps are this grid
+    mesh: tuple = (256, 360)                        # page grid nodes (u across, v down): layout page_px / 4; the
+                                                    # 3D and UV maps are this grid
     strip_segments: int = 150
     two_profile_prob: float = 0.5
     n_slices: int = 9
@@ -169,7 +169,7 @@ class TextFormatCfg:
 @dataclass(frozen=True)
 class LayoutCfg:
     sheet_mm: tuple = (210.0, 297.0)
-    page_w: int = 1024                              # flat page and photo width px (height: sheet aspect)
+    page_px: tuple = (1024, 1440)                   # flat page and photo (width, height)
     margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
     min_fill: float = 0.75                          # fraction of the content window's patches with ink
     fill_grid: int = 16
@@ -264,20 +264,15 @@ def _off(effects):
 
 def _demo():
     sheet = (150.0, 150.0)
-    lay = LayoutCfg(sheet_mm=sheet, page_w=1024, margin_frac=(0.0, 0.0))
+    lay = LayoutCfg(sheet_mm=sheet, page_px=(1024, 1024), margin_frac=(0.0, 0.0))
     lay = replace(lay, effects=_off(lay.effects))
     ren = RenderCfg(background="black")
     ren = replace(ren, effects=_off(ren.effects))
-    geo = GeometryCfg(sheet_mm=sheet, mesh_w=256, shallow=replace(ShallowCreaseCfg(), prob=0.0))
+    geo = GeometryCfg(sheet_mm=sheet, mesh=(256, 256), shallow=replace(ShallowCreaseCfg(), prob=0.0))
     return Preset("demo", layout=lay, geometry=geo, render=ren)
 
 
 PRESETS = {"demo": _demo(), "full": Preset("full")}
-
-
-def sheet_px(sheet_mm, w):
-    """(w, h) of a raster or grid w wide at the sheet's aspect."""
-    return w, round(w * sheet_mm[1] / sheet_mm[0])
 
 
 def get_preset(name: str, **overrides) -> Preset:
