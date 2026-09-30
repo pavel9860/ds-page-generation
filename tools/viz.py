@@ -38,13 +38,6 @@ def back_map(warped, uv, page_hw):
     return out
 
 
-def page_of(flat, page_hw):
-    """The page inside the flat canvas (centered, as render.generate.canvas)."""
-    ph, pw = page_hw
-    y0, x0 = (flat.shape[0] - ph) // 2, (flat.shape[1] - pw) // 2
-    return flat[y0:y0 + ph, x0:x0 + pw]
-
-
 def shaded(map3d):
     n = np.cross(np.gradient(map3d, axis=1), np.gradient(map3d, axis=0))
     n /= np.linalg.norm(n, axis=-1, keepdims=True) + 1e-9
@@ -55,8 +48,6 @@ def shaded(map3d):
 def sample_figure(path, out):
     a, meta = io.load(path)
     flat, warped, uv, map3d = a["flat"], a["warped"], a["uv"].astype(np.float32), a["map3d"].astype(np.float32)
-    lay = path.parents[1] / "layouts" / path.name
-    page_hw = io.load(lay)[0]["page"].shape if lay.exists() else flat.shape
     fig, ax = plt.subplots(2, 3, figsize=(15, 13))
     ax = ax.ravel()
     ax[0].imshow(flat, cmap="gray", vmin=0, vmax=255)
@@ -67,9 +58,8 @@ def sample_figure(path, out):
     u, v = uv[ys, xs, 0], uv[ys, xs, 1]
     ok = np.isfinite(u)
     px, py = (xs + 0.5) * warped.shape[1] / w, (ys + 0.5) * warped.shape[0] / h
-    ph, pw = page_hw
-    x0, y0 = (flat.shape[1] - pw) / 2, (flat.shape[0] - ph) / 2
-    ax[1].quiver(px[ok], py[ok], (x0 + u[ok] * pw - px[ok]), (y0 + v[ok] * ph - py[ok]), color="#e4572e",
+    ph, pw = flat.shape
+    ax[1].quiver(px[ok], py[ok], (u[ok] * pw - px[ok]), (v[ok] * ph - py[ok]), color="#e4572e",
                  angles="xy", scale_units="xy", scale=1, width=0.003)
     ax[1].set_title("warped, arrows: warped pixel -> its flat position")
     Z = map3d[..., 2]
@@ -83,7 +73,7 @@ def sample_figure(path, out):
     ax[3].set_title("profiles, mm")
     ax[4].imshow(shaded(map3d), cmap="gray", vmin=0, vmax=1)
     ax[4].set_title("shaded surface")
-    back = back_map(warped, uv, page_hw)
+    back = back_map(warped, uv, flat.shape)
     ax[5].imshow(back, cmap="gray", vmin=0, vmax=255)
     ax[5].set_title("warped mapped back through UV")
     for x in ax[[0, 1, 2, 4, 5]]:

@@ -5,7 +5,7 @@ import pytest
 
 from conftest import fake_manifest
 from dspages.conditions import plan
-from dspages.config import page_px
+from dspages.config import sheet_px
 from dspages.geometry.surface import make_surface
 from dspages.render.generate import make_sample
 from dspages.render.raster import grid_faces, rasterize
@@ -25,7 +25,7 @@ def test_raster_plane_is_linear():
 
 
 def _samples(P, n):
-    pw, ph = page_px(P.layout.sheet_mm, P.layout.canvas_px)
+    pw, ph = sheet_px(P.layout.sheet_mm, P.layout.page_w)
     yy, xx = np.mgrid[0:ph, 0:pw]
     page = np.where((xx // 6 + yy // 6) % 2 == 0, 30, 230).astype(np.uint8)
     for k, spec in enumerate(plan(P, n, 1, fake_manifest())):
@@ -37,7 +37,7 @@ def _samples(P, n):
 @pytest.mark.parametrize("name", ["demo", "full"])
 def test_samples_in_frame_readable_consistent(name, demo, full_small):
     P = demo if name == "demo" else full_small
-    P = replace(P, geometry=replace(P.geometry, mesh=(64, 90), n_slices=3))
+    P = replace(P, geometry=replace(P.geometry, mesh_w=64, n_slices=3))
     for page, surf, o in _samples(P, 6):
         mask, uv = o["mask"], o["uv"].astype(np.float32)
         h, w = mask.shape
@@ -49,6 +49,7 @@ def test_samples_in_frame_readable_consistent(name, demo, full_small):
         assert d.max() < 0.05
         view = o["meta"]["view"]
         assert view["max_incidence_deg"] <= P.render.camera.incidence_deg + 1e-6
-        assert o["map3d"].shape == (*reversed(P.render.map_px), 3)
+        assert o["map3d"].shape == o["uv"].shape[:2] + (3,)
+        assert o["flat"].shape == o["warped"].shape
         if name == "demo":
             assert abs(o["warped"][mask].mean() - page.mean()) < 20

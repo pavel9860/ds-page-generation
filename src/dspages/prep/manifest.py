@@ -18,7 +18,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..config import Paths, get_preset, page_px
+from ..config import Paths, get_preset, sheet_px
 from ..layout.content import bbox, content_mask, place_window, window_limits
 from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90
 from ..layout.pictures import picture_mask, pictures
@@ -74,7 +74,7 @@ def _page_record(gray, path, pi, language, category, scan, f=1.0):
     estimated and stored (raster_page replays rotation and deskew). gray may be a reduced render: f page px per
     gray px; boxes and sizes are stored in page px."""
     c = _LAYOUT
-    pw, ph = page_px(c.sheet_mm, c.canvas_px)
+    pw, ph = sheet_px(c.sheet_mm, c.page_w)
     rot = detect_rotation(gray) if scan else 0
     if rot:
         gray = rotate90(gray, rot)

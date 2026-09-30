@@ -114,7 +114,8 @@ class DeepCreaseCfg:
 @dataclass(frozen=True)
 class GeometryCfg:
     sheet_mm: tuple = (210.0, 297.0)                # (width, height)
-    mesh: tuple = (212, 300)                        # page grid (u along width, v along height)
+    mesh_w: int = 212                               # page grid nodes across the width (height: sheet aspect);
+                                                    # the 3D and UV maps are this grid
     strip_segments: int = 150
     two_profile_prob: float = 0.5
     n_slices: int = 9
@@ -168,7 +169,7 @@ class TextFormatCfg:
 @dataclass(frozen=True)
 class LayoutCfg:
     sheet_mm: tuple = (210.0, 297.0)
-    canvas_px: tuple = (1024, 1365)                 # flat image (width, height); the sheet is fitted, rest padded
+    page_w: int = 1024                              # flat page and photo width px (height: sheet aspect)
     margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
     min_fill: float = 0.75                          # fraction of the content window's patches with ink
     fill_grid: int = 16
@@ -232,8 +233,6 @@ class LightCfg:
 
 @dataclass(frozen=True)
 class RenderCfg:
-    px: tuple = (1024, 1365)                        # warped photo (width, height)
-    map_px: tuple = (212, 300)                      # UV / 3D maps
     background: str = "texture"                     # "black" or "texture"
     black_prob: float = 0.2                         # black background share under "texture"
     camera: CameraCfg = CameraCfg()
@@ -264,22 +263,21 @@ def _off(effects):
 
 
 def _demo():
-    sheet, flat, maps = (150.0, 150.0), (1024, 1024), (256, 256)
-    lay = LayoutCfg(sheet_mm=sheet, canvas_px=flat, margin_frac=(0.0, 0.0))
+    sheet = (150.0, 150.0)
+    lay = LayoutCfg(sheet_mm=sheet, page_w=1024, margin_frac=(0.0, 0.0))
     lay = replace(lay, effects=_off(lay.effects))
-    ren = RenderCfg(px=flat, map_px=maps, background="black")
+    ren = RenderCfg(background="black")
     ren = replace(ren, effects=_off(ren.effects))
-    geo = GeometryCfg(sheet_mm=sheet, mesh=(256, 256), shallow=replace(ShallowCreaseCfg(), prob=0.0))
+    geo = GeometryCfg(sheet_mm=sheet, mesh_w=256, shallow=replace(ShallowCreaseCfg(), prob=0.0))
     return Preset("demo", layout=lay, geometry=geo, render=ren)
 
 
 PRESETS = {"demo": _demo(), "full": Preset("full")}
 
 
-def page_px(sheet_mm, canvas_px):
-    """Sheet raster size fitted into the canvas, aspect kept."""
-    s = min(canvas_px[0] / sheet_mm[0], canvas_px[1] / sheet_mm[1])
-    return round(sheet_mm[0] * s), round(sheet_mm[1] * s)
+def sheet_px(sheet_mm, w):
+    """(w, h) of a raster or grid w wide at the sheet's aspect."""
+    return w, round(w * sheet_mm[1] / sheet_mm[0])
 
 
 def get_preset(name: str, **overrides) -> Preset:

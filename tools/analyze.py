@@ -19,7 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from dspages import io  # noqa: E402
-from dspages.config import get_preset, page_px  # noqa: E402
+from dspages.config import get_preset  # noqa: E402
 
 INK, MUTED, BAR = "#1f2328", "#6e7781", "#3a6fd8"
 
@@ -82,9 +82,9 @@ def isometry(path, sheet_mm):
     return float(np.abs(su).max()), float(np.abs(sv).max()), float(np.r_[np.abs(su).ravel(), np.abs(sv).ravel()].mean())
 
 
-def _uv(args):
+def _uv(path):
     import uv_check
-    return uv_check.check(*args)
+    return uv_check.check(path)
 
 
 def repetition(plan, man):
@@ -191,10 +191,9 @@ def main():
     if paths and a.n_check:
         from concurrent.futures import ProcessPoolExecutor
         pick = [paths[i] for i in np.random.default_rng(0).choice(len(paths), min(a.n_check, len(paths)), False)]
-        pw, ph = page_px(P.layout.sheet_mm, P.layout.canvas_px)
         with ProcessPoolExecutor(a.workers) as pool:
             iso = list(pool.map(isometry, pick, [P.layout.sheet_mm] * len(pick)))
-            uv = list(pool.map(_uv, [(p, (ph, pw)) for p in pick]))
+            uv = list(pool.map(_uv, pick))
         shift = [r["shift_rms_px"] for r in uv if r["shift_rms_px"] is not None]
         summary.update(n_checked=len(pick),
                        iso_max_strain_q=np.quantile([max(x[:2]) for x in iso], [0.5, 0.9, 1]).round(4).tolist(),

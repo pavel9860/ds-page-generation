@@ -11,7 +11,7 @@ DATA = Path(__file__).parent / "data"
 def small(name):
     """The preset on a coarse grid with few blend slices: same physics, fast."""
     P = get_preset(name)
-    g = replace(P.geometry, mesh=(64, 90), n_slices=3, strip_segments=100)
+    g = replace(P.geometry, mesh_w=64, n_slices=3, strip_segments=100)
     return replace(P, geometry=g)
 
 

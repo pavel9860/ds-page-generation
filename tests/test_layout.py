@@ -2,7 +2,7 @@
 import cv2
 import numpy as np
 
-from dspages.config import page_px
+from dspages.config import sheet_px
 from dspages.layout.content import content_mask, place_window, window_stats
 from dspages.layout.generate import make_layout
 from dspages.layout.text import is_rtl, render_text
@@ -62,7 +62,7 @@ def test_text_fills_the_page(fonts):
 
 def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
     rng = np.random.default_rng(0)
-    pw, ph = page_px(full_small.layout.sheet_mm, full_small.layout.canvas_px)
+    pw, ph = sheet_px(full_small.layout.sheet_mm, full_small.layout.page_w)
     kinds = set()
     for k, idx in enumerate(rng.choice(len(manifest), 4, replace=False)):
         L = make_layout(np.random.default_rng(k), manifest[idx], full_small, fonts)

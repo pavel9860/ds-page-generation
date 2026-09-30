@@ -14,18 +14,16 @@ import cv2
 import numpy as np
 
 from dspages import io
-from viz import back_map, page_of
+from viz import back_map
 
 TILE = 128
 WINDOW = cv2.createHanningWindow((TILE, TILE), cv2.CV_32F)
 
 
-def check(path, page_hw=None):
-    """page_hw: the page raster size when the run has no layouts/ (render only)."""
+def check(path):
     a, _ = io.load(path)
-    lay = path.parents[1] / "layouts" / path.name
-    page_hw = io.load(lay)[0]["page"].shape if lay.exists() else page_hw
-    flat = page_of(a["flat"], page_hw).astype(np.float32)
+    flat = a["flat"].astype(np.float32)
+    page_hw = flat.shape
     back = back_map(a["warped"], a["uv"].astype(np.float32), page_hw)
     ok = np.isfinite(back)
     f, b = flat[ok], back[ok]

@@ -39,8 +39,7 @@ def round_trip(warped, uv, page_hw):
 
 def ours(path):
     a, _ = io.load(path)
-    page = io.load(path.parents[1] / "layouts" / path.name)[0]["page"]
-    return round_trip(a["warped"], a["uv"].astype(np.float32), page.shape)
+    return round_trip(a["warped"], a["uv"].astype(np.float32), a["flat"].shape)
 
 
 def uvdoc(args):

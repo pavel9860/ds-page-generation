@@ -9,7 +9,7 @@ laid out inextensibly, then the page grid (u, v) is sampled from the box and tur
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from ..config import GeometryCfg, paper_props
+from ..config import GeometryCfg, paper_props, sheet_px
 from ..creases import deep, shallow
 from .sag import solve_sag
 from .scenes import lerp_scene, sample_ends, scene_label
@@ -51,13 +51,17 @@ def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
             - folds[None, :]).min() > c.fold_clear_mm * 1e-3]
         h, pitch = shallow.render(lines, w_mm, h_mm, c.pitch_mm, c.w_max_mm), c.pitch_mm
     if cond["deep"]:
-        net = deep.sample(rng, w_mm, h_mm, cond["deep"], g.deep, min(w_mm / (g.mesh[0] - 1), h_mm / (g.mesh[1] - 1)))
+        net = deep.sample(rng, w_mm, h_mm, cond["deep"], g.deep, min(w_mm / (g.mesh_w - 1), h_mm / (_mesh(g)[1] - 1)))
         hd = deep.render(net, w_mm, h_mm, cond["deep"], g.deep)
         h, pitch = (hd if h is None else h + hd), g.deep.pitch_mm
         lines = lines + net
     if h is None:
         return None, None, lines
     return 1e-3 * h, (np.arange(h.shape[0]) * pitch * 1e-3, np.arange(h.shape[1]) * pitch * 1e-3), lines
+
+
+def _mesh(g: GeometryCfg):
+    return sheet_px(g.sheet_mm, g.mesh_w)
 
 
 def make_surface(rng, g: GeometryCfg, paper, cond):
@@ -75,7 +79,8 @@ def make_surface(rng, g: GeometryCfg, paper, cond):
     def lm_to_p(l_, m_):
         return l_ * cb + m_ * sn + p0
 
-    pitch = min(sw / (g.mesh[0] - 1), sh / (g.mesh[1] - 1))
+    nu, nv = _mesh(g)
+    pitch = min(sw / (nu - 1), sh / (nv - 1))
     up = np.linspace(0.0, lp, int(np.ceil(lp / pitch)) + 1)
     vg = np.linspace(0.0, wg, int(np.ceil(wg / pitch)) + 1)
 
@@ -111,8 +116,8 @@ def make_surface(rng, g: GeometryCfg, paper, cond):
     z = np.maximum(z, 0.0)
     xd, yd = inextensible(x, z, up, vg)
 
-    u = np.linspace(0.0, sw, g.mesh[0])
-    v = np.linspace(0.0, sh, g.mesh[1])
+    u = np.linspace(0.0, sw, nu)
+    v = np.linspace(0.0, sh, nv)
     l_, m_ = _swap(*np.meshgrid(u, v), cond["along_long"])
     pts = np.stack([np.clip(-l_ * sn + m_ * cb + g0, 0.0, wg), np.clip(lm_to_p(l_, m_), 0.0, lp)], -1)
     X, Y, Z = (RegularGridInterpolator((vg, up), A)(pts) for A in (xd, yd, z))
