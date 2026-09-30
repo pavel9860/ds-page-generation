@@ -116,7 +116,9 @@ def main():
     out = run / "report"
     out.mkdir(exist_ok=True)
     plan = [json.loads(line) for line in open(run / "plan.jsonl")]
-    lay, geo, ren = _metas(run / "layouts"), _metas(run / "geometry"), _metas(run / "samples")
+    lay, geo = _metas(run / "layouts"), _metas(run / "geometry")
+    ren = [json.loads(line) for line in open(run / "meta.jsonl")] if (run / "meta.jsonl").exists() else []
+    lay = lay or [m["layout"] for m in ren]
     cam = P.render.camera
     summary = dict(n_plan=len(plan), n_layouts=len(lay), n_geometry=len(geo), n_samples=len(ren))
 
@@ -159,8 +161,8 @@ def main():
             _hist(ax[2], [x["fov_deg"] for x in v], "vertical field of view [deg]"),
             _hist(ax[3], [x["max_incidence_deg"] for x in v], "max view incidence [deg]", cam.incidence_deg),
             _hist(ax[4], [x["min_px_per_mm"] for x in v], "min image scale on the page [px/mm]"),
-            _hist(ax[5], [m["page_frac"] for m in ren], "page share of the photo"),
-            _hist(ax[6], [x["fill"] for x in v], "page fill of the frame"),
+            _hist(ax[5], [x["fill"] for x in v], "camera target: page bbox / frame, tighter side"),
+            _hist(ax[6], [m["page_frac"] for m in ren], "page area / frame area (page_frac)"),
             _bars(ax[7], Counter(e for m in ren for e in m["effects"]), "camera effects applied"),
             _bars(ax[8], Counter(("sharp" if m["light"]["sharp"] else "area") if m["light"] else "none" for m in ren),
                   "light")])

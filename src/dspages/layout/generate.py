@@ -4,7 +4,7 @@ import numpy as np
 
 from ..config import Preset, page_px
 from . import paper
-from .content import SCAN_MAX_SIDE, bbox, content_mask, place_window
+from .content import SCAN_MAX_SIDE, bbox, content_mask, place_window, window_stats
 from .pictures import picture_mask
 from .grid import crossings, grid_page
 from .sources import is_pdf, raster_page
@@ -51,6 +51,13 @@ def _raster_sheet(rng, entry, pw, ph, c):
                       margin=margin)
 
 
+def sheet_fill(gray, grid):
+    """Fill of the whole sheet, measured as the raster pages' window: share of grid x grid patches with ink."""
+    mask, s = content_mask(gray)
+    ink = cv2.integral(mask.astype(np.uint8)).astype(np.int64)
+    return float(window_stats(ink, np.zeros_like(ink), s, [(0, 0, gray.shape[1], gray.shape[0])], grid)[0][0])
+
+
 def make_layout(rng, entry, P: Preset, fonts):
     """-> dict(page: uint8 luminance sheet, gray: uint8 clean sheet before effects, meta)."""
     c = P.layout
@@ -76,7 +83,7 @@ def make_layout(rng, entry, P: Preset, fonts):
             meta.update(kind="grid", crossings_mm=(crossings(iw / ppm, ih / ppm, c.grid) + [mx / ppm, my / ppm]))
         gray = np.full((ph, pw), 255, np.uint8)
         gray[my:my + ih, mx:mx + iw] = inner
-        meta.update(margin=float(m), fill=1.0)
+        meta.update(margin=float(m), fill=sheet_fill(gray, c.fill_grid))
     page, effects = paper.apply(rng, gray, ppm, c, P.geometry.shallow)
     meta["effects"] = effects
     return dict(page=page, gray=gray, meta=meta)

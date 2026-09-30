@@ -1,4 +1,4 @@
-"""Sample files: one .npz per sample and part (arrays + meta as JSON), a .jpg preview where asked."""
+"""Sample files: one .npz per sample and part (arrays, + meta as JSON for the parts), a .jpg preview where asked."""
 import json
 import zipfile
 from pathlib import Path
@@ -15,11 +15,12 @@ def _json(o):
     raise TypeError(type(o))
 
 
-def save(path: Path, arrays: dict, meta: dict, preview=None, preview_path: Path = None):
-    """preview is written to preview_path (default: beside the .npz)."""
+def save(path: Path, arrays: dict, meta: dict = None, preview=None, preview_path: Path = None):
+    """meta (None: none stored) as a JSON member; preview is written to preview_path (default: beside the .npz)."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    items = arrays if meta is None else dict(meta=np.array(json.dumps(meta, default=_json)), **arrays)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:   # np.load-able .npz; level 1:
-        for k, v in dict(meta=np.array(json.dumps(meta, default=_json)), **arrays).items():   # 2x faster, +5%
+        for k, v in items.items():                                                  # 2x faster, +5%
             with z.open(k + ".npy", "w", force_zip64=True) as f:
                 np.lib.format.write_array(f, np.asarray(v))
     if preview is not None:
@@ -31,7 +32,7 @@ def save(path: Path, arrays: dict, meta: dict, preview=None, preview_path: Path 
 
 def load(path: Path):
     with np.load(path) as f:
-        return {k: f[k] for k in f.files if k != "meta"}, json.loads(str(f["meta"]))
+        return {k: f[k] for k in f.files if k != "meta"}, json.loads(str(f["meta"])) if "meta" in f.files else {}
 
 
 def height_preview(Z):

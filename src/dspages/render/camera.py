@@ -98,7 +98,7 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     free = np.array([w, h]) - f * (hi - lo)
     cx, cy = np.array([w, h]) / 2 - f * (lo + hi) / 2 + 0.5 * c.shift * free * rng.uniform(-1, 1, 2)
     cam.update(f=float(f), cx=float(cx), cy=float(cy))
-    view = dict(dist_mm=float(dist), tilt_deg=float(np.degrees(tilts[k])), azimuth_deg=float(np.degrees(azs[k])),
+    view = dict(dist_mm=float(dist), tilt_deg=float(np.degrees(tilts[k])), azimuth_deg=float(np.degrees(azs[k]) % 360),
                 roll_deg=float(np.degrees(roll)), fill=float(fill), fov_deg=float(np.degrees(2 * np.arctan(h / 2 / f))),
                 max_incidence_deg=float(np.degrees(np.arccos(np.clip(worst[k], -1, 1)))),
                 min_px_per_mm=float((f * np.clip(cos_k, 0, 1) / z).min()))

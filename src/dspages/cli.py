@@ -3,14 +3,17 @@
 plan      DIR/plan.jsonl: n stratified sample specs (written by the other commands too when missing)
 layout    DIR/layouts/<i>.npz   page (sheet luminance), gray (clean sheet)
 geometry  DIR/geometry/<i>.npz  X, Y, Z [mm] page grid
-render    DIR/samples/<i>.npz   flat, warped, uv, map3d, mask; reads layouts/ and geometry/
-          of the same index when present, else makes them in memory
+render    DIR/samples/<i>.npz   flat, warped, uv, map3d, mask (no metadata); reads layouts/ and geometry/
+          of the same index when present, else makes them in memory; DIR/meta.jsonl: one row per sample, the
+          render metadata and its layout's (source page, window, fill, fonts, effects)
 all       layout, geometry and render of each sample, all saved
-Previews (sheet, height map, flat | warped) go to DIR_preview/<part>/<i>.jpg, outside the dataset.
+Previews (sheet, height map, flat | warped) go to DIR_preview/<part>/<i>.jpg, outside the dataset. The manifest
+and its rejected pages are copied to DIR.
 Each part of sample i draws from its own stream (seed, i, part): the parts are reproducible independently.
 """
 import argparse
 import json
+import shutil
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -70,7 +73,7 @@ def _layout(i, save):
                     layout_preset(_W["P"], spec), _W["fonts"])
     if save:
         io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], L["page"], _preview("layout", i))
-    return L["page"]
+    return L["page"], L["meta"]
 
 
 def _geometry(i, save):
@@ -87,23 +90,28 @@ def _geometry(i, save):
 def _render(i, save_parts, dt):
     lp, gp = _path("layout", i), _path("geometry", i)
     t = time.time()
-    page = io.load(lp)[0]["page"] if lp.exists() and not save_parts else _layout(i, save_parts)
+    if lp.exists() and not save_parts:
+        arrays, lmeta = io.load(lp)
+        page = arrays["page"]
+    else:
+        page, lmeta = _layout(i, save_parts)
     dt["layout"], t = time.time() - t, time.time()
     surf = io.load(gp)[0] if gp.exists() and not save_parts else _geometry(i, save_parts)
     dt["geometry"], t = time.time() - t, time.time()
     o = make_sample(_rng(i, "render"), page, surf, view_preset(_W["P"], _W["plan"][i]))
     preview = np.hstack([cv2.resize(o["flat"], o["warped"].shape[1::-1]), o["warped"]])
-    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "uv", "map3d", "mask")}, o["meta"], preview,
+    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "uv", "map3d", "mask")}, None, preview,
             _preview("render", i))
     dt["render"] = time.time() - t
+    return dict(sample=f"{i:07d}", **o["meta"], layout=lmeta)
 
 
 def _job(args):
-    """-> (i, seconds per step)."""
+    """-> (i, seconds per step, metadata row of a rendered sample or None)."""
     cmd, i = args
     t, dt = time.time(), {}
     if _path("render" if cmd in ("render", "all") else cmd, i).exists():
-        return i, dt
+        return i, dt, None
     if cmd == "layout":
         _layout(i, True)
         dt["layout"] = time.time() - t
@@ -111,8 +119,8 @@ def _job(args):
         _geometry(i, True)
         dt["geometry"] = time.time() - t
     else:
-        _render(i, cmd == "all", dt)
-    return i, dt
+        return i, dt, _render(i, cmd == "all", dt)
+    return i, dt, None
 
 
 def main(argv=None):
@@ -143,9 +151,16 @@ def main(argv=None):
         return
     n = sum(1 for _ in open(plan_path))
     idx = range(a.start, min(n, a.start + (a.count or n)))
+    man = Path(a.manifest or get_preset(a.preset).paths.manifest)
+    for src in (man, man.with_suffix(".rejected.jsonl")):
+        if src.exists() and not (out / src.name).exists():
+            shutil.copy2(src, out / src.name)
     t0, times = time.time(), {}
-    with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed, a.manifest)) as pool:
-        for k, (i, dt) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=1), 1):
+    with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed, a.manifest)) as pool, \
+            open(out / "meta.jsonl", "a") as meta_f:
+        for k, (i, dt, row) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=1), 1):
+            if row is not None:
+                meta_f.write(json.dumps(row, default=io._json) + "\n")
             for step, v in dt.items():
                 times.setdefault(step, []).append(v)
             if k % 50 == 0 or k == len(idx):
