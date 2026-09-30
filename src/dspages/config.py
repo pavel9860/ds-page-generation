@@ -114,8 +114,8 @@ class DeepCreaseCfg:
 @dataclass(frozen=True)
 class GeometryCfg:
     sheet_mm: tuple = (210.0, 297.0)                # (width, height)
-    mesh_w: int = 212                               # page grid nodes across the width (height: sheet aspect);
-                                                    # the 3D and UV maps are this grid
+    mesh_w: int = 256                               # page grid nodes across the width (height: sheet aspect),
+                                                    # layout page_w / 4: the 3D and UV maps are this grid
     strip_segments: int = 150
     two_profile_prob: float = 0.5
     n_slices: int = 9
