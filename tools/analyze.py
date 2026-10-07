@@ -17,7 +17,6 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-from dspages import io  # noqa: E402
 from dspages.config import get_preset  # noqa: E402
 
 INK, MUTED, BAR = "#1f2328", "#6e7781", "#3a6fd8"
