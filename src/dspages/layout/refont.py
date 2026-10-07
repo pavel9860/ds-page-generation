@@ -903,14 +903,25 @@ def _hrules(elems, g):
     return [(x0 * g, x1 * g, y * g) for d, fixed in elems for x0, y, x1 in _horizontal(d)]
 
 
+def _straight(d):
+    """The straight edges ((xa, ya), (xb, yb)) of a drawing: its lines and the sides of its rectangles and quads (a curve
+    is never a rule)."""
+    for it in d["items"]:
+        if it[0] == "l":
+            yield (it[1].x, it[1].y), (it[2].x, it[2].y)
+        elif it[0] in ("re", "qu"):
+            q = it[1].quad if it[0] == "re" else it[1]
+            pts = [(q.ul.x, q.ul.y), (q.ur.x, q.ur.y), (q.lr.x, q.lr.y), (q.ll.x, q.ll.y)]
+            yield from zip(pts, pts[1:] + pts[:1])
+
+
 def _vrules(elems, g):
     """Vertical rules of the graphics as (x, y0, y1) in output px: cell borders and frame sides a text must not cross."""
     out = []
     for d, fixed in elems:
-        for path in _paths(d):
-            for (xa, ya), (xb, yb) in zip(path, path[1:] + ([path[0]] if d.get("closePath") else [])):
-                if abs(xa - xb) < 0.5 and abs(ya - yb) >= C.rule_min_pt:
-                    out.append((xa * g, min(ya, yb) * g, max(ya, yb) * g))
+        for (xa, ya), (xb, yb) in _straight(d):
+            if abs(xa - xb) < 0.5 and abs(ya - yb) >= C.rule_min_pt:
+                out.append((xa * g, min(ya, yb) * g, max(ya, yb) * g))
         r = d["rect"]
         if d.get("fill") is not None and r.width <= 2 and r.height >= C.rule_min_pt:
             out.append((r.x0 * g, r.y0 * g, r.y1 * g))
