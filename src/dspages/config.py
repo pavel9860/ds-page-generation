@@ -232,6 +232,7 @@ class RefontCfg:
     gap_body: float = 1.5
     text_image_share: float = 0.4
     align_inset: float = 0.1
+    contain_share: float = 0.5                      # share of a block inside another one that makes the other hold it
     min_lead: float = 0.9                           # lines are at least this share of the font's own height apart
     min_line_em: float = 3.0                        # shortest line (in line heights) set beside an obstacle
     frame_gap: float = 2.5                          # lines of gap that end a text frame

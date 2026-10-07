@@ -1223,10 +1223,29 @@ def parsed(page, dy):
     return moved, ([(x, y0 + dy, y1 + dy) for x, y0, y1 in v], [(y + dy, x0, x1) for y, x0, x1 in h])
 
 
+def _absorb(blocks):
+    """A one-line block that lies inside a paragraph on one of its lines is a part of that line (the fields of a spaced
+    line): its spans join the line, and the block goes."""
+    gone = set()
+    for o in blocks:
+        if len(o["lines"]) != 1 or o.get("image"):
+            continue
+        for b in blocks:
+            if b is o or id(b) in gone or len(b["lines"]) < 2 or (b["bbox"] & o["bbox"]).get_area() < C.contain_share * o["bbox"].get_area():
+                continue
+            line = next((l for l in b["lines"] if min(l["bbox"].y1, o["bbox"].y1) - max(l["bbox"].y0, o["bbox"].y0) > 0.5 * o["bbox"].height), None)
+            if line:
+                line["spans"] = sorted(line["spans"] + o["lines"][0]["spans"], key=lambda s: s["bbox"].x0)
+                line["bbox"] = line["bbox"] | o["lines"][0]["bbox"]
+                gone.add(id(o))
+                break
+    return [b for b in blocks if id(b) not in gone]
+
+
 def page_blocks(page, dy, first, running=()):
     """Paragraphs of a page moved down by dy. Header and footer zones are those of the whole page, whatever its crop."""
     segs, rules = parsed(page, dy)
-    blocks = paragraphs(segs, rules)
+    blocks = _absorb(paragraphs(segs, rules))
     offset, full = page.cropbox_position.y - dy, page.mediabox.height
     for b in blocks:
         for l in b["lines"]:
