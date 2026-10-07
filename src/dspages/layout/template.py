@@ -136,11 +136,17 @@ def _letters(elems, blocks):
     """The drawings that are letters (small filled shapes inside a text line) repeat the line's text, a bold made of
     outlines: they are left out of the graphics, and a span they cover is bold. -> the other drawings."""
     lines = [l for b in blocks if not b.get("image") for l in b["lines"]]
+    box = np.array([tuple(l["bbox"]) for l in lines], float).reshape(-1, 4)
+    lh = box[:, 3] - box[:, 1]
     covered, keep = defaultdict(float), []
     for e in elems:
-        r = e[0]["rect"]
-        host = next((l for l in lines if e[0].get("fill") is not None and R._gray_f(e[0]["fill"]) < C.letter_gray and r.height <= C.letter_em * l["bbox"].height
-                     and r.width <= C.letter_em * l["bbox"].height and R._overlaps(l["bbox"], r, C.contain_share)), None) if r.get_area() > 0 else None
+        r, fill = e[0]["rect"], e[0].get("fill")
+        host = None
+        if fill is not None and R._gray_f(fill) < C.letter_gray and r.get_area() > 0:
+            inside = ((np.minimum(box[:, 2], r.x1) - np.maximum(box[:, 0], r.x0)).clip(0) * (np.minimum(box[:, 3], r.y1) - np.maximum(box[:, 1], r.y0)).clip(0)
+                      >= C.contain_share * r.width * r.height)
+            k = np.flatnonzero((r.height <= C.letter_em * lh) & (r.width <= C.letter_em * lh) & inside)
+            host = lines[k[0]] if len(k) else None
         span = host and max(host["spans"], key=lambda sp: (r & sp["bbox"]).get_area())
         if span is not None and (r & span["bbox"]).get_area() > 0:
             covered[id(span)] += r.width
@@ -341,8 +347,12 @@ def layout(src, number, rng, fonts, body_pt, scale, width_px):
     texts = [b for b in fixed if not b.get("image")]
     walls = R._vrules(elems, g)
 
+    text_blocks = [o for o in first if not o.get("image")]
+    boxes = np.array([tuple(o["bbox"]) for o in text_blocks], float).reshape(-1, 4)
+    ids = np.array([id(o) for o in text_blocks])
+
     def prepare_fixed(typesetter, px):
-        return [p for p in (R.prepare(b, first, pw, g, typesetter, role_of, px, cols_px, walls) for b in texts) if p]
+        return [p for p in (R.prepare(b, boxes[ids != id(b)], pw, g, typesetter, role_of, px, cols_px, walls) for b in texts) if p]
 
     def need_shrink(p):
         return p["fit"] if not p["multi"] else (len(p["lines"]) * p["pitch"] / max(p["y1"] - p["y0"], p["pitch"])) ** 0.5

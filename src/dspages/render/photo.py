@@ -182,14 +182,19 @@ def _felt(rng, x, y, sd, n):
 
 
 def _plain(rng, x, y, sd, n):
-    g = 0.5 + 0.12 * n.fbm(sd, x, y, rng.uniform(30, 300), 4)
-    for k in range(rng.integers(5, 60)):
-        th = rng.uniform(0, np.pi)
-        c = rng.uniform(-300, 300)
-        d = np.abs(x * np.cos(th) + y * np.sin(th) - c)
-        along = -x * np.sin(th) + y * np.cos(th)
-        m = (d < rng.uniform(0.15, 0.6)) & (np.abs(along - rng.uniform(-300, 300)) < rng.uniform(5, 80))
-        g = np.where(m, g + rng.choice((-1, 1)) * rng.uniform(0.15, 0.35), g)
+    """A plain surface with scratches: thin straight segments, each set only on the points of its x range."""
+    g = (0.5 + 0.12 * n.fbm(sd, x, y, rng.uniform(30, 300), 4)).astype(np.float64)
+    order = np.argsort(x)
+    xs = x[order]
+    for _ in range(rng.integers(5, 60)):
+        th, c = rng.uniform(0, np.pi), rng.uniform(-300, 300)
+        width, mid, half = rng.uniform(0.15, 0.6), rng.uniform(-300, 300), rng.uniform(5, 80)
+        tone = rng.choice((-1, 1)) * rng.uniform(0.15, 0.35)
+        ends = c * np.cos(th) - (mid + np.array([-half, half])) * np.sin(th)
+        i = order[np.searchsorted(xs, ends.min() - width - 1):np.searchsorted(xs, ends.max() + width + 1)]
+        d = np.abs(x[i] * np.cos(th) + y[i] * np.sin(th) - c)
+        along = -x[i] * np.sin(th) + y[i] * np.cos(th)
+        g[i[(d < width) & (np.abs(along - mid) < half)]] += tone
     return g
 
 
@@ -409,9 +414,10 @@ def camera_effects(rng, img, depth, page_mask, c: RenderCfg):
     h, w = img.shape[:2]
     if "defocus" in fx:
         coc = _u(rng, fx["defocus"].params["coc_px"])
-        z = np.where(np.isfinite(depth), depth, np.nan)
-        focus = np.nanpercentile(z, rng.uniform(10, 90)) if page_mask.any() else 1.0
-        zz = np.nan_to_num(z, nan=np.nanmax(z) if page_mask.any() else 1.0)
+        seen = np.isfinite(depth)
+        zs = depth[seen]
+        focus = np.percentile(zs, rng.uniform(10, 90)) if page_mask.any() else 1.0
+        zz = np.where(seen, depth, zs.max() if page_mask.any() else 1.0)
         img = variable_blur(img, (coc * np.abs(1 - focus / zz) * 8).astype(np.float32))
     if "motion_blur" in fx:
         L = _u(rng, fx["motion_blur"].params["length_px"])

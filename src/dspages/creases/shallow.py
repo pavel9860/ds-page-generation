@@ -216,7 +216,9 @@ def render(creases, W, H, h=0.5, w_max=1.0, reach=4.0, step=0.5):
             continue
         idx = np.unique(np.r_[np.searchsorted(seg, np.arange(0, L, step)), len(ln) - 1])
         P = ln[idx]
-        Bq = np.array([np.r_[P[k:k + CH + 1].min(0), P[k:k + CH + 1].max(0)] for k in range(0, len(P) - 1, CH)])
+        k = np.arange(0, len(P) - 1, CH)
+        tip = P[np.minimum(k + CH, len(P) - 1)]
+        Bq = np.c_[np.minimum(np.minimum.reduceat(P[:-1], k), tip), np.maximum(np.maximum.reduceat(P[:-1], k), tip)]
         q = len(box)
         Ps.append(P)
         Ss.append(seg[idx])

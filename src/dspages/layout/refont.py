@@ -13,6 +13,7 @@ from functools import lru_cache
 
 import numpy as np
 import pymupdf
+from numba import njit
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from PIL import Image, ImageDraw, ImageFont
@@ -31,6 +32,8 @@ CJK_NAMES = ("hiragana", "katakana", "hangul", "bopomofo", "ideographic")
 SYMBOL_FONTS = ("wingding", "webding", "symbol", "dingbat", "zapf")    # fonts whose letters are pictures: set as the page's glyph
 NOTO_PREFIXES = ("notosans", "notoserif", "noto")      # longest first: NotoKufiArabic, NotoTraditionalNushu are script fonts too
 TERMINAL = tuple(".;:!?…。")
+_T = np.arange(1, C.bezier_steps + 1)[:, None] / C.bezier_steps
+BEZIER = np.hstack([(1 - _T) ** 3, 3 * (1 - _T) ** 2 * _T, 3 * (1 - _T) * _T ** 2, _T ** 3])     # cubic Bezier weights per step
 MATH_LETTERS = {cp: unicodedata.normalize("NFKC", chr(cp)) for cp in range(0x1D400, 0x1D800)
                 if len(unicodedata.normalize("NFKC", chr(cp))) == 1 and unicodedata.normalize("NFKC", chr(cp)) != chr(cp)}
 ITEM = re.compile(r"\s*(\d{1,3}[.)]\s*|[•·▪■◦○●∙–—*-]\s+)\S")
@@ -115,14 +118,27 @@ def _spans(l):
     return spans
 
 
-def _crossed(a, b, y, size, rows):
+def _line_index(rows):
+    """Arrays of a page's lines [(box, spans)] for _crossed: line boxes (n, 4), line sizes, span extents (m, 2) and lines."""
+    box = np.array([tuple(b) for b, _ in rows], float).reshape(-1, 4)
+    size = np.array([max(s["size"] for s in sp) for _, sp in rows], float)
+    spans = np.array([(s["bbox"].x0, s["bbox"].x1, k) for k, (_, sp) in enumerate(rows) for s in sp], float).reshape(-1, 3)
+    return box, size, spans[:, :2], spans[:, 2].astype(int)
+
+
+def _crossed(a, b, y, size, index):
     """Whether the lines of the same size next to a line (within gap_reach lines) mostly have ink over the gap a..b of it,
     two of them at least: a wide space of justified text, not a gutter or the gap between table cells (a heading over the
-    columns does not count)."""
-    near = [sp for box, sp in rows if 0 < abs((box[1] + box[3]) / 2 - y) < C.gap_reach * size and box[0] < a and box[2] > b
-            and abs(max(s["size"] for s in sp) - size) <= C.same_size_pt]
-    hit = sum(any(min(s["bbox"].x1, b) - max(s["bbox"].x0, a) >= 0.5 * (b - a) for s in sp) for sp in near)
-    return hit >= 2 and hit >= C.gap_cross * len(near)
+    columns does not count). index: _line_index of the page."""
+    box, sizes, ext, line = index
+    dy = np.abs((box[:, 1] + box[:, 3]) / 2 - y)
+    near = (dy > 0) & (dy < C.gap_reach * size) & (box[:, 0] < a) & (box[:, 2] > b) & (np.abs(sizes - size) <= C.same_size_pt)
+    n = int(near.sum())
+    if n < 2:
+        return False
+    ink = (np.minimum(ext[:, 1], b) - np.maximum(ext[:, 0], a) >= 0.5 * (b - a)) & near[line]
+    hit = np.unique(line[ink]).size
+    return hit >= 2 and hit >= C.gap_cross * n
 
 
 def _runs(l, spans, rows):
@@ -195,8 +211,9 @@ def extract_segments(page, textpage=None):
             spans = _spans(l)
             if spans:
                 rows.append((l["bbox"], spans))
+    index = _line_index(rows)
     for box, spans in rows:
-        segs += _runs(dict(bbox=box), spans, rows)
+        segs += _runs(dict(bbox=box), spans, index)
     return _overprint(segs)
 
 
@@ -267,7 +284,7 @@ def _wide_space(prev, x1, x0, y, size, near):
 
 def join_rows(segs, cols, vlines=()):
     rows, buckets = [], defaultdict(list)
-    near = [(tuple(l["bbox"]), l["spans"]) for l in segs]
+    near = _line_index([(tuple(l["bbox"]), l["spans"]) for l in segs])
     walls = sorted(vlines)
     wall_x = [w[0] for w in walls]
     for l in sorted(segs, key=lambda l: l["bbox"].x0):
@@ -725,7 +742,8 @@ def indents(b, g, px):
     return (first if first > 0.5 * px else 0.0), (rest if rest > 0.5 * px else 0.0)
 
 
-def prepare(b, blocks, page_w, g, typesetter, role_of, px_of, cols, walls=()):
+def prepare(b, others, page_w, g, typesetter, role_of, px_of, cols, walls=()):
+    """A text block set in its box at its place. others: (n, 4) boxes of the page's other text blocks, in points."""
     bb = b["bbox"]
     x0, x1, y0, y1 = bb.x0 * g, bb.x1 * g, bb.y0 * g, bb.y1 * g
     toks = tokens(b, typesetter, role_of, px_of)
@@ -743,8 +761,9 @@ def prepare(b, blocks, page_w, g, typesetter, role_of, px_of, cols, walls=()):
         ind1, ind2 = indents(b, g, bpx)
     else:
         align = ("right" if b["rtl"] else "left") if b["lines"][0].get("marked") else single_align(x0, x1, c0, c1, b["rtl"])
-        row = [(o["bbox"].x0 * g, o["bbox"].x1 * g) for o in blocks if o is not b and not o.get("image")
-               and min(o["bbox"].y1, bb.y1) - max(o["bbox"].y0, bb.y0) > C.row_overlap * min(o["bbox"].height, bb.height)]
+        beside = (np.minimum(others[:, 3], bb.y1) - np.maximum(others[:, 1], bb.y0)
+                  > C.row_overlap * np.minimum(others[:, 3] - others[:, 1], bb.height))
+        row = (others[beside][:, [0, 2]] * g).tolist()
         row += [(x, x) for x, wy0, wy1 in walls if min(wy1, y1) - max(wy0, y0) > C.row_overlap * (y1 - y0)]
         slack = C.edge_slack * (c1 - c0)
         e0, e1 = max(c0 - slack, 2.0), min(c1 + slack, page_w * g - 2.0)
@@ -775,12 +794,7 @@ def _paths(d):
             if op == "l":
                 cur.append((it[2].x, it[2].y))
             else:
-                c1, c2, p2 = it[2:5]
-                for k in range(1, C.bezier_steps + 1):
-                    t = k / C.bezier_steps
-                    u = 1 - t
-                    cur.append((u ** 3 * p1.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t ** 3 * p2.x,
-                                u ** 3 * p1.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t ** 3 * p2.y))
+                cur += (BEZIER @ [(q.x, q.y) for q in (p1, *it[2:5])]).tolist()
         else:
             if cur:
                 paths.append(cur)
@@ -1165,20 +1179,33 @@ def _coverage(key, text, direction):
 def blit_text(img, items):
     """Text laid over the page from cached coverage (light text on a dark fill stays visible): letter by letter for scripts
     without shaping, whole words (shaped as a unit) for the others."""
-    arr = np.asarray(img).copy()
-    H, W = arr.shape
+    covs, at = [], []
     for x, y, f, text, gray, direction in items:
         for ch in ([text] if needs_shaping(text) else text):
             cov, ox, oy, adv = _coverage(f.key, ch, direction if needs_shaping(text) else None)
-            h, w = cov.shape
-            x0, y0 = int(round(x)) + ox, int(round(y)) + oy
-            if w and h and x0 < W and y0 < H and x0 + w > 0 and y0 + h > 0:
-                cx0, cy0, cx1, cy1 = max(x0, 0), max(y0, 0), min(x0 + w, W), min(y0 + h, H)
-                part = cov[cy0 - y0:cy1 - y0, cx0 - x0:cx1 - x0]
-                cov = part.astype(np.uint16)
-                arr[cy0:cy1, cx0:cx1] = (arr[cy0:cy1, cx0:cx1] * (255 - cov) + gray * cov + 127) // 255
+            if cov.size:
+                covs.append(cov.ravel())
+                at.append((int(round(x)) + ox, int(round(y)) + oy, cov.shape[0], cov.shape[1], gray))
             x += adv
-    img.paste(Image.fromarray(arr))
+    if covs:
+        arr = np.asarray(img).copy()
+        _composite(arr, np.concatenate(covs), np.array(at, np.int64))
+        img.paste(Image.fromarray(arr))
+
+
+@njit(cache=True)
+def _composite(arr, cov, at):
+    """Glyph coverages (flattened one after another) laid over arr: at = (x0, y0, h, w, gray) of each."""
+    H, W = arr.shape
+    o = 0
+    for g in range(at.shape[0]):
+        x0, y0, h, w, gray = at[g, 0], at[g, 1], at[g, 2], at[g, 3], at[g, 4]
+        for r in range(max(0, -y0), min(h, H - y0)):
+            for c in range(max(0, -x0), min(w, W - x0)):
+                a = np.int64(cov[o + r * w + c])
+                if a:
+                    arr[y0 + r, x0 + c] = (np.int64(arr[y0 + r, x0 + c]) * (255 - a) + gray * a + 127) // 255
+        o += h * w
 
 
 def render(src, lay):
