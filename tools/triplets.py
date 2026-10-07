@@ -16,6 +16,7 @@ from PIL import Image
 
 from dspages.config import get_preset
 from dspages.layout import refont
+from dspages.layout.template import sheet
 from dspages.layout.sources import load_manifest
 
 _W = {}
@@ -39,7 +40,7 @@ def _triplet(args):
     rng = np.random.default_rng([seed, i])
     for _ in range(2):
         m, pt, scale = rng.uniform(*c.margin_frac), rng.uniform(*c.font_pt), rng.uniform(*c.role_scale)
-        gray, _ = refont.sheet(e["source_path"], e["page_index"], int(rng.integers(1 << 31)), _W["fonts"], pt, scale, m, (pw, ph))
+        gray, _ = sheet(e["source_path"], e["page_index"], int(rng.integers(1 << 31)), _W["fonts"], pt, scale, m, (pw, ph))
         panels.append(Image.fromarray(gray))
     out_img = Image.new("L", (3 * pw + 40, max(p.height for p in panels)), 128)
     for j, p in enumerate(panels):

@@ -7,7 +7,7 @@ from . import paper
 from .content import content_mask, window_stats
 from .grid import crossings, grid_page
 from .sources import is_pdf, raster_page
-from .refont import sheet
+from .template import sheet
 
 
 def _crop(src, x, y, w, h, pad):

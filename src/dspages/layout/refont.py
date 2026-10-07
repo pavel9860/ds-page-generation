@@ -291,6 +291,7 @@ def paragraphs(segs, rules=((), ())):
         pitch = (statistics.median(b["lines"][i + 1]["bbox"].y0 - b["lines"][i]["bbox"].y0
                                    for i in range(len(b["lines"]) - 1)) if len(b["lines"]) > 1 else b["size"] * nat)
         b["lead"] = min(max(pitch / (b["size"] * nat), 1.0), C.max_lead)
+        b["src_pitch"] = pitch
     return blocks
 
 
@@ -658,6 +659,12 @@ def single_align(x0, x1, c0, c1, rtl):
     return "right" if rtl and right < left else "left"
 
 
+def line_pitch(b, px, asc, desc):
+    """Distance between the lines of a paragraph set at px: the source's, scaled with the letters, so a block takes the room
+    it had; not tighter than min_lead of the font's own height."""
+    return max(b["src_pitch"] * px / b["size"], C.min_lead * (asc + desc))
+
+
 def indents(b, g, px):
     """First-line and following-line offsets from the block's start edge (hanging and nested indents)."""
     ls, bb = b["lines"], b.get("src_bbox", b["bbox"])
@@ -671,7 +678,7 @@ def indents(b, g, px):
     return (first if first > 0.5 * px else 0.0), (rest if rest > 0.5 * px else 0.0)
 
 
-def prepare(b, blocks, page_w, g, typesetter, role_of, px_of, cols):
+def prepare(b, blocks, page_w, g, typesetter, role_of, px_of, cols, walls=()):
     bb = b["bbox"]
     x0, x1, y0, y1 = bb.x0 * g, bb.x1 * g, bb.y0 * g, bb.y1 * g
     if b.get("image"):
@@ -693,6 +700,7 @@ def prepare(b, blocks, page_w, g, typesetter, role_of, px_of, cols):
         align = single_align(x0, x1, c0, c1, b["rtl"])
         row = [(o["bbox"].x0 * g, o["bbox"].x1 * g) for o in blocks if o is not b and not o.get("image")
                and min(o["bbox"].y1, bb.y1) - max(o["bbox"].y0, bb.y0) > C.row_overlap * min(o["bbox"].height, bb.height)]
+        row += [(x, x) for x, wy0, wy1 in walls if min(wy1, y1) - max(wy0, y0) > C.row_overlap * (y1 - y0)]
         slack = C.edge_slack * (c1 - c0)
         e0, e1 = max(c0 - slack, 2.0), min(c1 + slack, page_w * g - 2.0)
         right = min((a for a, z in row if a >= x1 - 1), default=e1)
@@ -704,7 +712,7 @@ def prepare(b, blocks, page_w, g, typesetter, role_of, px_of, cols):
     lines = wrap(toks, W, ind1, ind2)
     natural = 0.0 if multi else sum(measure(t)[1] for t in toks) + sum(gap_w(t) for t in toks[1:])
     return dict(b=b, image=False, fit=natural / max(W, 1.0), x0=x0, x1=x1, y0=y0, y1=y1, bx0=bx0, W=W, align=align, ind=(ind1, ind2), lines=lines,
-                pitch=(asc + desc) * b["lead"], asc=asc, desc=desc, multi=multi, pinned=b["pinned"], k=b["k"], rtl=b["rtl"],
+                pitch=line_pitch(b, bpx, asc, desc), asc=asc, desc=desc, multi=multi, pinned=b["pinned"], k=b["k"], rtl=b["rtl"],
                 bpx=bpx, tol=C.row_tol_em * b["size"] * g, wrapped=not multi and len(lines) > 1)
 
 
@@ -1019,8 +1027,24 @@ def pictures(doc, number, dy, first, ph, pw, home=None, below=None):
 
 def _hrules(elems, g):
     """Horizontal rules of the graphics as (x0, x1, y) in output px: the lines that make the rows of a table."""
-    return [(x0 * g, x1 * g, (y + dy) * g) for kind, d, dy, number, fixed in elems if kind == "draw" and not fixed
+    return [(x0 * g, x1 * g, (y + dy) * g) for kind, d, dy, number, fixed in elems if kind == "draw"
             for x0, y, x1 in _horizontal(d)]
+
+
+def _vrules(elems, g):
+    """Vertical rules of the graphics as (x, y0, y1) in output px: cell borders and frame sides a text must not cross."""
+    out = []
+    for kind, d, dy, number, fixed in elems:
+        if kind != "draw":
+            continue
+        for path in _paths(d):
+            for (xa, ya), (xb, yb) in zip(path, path[1:] + ([path[0]] if d.get("closePath") else [])):
+                if abs(xa - xb) < 0.5 and abs(ya - yb) >= C.rule_min_pt:
+                    out.append((xa * g, (min(ya, yb) + dy) * g, (max(ya, yb) + dy) * g))
+        r = d["rect"]
+        if d.get("fill") is not None and r.width <= 2 and r.height >= C.rule_min_pt:
+            out.append((r.x0 * g, (r.y0 + dy) * g, (r.y1 + dy) * g))
+    return out
 
 
 def _band(rules, ys, p):
@@ -1172,11 +1196,27 @@ def line_rules(page, dy):
     return v, h
 
 
+def _cut(segs, walls):
+    """Segments cut where a vertical rule runs between two of their spans: the cells of a table are not one line."""
+    out = []
+    for l in segs:
+        groups = [[l["spans"][0]]]
+        for s in l["spans"][1:]:
+            prev = groups[-1][-1]["bbox"]
+            lo, hi = min(prev.x1, s["bbox"].x1), max(prev.x0, s["bbox"].x0)
+            cut = any(lo - 1 <= x <= hi + 1 and y0 < l["bbox"].y1 and y1 > l["bbox"].y0 for x, y0, y1 in walls)
+            groups.append([s]) if cut else groups[-1].append(s)
+        out += [dict(l, bbox=pymupdf.Rect(min(s["bbox"].x0 for s in grp), l["bbox"].y0, max(s["bbox"].x1 for s in grp), l["bbox"].y1), spans=grp)
+                for grp in groups]
+    return out
+
+
 def parsed(page, dy):
     """Lines and rules of a page, parsed once per document and moved down by dy (fresh copies: callers change them)."""
     cache = page.parent.__dict__.setdefault("_refont", {})
     if page.number not in cache:
-        cache[page.number] = (extract_segments(page, 0.0), line_rules(page, 0.0))
+        v, h = line_rules(page, 0.0)
+        cache[page.number] = (_cut(extract_segments(page, 0.0), v), (v, h))
     segs, (v, h) = cache[page.number]
     moved = [dict(l, bbox=pymupdf.Rect(l["bbox"]) + (0, dy, 0, dy),
                   spans=[dict(s, bbox=pymupdf.Rect(s["bbox"]) + (0, dy, 0, dy)) for s in l["spans"]]) for l in segs]

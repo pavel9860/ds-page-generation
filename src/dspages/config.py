@@ -187,7 +187,7 @@ class RefontCfg:
     edge_bin: int = 3
     edge_lines: int = 3
     split_em: float = 1.6
-    fit_floor: float = 0.8
+    fit_floor: float = 0.4
     max_stretch: float = 3.0
     ragged_lines: int = 5
     ragged_percentile: float = 0.9
@@ -211,7 +211,7 @@ class RefontCfg:
     column_line: int = 6
     justify_edge: float = 0.8
     edge_slack: float = 0.06
-    row_overlap: float = 0.6
+    row_overlap: float = 0.15
     room: float = 1.5
     font_tries: int = 6
     row_lines: int = 6
@@ -232,6 +232,12 @@ class RefontCfg:
     gap_body: float = 1.5
     text_image_share: float = 0.4
     align_inset: float = 0.1
+    min_lead: float = 0.9                           # lines are at least this share of the font's own height apart
+    min_line_em: float = 3.0                        # shortest line (in line heights) set beside an obstacle
+    frame_gap: float = 2.5                          # lines of gap that end a text frame
+    frame_lines: int = 6                            # lines a run of body paragraphs needs to be a text frame
+    paragraph_lines: int = 3                        # and a paragraph of this many lines
+    frame_slack: float = 0.3                        # share of a line a frame may be overrun by
     shadow_share: float = 0.7                       # width of a block covered by nearer ones above a block: they carry it
     shadow_bin: float = 8.0                         # px, the resolution of that cover
     duplicate_pt: float = 3.0                       # lines of one text starting this close may be copies
