@@ -101,3 +101,28 @@ def test_crease_heights_bounded(full_small):
     for level in ("light", "medium", "heavy"):
         h = deep.render(deep.sample(rng, 210, 297, level, g.deep), 210, 297, level, g.deep, 1.0)
         assert 0 < np.ptp(h) <= g.deep.max_depth_mm[level]
+
+
+def test_a_surface_does_not_depend_on_what_ran_before(full_small):
+    """The parts of a sample draw from their own streams: a layout made first does not change the page surface."""
+    from dspages.layout import paper
+    cond = dict(combo=(False, 0, False, True), flat=False, two=False, along_long=False, bend_dir=0.0, gsm=80, shallow=True,
+                deep="heavy")
+    a = make_surface(np.random.default_rng(3), full_small.geometry, full_small.paper, cond)["Z"]
+    paper.apply(np.random.default_rng(9), np.full((300, 200), 255, np.uint8), 5.0, full_small.layout, full_small.geometry.shallow)
+    b = make_surface(np.random.default_rng(3), full_small.geometry, full_small.paper, cond)["Z"]
+    assert np.array_equal(a, b)
+
+
+def test_creases_stand_out_along_the_normal_of_a_tilted_sheet():
+    from dspages.geometry.surface import _spaced
+    x, y = np.linspace(0, 0.2, 200), np.linspace(0, 0.2, 190)
+    t = 0.6
+    P = np.stack([np.meshgrid(x * np.cos(t), y)[0], np.meshgrid(x, y)[1], np.meshgrid(x * np.sin(t), y)[0]], -1)
+    h = 0.002 * np.exp(-((np.meshgrid(x, y)[0] - 0.1) / 0.005) ** 2)
+    n = np.cross(np.gradient(P, axis=1), np.gradient(P, axis=0))
+    Q = P + h[..., None] * n / np.linalg.norm(n, axis=-1, keepdims=True)
+    for _ in range(2):
+        Q = _spaced(_spaced(Q, x, 1), y, 0)
+    assert abs(((Q - P) @ np.array([-np.sin(t), 0, np.cos(t)])).max() - 0.002) < 1e-4
+    assert np.allclose(np.linalg.norm(np.diff(Q, axis=1), axis=2), np.diff(x)[0], rtol=1e-3)

@@ -12,7 +12,7 @@ from numba import njit
 
 from ..config import LightCfg, RenderCfg
 from ..layout.paper import variable_blur
-from ..noise import _lattice, fbm, value_noise, warp, worley
+from ..noise import Field, _lattice, value_noise
 from .camera import look_at, project
 from .raster import rasterize
 
@@ -127,19 +127,19 @@ def _cells(x, y, w, h, off):
     return u, v, xs - u * w, y - v * h
 
 
-def _wood(rng, x, y, sd, px):
+def _wood(rng, x, y, sd, n):
     pw = rng.uniform(60, 250)
     u, v, lu, lv = _cells(y, x, pw, rng.uniform(400, 2000), rng.choice((0.0, 0.5, rng.uniform(0, 1))))
     tone = _lattice(sd, u, v)
-    warp = fbm(sd + 7, x * 0.3, y + 1000 * u, 40, limit=2 * px) * rng.uniform(8, 30) + fbm(sd + 8, x, y, 300, limit=2 * px) * 40
+    warp = n.fbm(sd + 7, x * 0.3, y + 1000 * u, 40) * rng.uniform(8, 30) + n.fbm(sd + 8, x, y, 300) * 40
     rings = 0.5 + 0.5 * np.sin(2 * np.pi * (lu + warp + 50 * tone) / rng.uniform(3, 10))
-    fine = fbm(sd + 3, x * 0.03, y * 2, 1.0, 4, limit=2 * px)
+    fine = n.fbm(sd + 3, x * 0.03, y * 2, 1.0, 4)
     g = 0.6 - 0.35 * rings ** rng.uniform(2, 6) + 0.15 * fine + 0.35 * (tone - 0.5)
     seam = np.minimum(lu, pw - lu) < rng.uniform(0.3, 1.2)
     return np.where(seam, 0.25 * g, g)
 
 
-def _fabric(rng, x, y, sd, px):
+def _fabric(rng, x, y, sd, n):
     p = rng.uniform(0.5, 2.5)
     th = rng.uniform(0, np.pi)
     a, b = x * np.cos(th) + y * np.sin(th), -x * np.sin(th) + y * np.cos(th)
@@ -148,41 +148,41 @@ def _fabric(rng, x, y, sd, px):
     over = (ia + ib * twill) % (twill + 1) < 1
     thread = np.where(over, np.sin(np.pi * (b / p - ib)), np.sin(np.pi * (a / p - ia)))
     jitter = np.where(over, _lattice(sd, ia, 0 * ib), _lattice(sd + 1, 0 * ia, ib))
-    return 0.45 + 0.4 * thread + 0.25 * (jitter - 0.5) + 0.15 * fbm(sd + 2, x, y, 20, 3, limit=2 * px)
+    return 0.45 + 0.4 * thread + 0.25 * (jitter - 0.5) + 0.15 * n.fbm(sd + 2, x, y, 20, 3)
 
 
-def _marble(rng, x, y, sd, px):
+def _marble(rng, x, y, sd, n):
     th = rng.uniform(0, np.pi)
-    wx, wy = warp(sd + 3, x, y, rng.uniform(80, 300), rng.uniform(20, 120), limit=2 * px)
-    t = (wx * np.cos(th) + wy * np.sin(th)) / rng.uniform(40, 200) + rng.uniform(1, 4) * fbm(sd, wx, wy, 120, 6, limit=2 * px)
+    wx, wy = n.warp(sd + 3, x, y, rng.uniform(80, 300), rng.uniform(20, 120))
+    t = (wx * np.cos(th) + wy * np.sin(th)) / rng.uniform(40, 200) + rng.uniform(1, 4) * n.fbm(sd, wx, wy, 120, 6)
     vein = np.abs(np.sin(np.pi * t)) ** rng.uniform(0.2, 0.6)
-    return 0.3 + 0.6 * vein + 0.08 * fbm(sd + 9, x, y, 5, 3, limit=2 * px)
+    return 0.3 + 0.6 * vein + 0.08 * n.fbm(sd + 9, x, y, 5, 3)
 
 
-def _granite(rng, x, y, sd, px):
-    g = 0.5 + 0.35 * fbm(sd, x, y, rng.uniform(2, 10), 4, limit=2 * px)
+def _granite(rng, x, y, sd, n):
+    g = 0.5 + 0.35 * n.fbm(sd, x, y, rng.uniform(2, 10), 4)
     for k, (sz, d) in enumerate(((0.6, 0.12), (1.5, 0.06), (3.0, 0.03))):
         n = value_noise(sd + 20 + k, x / sz, y / sz)
         g = np.where(n > 1 - d, rng.uniform(0.0, 1.0), g)
     return g
 
 
-def _tiles(rng, x, y, sd, px):
+def _tiles(rng, x, y, sd, n):
     w = rng.uniform(40, 400)
     h = w * rng.choice((1.0, 1.0, 0.5, 2.0))
     u, v, lu, lv = _cells(x, y, w, h, rng.choice((0.0, 0.5)))
-    tone = 0.5 + 0.45 * (_lattice(sd, u, v) - 0.5) + 0.2 * fbm(sd + 1, x, y, rng.uniform(5, 60), 4, limit=2 * px)
+    tone = 0.5 + 0.45 * (_lattice(sd, u, v) - 0.5) + 0.2 * n.fbm(sd + 1, x, y, rng.uniform(5, 60), 4)
     grout = rng.uniform(1, 5)
     edge = np.minimum(np.minimum(lu, w - lu), np.minimum(lv, h - lv))
     return np.where(edge < grout / 2, rng.choice((0.1, 0.9)), tone)
 
 
-def _felt(rng, x, y, sd, px):
-    return 0.5 + 0.3 * fbm(sd, x, y, rng.uniform(0.3, 1.5), 3, limit=2 * px) + 0.15 * fbm(sd + 5, x, y, 50, 3, limit=2 * px)
+def _felt(rng, x, y, sd, n):
+    return 0.5 + 0.3 * n.fbm(sd, x, y, rng.uniform(0.3, 1.5), 3) + 0.15 * n.fbm(sd + 5, x, y, 50, 3)
 
 
-def _plain(rng, x, y, sd, px):
-    g = 0.5 + 0.12 * fbm(sd, x, y, rng.uniform(30, 300), 4, limit=2 * px)
+def _plain(rng, x, y, sd, n):
+    g = 0.5 + 0.12 * n.fbm(sd, x, y, rng.uniform(30, 300), 4)
     for k in range(rng.integers(5, 60)):
         th = rng.uniform(0, np.pi)
         c = rng.uniform(-300, 300)
@@ -193,28 +193,28 @@ def _plain(rng, x, y, sd, px):
     return g
 
 
-def _leather(rng, x, y, sd, px):
-    wx, wy = warp(sd, x, y, 10, rng.uniform(0.3, 1.5), limit=2 * px)
-    d1, d2, _ = worley(sd + 1, wx, wy, rng.uniform(0.8, 3.0))
+def _leather(rng, x, y, sd, n):
+    wx, wy = n.warp(sd, x, y, 10, rng.uniform(0.3, 1.5))
+    d1, d2, _ = n.worley(sd + 1, wx, wy, rng.uniform(0.8, 3.0))
     crease = np.clip((d2 - d1) * rng.uniform(3, 8), 0, 1)
-    return 0.35 + 0.4 * crease + 0.15 * fbm(sd + 2, x, y, 40, 3, limit=2 * px)
+    return 0.35 + 0.4 * crease + 0.15 * n.fbm(sd + 2, x, y, 40, 3)
 
 
-def _terrazzo(rng, x, y, sd, px):
-    d1, d2, cid = worley(sd, *warp(sd + 1, x, y, 8, rng.uniform(0.5, 3), limit=2 * px), rng.uniform(3, 15))
+def _terrazzo(rng, x, y, sd, n):
+    d1, d2, cid = n.worley(sd, *n.warp(sd + 1, x, y, 8, rng.uniform(0.5, 3)), rng.uniform(3, 15))
     chip = (d2 - d1) > rng.uniform(0.15, 0.4)
-    ground = 0.5 + 0.1 * fbm(sd + 2, x, y, 3, 3, limit=2 * px)
+    ground = 0.5 + 0.1 * n.fbm(sd + 2, x, y, 3, 3)
     return np.where(chip & (cid < rng.uniform(0.3, 0.8)), cid * 1.4 - 0.1, ground)
 
 
-def _cork(rng, x, y, sd, px):
-    d1, _, cid = worley(sd, x, y, rng.uniform(0.6, 2.0))
-    return 0.35 + 0.35 * cid + 0.25 * d1 + 0.1 * fbm(sd + 1, x, y, 20, 3, limit=2 * px)
+def _cork(rng, x, y, sd, n):
+    d1, _, cid = n.worley(sd, x, y, rng.uniform(0.6, 2.0))
+    return 0.35 + 0.35 * cid + 0.25 * d1 + 0.1 * n.fbm(sd + 1, x, y, 20, 3)
 
 
-def _pebbled(rng, x, y, sd, px):
-    d1, _, _ = worley(sd, x, y, rng.uniform(0.3, 1.2))
-    return 0.5 + 0.3 * (0.5 - np.clip(d1, 0, 1)) + 0.05 * fbm(sd + 1, x, y, 60, 3, limit=2 * px)
+def _pebbled(rng, x, y, sd, n):
+    d1, _, _ = n.worley(sd, x, y, rng.uniform(0.3, 1.2))
+    return 0.5 + 0.3 * (0.5 - np.clip(d1, 0, 1)) + 0.05 * n.fbm(sd + 1, x, y, 60, 3)
 
 
 def _stripes(x, y, period, th):
@@ -222,18 +222,18 @@ def _stripes(x, y, period, th):
     return np.floor(a / period), a / period - np.floor(a / period)
 
 
-def _gingham(rng, x, y, sd, px):
+def _gingham(rng, x, y, sd, n):
     p = rng.uniform(3, 25)
     th = rng.uniform(0, np.pi)
     _, fa = _stripes(x, y, p, th)
     _, fb = _stripes(x, y, p, th + np.pi / 2)
     duty = rng.uniform(0.3, 0.6)
-    return 0.8 - 0.3 * (fa < duty) - 0.3 * (fb < duty) + 0.1 * _fabric(rng, x, y, sd + 1, px)
+    return 0.8 - 0.3 * (fa < duty) - 0.3 * (fb < duty) + 0.1 * _fabric(rng, x, y, sd + 1, n)
 
 
-def _plaid(rng, x, y, sd, px):
+def _plaid(rng, x, y, sd, n):
     th = rng.uniform(0, np.pi)
-    g = 0.5 + 0.1 * _fabric(rng, x, y, sd, px)
+    g = 0.5 + 0.1 * _fabric(rng, x, y, sd, n)
     for k in range(rng.integers(2, 5)):
         p, w, v = rng.uniform(15, 80), rng.uniform(0.05, 0.3), rng.uniform(-0.3, 0.3)
         for t in (th, th + np.pi / 2):
@@ -242,71 +242,71 @@ def _plaid(rng, x, y, sd, px):
     return g
 
 
-def _striped(rng, x, y, sd, px):
+def _striped(rng, x, y, sd, n):
     i, f = _stripes(x, y, rng.uniform(2, 40), rng.uniform(0, np.pi))
-    return 0.3 + 0.5 * _lattice(sd, i, 0 * i) * (f < rng.uniform(0.2, 0.8)) + 0.05 * fbm(sd, x, y, 10, 3, limit=2 * px)
+    return 0.3 + 0.5 * _lattice(sd, i, 0 * i) * (f < rng.uniform(0.2, 0.8)) + 0.05 * n.fbm(sd, x, y, 10, 3)
 
 
-def _brushed(rng, x, y, sd, px):
+def _brushed(rng, x, y, sd, n):
     th = rng.uniform(0, np.pi)
     a, b = x * np.cos(th) + y * np.sin(th), -x * np.sin(th) + y * np.cos(th)
-    return 0.55 + 0.15 * fbm(sd, a * 0.01, b * 8, 1.0, 4, limit=2 * px) + 0.2 * fbm(sd + 1, x, y, 200, 2, limit=2 * px)
+    return 0.55 + 0.15 * n.fbm(sd, a * 0.01, b * 8, 1.0, 4) + 0.2 * n.fbm(sd + 1, x, y, 200, 2)
 
 
-def _perforated(rng, x, y, sd, px):
+def _perforated(rng, x, y, sd, n):
     p = rng.uniform(2, 10)
     u, v, lu, lv = _cells(x, y, p, p, rng.choice((0.0, 0.5)))
     hole = np.hypot(lu - p / 2, lv - p / 2) < p * rng.uniform(0.15, 0.4)
-    return np.where(hole, rng.uniform(0.0, 0.3), 0.6 + 0.1 * fbm(sd, x, y, 100, 3, limit=2 * px))
+    return np.where(hole, rng.uniform(0.0, 0.3), 0.6 + 0.1 * n.fbm(sd, x, y, 100, 3))
 
 
-def _concrete(rng, x, y, sd, px):
-    g = 0.5 + 0.15 * fbm(sd, x, y, 30, 6, limit=2 * px) + 0.08 * fbm(sd + 1, x, y, 1.5, 3, limit=2 * px)
-    d1, _, _ = worley(sd + 2, x, y, rng.uniform(1, 4))
+def _concrete(rng, x, y, sd, n):
+    g = 0.5 + 0.15 * n.fbm(sd, x, y, 30, 6) + 0.08 * n.fbm(sd + 1, x, y, 1.5, 3)
+    d1, _, _ = n.worley(sd + 2, x, y, rng.uniform(1, 4))
     return np.where(d1 < rng.uniform(0.03, 0.1), g - 0.25, g)
 
 
-def _cardboard(rng, x, y, sd, px):
+def _cardboard(rng, x, y, sd, n):
     _, f = _stripes(x, y, rng.uniform(3, 8), rng.uniform(0, np.pi))
-    return 0.5 + 0.06 * np.sin(2 * np.pi * f) + 0.12 * fbm(sd, x, y, 3, 4, limit=2 * px) + 0.1 * fbm(sd + 1, x, y, 80, 3, limit=2 * px)
+    return 0.5 + 0.06 * np.sin(2 * np.pi * f) + 0.12 * n.fbm(sd, x, y, 3, 4) + 0.1 * n.fbm(sd + 1, x, y, 80, 3)
 
 
-def _speckle(rng, x, y, sd, px):
-    g = np.full(x.shape, 0.5, np.float32) + 0.05 * fbm(sd, x, y, 50, 3, limit=2 * px)
+def _speckle(rng, x, y, sd, n):
+    g = np.full(x.shape, 0.5, np.float32) + 0.05 * n.fbm(sd, x, y, 50, 3)
     for k in range(rng.integers(2, 5)):
         n = value_noise(sd + 10 + k, x / rng.uniform(0.3, 2), y / rng.uniform(0.3, 2))
         g = np.where(n > 1 - rng.uniform(0.02, 0.15), rng.uniform(0, 1), g)
     return g
 
 
-def _rattan(rng, x, y, sd, px):
+def _rattan(rng, x, y, sd, n):
     p = rng.uniform(3, 12)
     th = rng.uniform(0, np.pi)
     ia, fa = _stripes(x, y, p, th)
     ib, fb = _stripes(x, y, p, th + np.pi / 2)
     over = (ia + ib) % 2 == 0
-    return 0.3 + 0.5 * np.where(over, np.sin(np.pi * fa), np.sin(np.pi * fb)) + 0.1 * fbm(sd, x, y, 5, 3, limit=2 * px)
+    return 0.3 + 0.5 * np.where(over, np.sin(np.pi * fa), np.sin(np.pi * fb)) + 0.1 * n.fbm(sd, x, y, 5, 3)
 
 
-def _knit(rng, x, y, sd, px):
+def _knit(rng, x, y, sd, n):
     p = rng.uniform(2, 6)
     th = rng.uniform(0, np.pi)
     a, b = x * np.cos(th) + y * np.sin(th), -x * np.sin(th) + y * np.cos(th)
     v = np.abs(((a / p) % 1) - 0.5) * 2 + ((b / (1.5 * p)) % 1)
-    return 0.35 + 0.4 * np.abs(np.sin(np.pi * v)) + 0.1 * fbm(sd, x, y, 40, 3, limit=2 * px)
+    return 0.35 + 0.4 * np.abs(np.sin(np.pi * v)) + 0.1 * n.fbm(sd, x, y, 40, 3)
 
 
-def _wallpaper(rng, x, y, sd, px):
+def _wallpaper(rng, x, y, sd, n):
     p = rng.uniform(20, 120)
     u, v, lu, lv = _cells(x, y, p, p, rng.choice((0.0, 0.5)))
     mx, my = np.abs(lu - p / 2), np.abs(lv - p / 2)
-    motif = fbm(sd, mx, my, p * rng.uniform(0.1, 0.4), 4, limit=2 * px) > rng.uniform(-0.1, 0.2)
-    return np.where(motif, rng.uniform(0.2, 0.8), 0.5) + 0.04 * fbm(sd + 1, x, y, 5, 3, limit=2 * px)
+    motif = n.fbm(sd, mx, my, p * rng.uniform(0.1, 0.4), 4) > rng.uniform(-0.1, 0.2)
+    return np.where(motif, rng.uniform(0.2, 0.8), 0.5) + 0.04 * n.fbm(sd + 1, x, y, 5, 3)
 
 
-def _carpet(rng, x, y, sd, px):
-    d1, _, cid = worley(sd, x, y, rng.uniform(0.8, 2.5))
-    return 0.4 + 0.2 * cid + 0.25 * d1 + 0.2 * fbm(sd + 1, x, y, rng.uniform(30, 200), 4, limit=2 * px)
+def _carpet(rng, x, y, sd, n):
+    d1, _, cid = n.worley(sd, x, y, rng.uniform(0.8, 2.5))
+    return 0.4 + 0.2 * cid + 0.25 * d1 + 0.2 * n.fbm(sd + 1, x, y, rng.uniform(30, 200), 4)
 
 
 TEXTURES = (_wood, _fabric, _marble, _granite, _tiles, _felt, _plain, _leather, _terrazzo, _cork, _pebbled, _gingham,
@@ -314,11 +314,11 @@ TEXTURES = (_wood, _fabric, _marble, _granite, _tiles, _felt, _plain, _leather, 
             _carpet)
 
 
-def _surface(rng, x, y, px):
+def _surface(rng, x, y, n):
     sd = int(rng.integers(1 << 30))
-    t = TEXTURES[rng.integers(len(TEXTURES))](rng, x, y, sd, px)
+    t = TEXTURES[rng.integers(len(TEXTURES))](rng, x, y, sd, n)
     base, contrast = rng.uniform(0.15, 0.85), rng.uniform(0.6, 1.6)
-    stain = 1 + rng.uniform(0, 0.25) * fbm(sd + 99, x, y, rng.uniform(100, 600), 3, limit=2 * px)
+    stain = 1 + rng.uniform(0, 0.25) * n.fbm(sd + 99, x, y, rng.uniform(100, 600), 3)
     return np.clip(base * (1 + contrast * (t - 0.5)) * stain, 0, 1)
 
 
@@ -347,7 +347,7 @@ PLAIN_PAPER_PROB = 0.05
 PLAIN_GRAY_PROB = 0.05
 
 
-def _uniform(rng, x, y, lvl, paper, px):
+def _uniform(rng, x, y, lvl, paper, n):
     """Uniform level, or a linear or radial gradient from it; faint paper structure when paper."""
     kind = rng.integers(3)
     th = rng.uniform(0, 2 * np.pi)
@@ -361,8 +361,8 @@ def _uniform(rng, x, y, lvl, paper, px):
     if not paper:
         return np.clip(g, 0, 1).astype(np.float32)
     sd = int(rng.integers(1 << 30))
-    g = g * (1 + rng.uniform(0, 0.02) * fbm(sd, x, y, rng.uniform(0.5, 3), 3, limit=2 * px)
-             + rng.uniform(0, 0.02) * fbm(sd + 1, x, y, rng.uniform(10, 80), 4, limit=2 * px))
+    g = g * (1 + rng.uniform(0, 0.02) * n.fbm(sd, x, y, rng.uniform(0.5, 3), 3)
+             + rng.uniform(0, 0.02) * n.fbm(sd + 1, x, y, rng.uniform(10, 80), 4))
     return np.clip(g, 0, 1).astype(np.float32)
 
 
@@ -373,21 +373,23 @@ def table_pixel(cam, size):
     return float(np.nanmedian(d)) if np.isfinite(d).any() else 0.0
 
 
-def table_texture(rng, Q, px):
+def table_texture(rng, Q, px, ns):
     """Table luminance at table points Q (h, w, 3) mm, evaluated per point (sharp at any distance). One of the
     TEXTURES (fractal, cellular, domain-warped, woven, printed and tiled patterns) at a random base level, contrast
     and stains; sometimes a second surface beyond a straight table edge, things lying around the page, a broad
-    brightness gradient and a random tone curve."""
+    brightness gradient and a random tone curve. Noise feature sizes are times ns, those under 2 px (px: the table's pixel
+    size) left out."""
     x, y = np.nan_to_num(Q[..., 0]).astype(np.float32), np.nan_to_num(Q[..., 1]).astype(np.float32)
+    n = Field(ns, 2 * px)
     r = rng.random()
     if r < PLAIN_PAPER_PROB:
-        return _uniform(rng, x, y, rng.uniform(0.55, 0.97), True, px)
+        return _uniform(rng, x, y, rng.uniform(0.55, 0.97), True, n)
     if r < PLAIN_PAPER_PROB + PLAIN_GRAY_PROB:
-        return _uniform(rng, x, y, rng.uniform(0.1, 0.9), False, px)
-    g = _surface(rng, x, y, px)
+        return _uniform(rng, x, y, rng.uniform(0.1, 0.9), False, n)
+    g = _surface(rng, x, y, n)
     if rng.random() < 0.3:
         th, off = rng.uniform(0, 2 * np.pi), rng.uniform(150, 400)
-        g = np.where(x * np.cos(th) + y * np.sin(th) > off, _surface(rng, x, y, px), g)
+        g = np.where(x * np.cos(th) + y * np.sin(th) > off, _surface(rng, x, y, n), g)
     if rng.random() < 0.4:
         g = _clutter(rng, x, y, g, 400)
     if rng.random() < 0.5:

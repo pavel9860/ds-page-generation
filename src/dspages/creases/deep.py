@@ -12,7 +12,7 @@ import numpy as np
 
 from . import shallow
 from ..config import DeepCreaseCfg
-from ..layout.paper import smooth_noise
+from ..noise import smooth_noise
 
 FIELD_MM = 2.0
 

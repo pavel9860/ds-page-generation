@@ -9,7 +9,7 @@ import numpy as np
 
 from ..config import LayoutCfg, ShallowCreaseCfg
 from ..creases import shallow
-from ..noise import fbm, fbm_rotated, fleck_mask, scaled, set_scale, warp
+from ..noise import fbm, fbm_rotated, fleck_mask, smooth_noise, warp
 
 YELLOW_LUMA = 0.24              # Rec. 709 luma of a yellow cast (0, 0.25, 0.8) per unit strength
 STAIN_LUMA = 0.57               # of a brown stain (0.3, 0.6, 1.0)
@@ -18,16 +18,6 @@ BLUR_LEVELS = (0.0, 0.7, 1.4, 2.4, 3.6, 5.0)    # px, the pre-blurred levels of 
 
 def _u(rng, r):
     return float(rng.uniform(*r)) if isinstance(r, tuple) else r
-
-
-def smooth_noise(rng, shape, scale_px):
-    """Zero-mean, unit-std Gaussian noise with correlation length ~scale_px, made on a coarse grid."""
-    h, w = shape
-    s = max(1.0, scaled(scale_px) / 4)
-    small = rng.standard_normal((max(2, int(h / s) + 2), max(2, int(w / s) + 2)), dtype=np.float32)
-    small = cv2.GaussianBlur(small, (0, 0), 2.0)
-    n = cv2.resize(small, (w, h), interpolation=cv2.INTER_CUBIC)
-    return (n - n.mean()) / (n.std() + 1e-6)
 
 
 def _grow(box, pad, shape):
@@ -86,27 +76,27 @@ def _logu(rng, r):
 CLOUD_STEP = 4                              # clouds (>= 2 mm) are evaluated on every 4th pixel
 
 
-def paper_texture(rng, h, w, px_per_mm, p):
+def paper_texture(rng, h, w, px_per_mm, p, k):
     """Zero-mean paper structure (h, w): fibres (fractal noise stretched along a random direction), formation
     clouds (fractal noise of random scale, octaves and roughness, sometimes domain-warped), sometimes recycled
-    flecks (cellular noise), and pixel grain; every scale and amplitude drawn per page."""
+    flecks (cellular noise), and pixel grain; every scale and amplitude drawn per page, the feature sizes times k."""
     sd = int(rng.integers(1 << 30))
-    th, k = rng.uniform(0, np.pi), _logu(rng, p["fiber_stretch"])
-    t = _u(rng, p["fiber_amp"]) * fbm_rotated(sd, h, w, 1.0 / px_per_mm, th, k, _u(rng, p["fiber_mm"]), int(rng.integers(2, 4)))
+    th, stretch = rng.uniform(0, np.pi), _logu(rng, p["fiber_stretch"])
+    t = _u(rng, p["fiber_amp"]) * fbm_rotated(sd, h, w, 1.0 / px_per_mm, th, stretch, k * _u(rng, p["fiber_mm"]), int(rng.integers(2, 4)))
     q = CLOUD_STEP
     cy, cx = (v.astype(np.float32) for v in np.meshgrid(np.arange(0, h, q) / px_per_mm, np.arange(0, w, q) / px_per_mm, indexing="ij"))
     if rng.random() < 0.4:
-        cx, cy = warp(sd + 7, cx, cy, _logu(rng, p["cloud_mm"]), rng.uniform(1, 10))
-    cloud = fbm(sd + 20, cx, cy, _logu(rng, p["cloud_mm"]), int(rng.integers(2, 7)), rng.uniform(0.35, 0.7))
+        cx, cy = warp(sd + 7, cx, cy, k * _logu(rng, p["cloud_mm"]), rng.uniform(1, 10))
+    cloud = fbm(sd + 20, cx, cy, k * _logu(rng, p["cloud_mm"]), int(rng.integers(2, 7)), rng.uniform(0.35, 0.7))
     t += _u(rng, p["cloud_amp"]) * cv2.resize(cloud, (w, h), interpolation=cv2.INTER_CUBIC)
     if rng.random() < p["fleck_prob"]:
-        t -= _u(rng, p["fleck_amp"]) * fleck_mask(sd + 40, h, w, _logu(rng, (0.5, 4.0)) * px_per_mm, rng.uniform(0.04, 0.12), rng.uniform(0.1, 0.5))
+        t -= _u(rng, p["fleck_amp"]) * fleck_mask(sd + 40, h, w, k * _logu(rng, (0.5, 4.0)) * px_per_mm, rng.uniform(0.04, 0.12), rng.uniform(0.1, 0.5))
     return t + _u(rng, p["grain_amp"]) * rng.standard_normal((h, w), dtype=np.float32)
 
 
 def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
     """uint8 gray page (0 ink .. 255 paper) -> uint8 luminance page and the names of the effects applied."""
-    set_scale(rng.uniform(*c.noise_scale))
+    ns = rng.uniform(*c.noise_scale)                 # factor of this page's noise feature sizes
     fx = {k: e for k, e in c.effects.items() if rng.random() < e.prob}
     h, w = gray.shape
     a = 1.0 - gray.astype(np.float32) / 255.0
@@ -117,7 +107,7 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
     if "ink_fade" in fx:
         p = fx["ink_fade"].params
         a *= 1 - _u(rng, p["strength"]) * np.clip(0.5 + 0.5 *
-                                                  smooth_noise(rng, (h, w), _u(rng, p["scale_mm"]) * px_per_mm), 0, 1)
+                                                  smooth_noise(rng, (h, w), ns * _u(rng, p["scale_mm"]) * px_per_mm), 0, 1)
     if "toner_speckle" in fx:
         p = fx["toner_speckle"].params
         n = rng.poisson(_u(rng, p["density"]) * h * w)
@@ -143,7 +133,7 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
     paper, ink = _u(rng, c.paper_tone), _u(rng, c.ink_tone)
     tex = np.ones((h, w), np.float32)
     if "paper_texture" in fx:
-        tex += paper_texture(rng, h, w, px_per_mm, fx["paper_texture"].params)
+        tex += paper_texture(rng, h, w, px_per_mm, fx["paper_texture"].params, ns)
     if "show_through" in fx:
         p = fx["show_through"].params
         back = cv2.GaussianBlur(a[:, ::-1], (0, 0), _u(rng, p["blur_px"]))

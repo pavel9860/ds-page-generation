@@ -14,7 +14,6 @@ import cv2
 import numpy as np
 
 from ..config import Preset
-from ..noise import set_scale
 from . import photo
 from .camera import make_camera, project, vertex_normals
 from .raster import grid_faces, rasterize
@@ -64,7 +63,7 @@ def _page_in_photo(lin, mx, my, mask):
 def make_sample(rng, page, surf, P: Preset):
     """page: layout luminance sheet; surf: geometry.make_surface output. -> dict of arrays and meta."""
     c = P.render
-    set_scale(rng.uniform(*P.layout.noise_scale))
+    ns = rng.uniform(*P.layout.noise_scale)          # factor of this photo's noise feature sizes
     px = page.shape[1::-1]                                   # photo (w, h) = the flat page's
     X, Y, Z = surf["X"], surf["Y"], surf["Z"]
     nv, nu = X.shape
@@ -93,7 +92,7 @@ def make_sample(rng, page, surf, P: Preset):
     if c.background == "texture" and rng.random() >= c.black_prob:
         ys, xs = np.nonzero(~mask)
         bg = np.zeros(mask.shape, np.float32)
-        bg[ys, xs] = photo.table_texture(rng, photo.table_points(cam, px, xs=xs + 0.5, ys=ys + 0.5), photo.table_pixel(cam, px)) ** 2.2
+        bg[ys, xs] = photo.table_texture(rng, photo.table_points(cam, px, xs=xs + 0.5, ys=ys + 0.5), photo.table_pixel(cam, px), ns) ** 2.2
         if shading:
             q = photo.table_points(cam, px, BG_STEP)
             ok = np.isfinite(q[..., 0])

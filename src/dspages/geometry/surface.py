@@ -7,6 +7,7 @@ deep crease network are height maps in page coordinates, carried onto the box. R
 laid out inextensibly, then the page grid (u, v) is sampled from the box and turned back to the page frame.
 """
 import numpy as np
+from numba import njit
 from scipy.interpolate import RegularGridInterpolator
 
 from ..config import GeometryCfg, paper_props
@@ -14,6 +15,8 @@ from ..creases import deep, shallow
 from .sag import solve_sag
 from .scenes import lerp_scene, sample_ends, scene_label
 from .strip import solve_strip
+
+ISO_PASSES = 2                  # row and column passes that give a creased sheet its lengths back (strain < 1e-4)
 
 
 def inextensible(x, z, u, v):
@@ -23,6 +26,33 @@ def inextensible(x, z, u, v):
                                              axis=1)], axis=1)
     dl = np.diff(v)[:, None] ** 2 - np.diff(x, axis=0) ** 2 - np.diff(z, axis=0) ** 2
     return x, np.concatenate([np.zeros((1, len(u))), np.cumsum(np.sqrt(np.maximum(dl, 0)), axis=0)], axis=0)
+
+
+@njit(cache=True)
+def _resample(Q, t):
+    """Each curve Q[r] (m, 3) walked to the arc lengths t (from its first point; past its end straight on)."""
+    out = np.empty_like(Q)
+    n, m = Q.shape[0], Q.shape[1]
+    for r in range(n):
+        k, s0 = 0, 0.0
+        seg = np.sqrt((Q[r, 1, 0] - Q[r, 0, 0]) ** 2 + (Q[r, 1, 1] - Q[r, 0, 1]) ** 2 + (Q[r, 1, 2] - Q[r, 0, 2]) ** 2)
+        for j in range(m):
+            while k < m - 2 and s0 + seg < t[j]:
+                s0 += seg
+                k += 1
+                seg = np.sqrt((Q[r, k + 1, 0] - Q[r, k, 0]) ** 2 + (Q[r, k + 1, 1] - Q[r, k, 1]) ** 2
+                              + (Q[r, k + 1, 2] - Q[r, k, 2]) ** 2)
+            w = (t[j] - s0) / max(seg, 1e-12)
+            for c in range(3):
+                out[r, j, c] = Q[r, k, c] + w * (Q[r, k + 1, c] - Q[r, k, c])
+    return out
+
+
+def _spaced(P, t, axis):
+    """The curves of grid P (n, m, 3) along `axis` (1: rows, 0: columns) with their points moved along them to the arc
+    lengths t from the first: each keeps its shape and its material length."""
+    Q = np.ascontiguousarray(np.moveaxis(P, axis, 1))
+    return np.moveaxis(_resample(Q, np.asarray(t, float) - t[0]), 1, axis)
 
 
 def strains(X, Y, Z, u, v):
@@ -104,15 +134,20 @@ def make_surface(rng, g: GeometryCfg, paper, cond):
         z = z + solve_sag(up, vg, z, span, pp, g.shell_nodes)
 
     hmap, axes, lines = _crease_heights(rng, g, cond, [f[0] for f in sa["folds"]], lm_to_p)
+    z = np.maximum(z, 0.0)
+    xd, yd = inextensible(x, z, up, vg)
     if hmap is not None:
         P, Gq = np.meshgrid(up, vg)
         a_, b_ = _swap((P - p0) * cb - (Gq - g0) * sn, (P - p0) * sn + (Gq - g0) * cb, cond["along_long"])
-        z = z + RegularGridInterpolator(axes, hmap, bounds_error=False, fill_value=None)(
-            np.stack([np.clip(b_, 0, sh), np.clip(a_, 0, sw)], -1))
-    if cond["combo"][3]:
-        z = z - z.min()
-    z = np.maximum(z, 0.0)
-    xd, yd = inextensible(x, z, up, vg)
+        h = RegularGridInterpolator(axes, hmap, bounds_error=False, fill_value=None)(np.stack([np.clip(b_, 0, sh), np.clip(a_, 0, sw)], -1))
+        S = np.stack([xd, yd, z], -1)
+        n = np.cross(np.gradient(S, axis=1), np.gradient(S, axis=0))
+        S = S + h[..., None] * n / np.linalg.norm(n, axis=-1, keepdims=True)     # creases stand out along the normal
+        for _ in range(ISO_PASSES):
+            S[..., 2] = np.maximum(S[..., 2] - (S[..., 2].min() if cond["combo"][3] else 0.0), 0.0)
+            S = _spaced(_spaced(S, up, 1), vg, 0)
+        xd, yd, z = np.moveaxis(S, -1, 0)
+        z = np.maximum(z, 0.0)
 
     u = np.linspace(0.0, sw, nu)
     v = np.linspace(0.0, sh, nv)

@@ -12,7 +12,5 @@
   (python -m dspages.prep.files, then the manifest).
 
 ## Pipeline (do not touch geometry solve_strip / solve_sag)
-- Geometry reads the noise scale the layout of the same process left (deep creases through layout.paper.smooth_noise):
-  `all` and `geometry` give different surfaces for one index. Pass the scale explicitly.
 - Refactor, simplify, consolidate the pipeline (generate, render, paper effects).
 - 200 UV samples (flat, warped, dewarped, UV map, 3D map) with the new layout and the noise scale: python -m dspages all, then tools/gallery.py.
