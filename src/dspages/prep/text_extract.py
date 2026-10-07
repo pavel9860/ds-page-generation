@@ -158,18 +158,61 @@ def classify_language(path: str) -> str:
 
 _SCRIPT_LANG = dict(CYRILLIC="cyr", CJK="zh", HIRAGANA="ja", KATAKANA="ja", HANGUL="ko", GREEK="el", HEBREW="he",
                     ARABIC="ar", THAI="th", DEVANAGARI="hi", BENGALI="bn", GEORGIAN="ka", ARMENIAN="hy", TAMIL="ta",
-                    TELUGU="te")
+                    TELUGU="te", GUJARATI="gu", KANNADA="kn", MALAYALAM="ml", GURMUKHI="pa", ORIYA="or", SINHALA="si",
+                    KHMER="km", LAO="lo", MYANMAR="my", ETHIOPIC="am")
+
+
+# (language, ((tokens, min, max), ...)): per mille of the Cyrillic letters for a string of letters, of the words
+# for a tuple of words; the first rule whose limits all hold wins
+_CYR_SIGNATURES = (
+    ("tg", (("ӣӯҳҷ", 1, None),)),
+    ("kk", (("әұ", 1, None),)),
+    ("kk", (("ғқ", 5, None),)),
+    ("ky", (("ң", 1, None), ("өү", 15, None))),
+    ("ky", (("өү", 15, None), (("жана", "менен", "үчүн", "боюнча"), 3, None))),
+    ("mn", (("өү", 15, None),)),
+    ("be", (("ў", 1, None),)),
+    ("mk", (("ѓќѕ", 0.5, None),)),
+    ("sr", (("ђћ", 0.5, None),)),
+    ("mk", (("ј", 2, None), (("во",), 3, None))),
+    ("sr", (("ј", 2, None),)),
+    ("uk", (("ґєї", 1, None),)),
+    ("bg", (("ъ", 2, None), ("ыэ", None, 0.5))),
+    ("ru", (("ыэё", 1, None),)),
+)
+CYR_MIN_LETTERS = 200
+
+
+def cyrillic_language(text: str) -> str:
+    """A Cyrillic language code by _CYR_SIGNATURES, "cyr" when the text is short or matches none."""
+    from collections import Counter
+    low = text.lower()
+    letters = Counter(_CYR_RE.findall(low))
+    n = sum(letters.values())
+    if n < CYR_MIN_LETTERS:
+        return "cyr"
+    words = Counter(re.findall(r"\w+", low))
+    n_words = max(1, sum(words.values()))
+
+    def ok(tokens, lo, hi):
+        v = (1000 * sum(words[w] for w in tokens) / n_words if isinstance(tokens, tuple)
+             else 1000 * sum(letters[c] for c in tokens) / n)
+        return (lo is None or v >= lo) and (hi is None or v < hi)
+    return next((lang for lang, rule in _CYR_SIGNATURES if all(ok(*r) for r in rule)), "cyr")
 
 
 def script_language(text: str) -> str:
-    """Language code of the dominant Unicode script of the letters ("latin" for Latin, "unknown" without letters)."""
+    """Language code of the dominant Unicode script of the letters ("latin" for Latin, "unknown" without letters);
+    Cyrillic resolved by cyrillic_language."""
     import unicodedata
     from collections import Counter
     names = Counter(unicodedata.name(c, "?").split()[0] for c in text if c.isalpha())
     if not names:
         return "unknown"
-    return _SCRIPT_LANG.get(max(("HIRAGANA", "KATAKANA"), key=names.get) if names["HIRAGANA"] + names["KATAKANA"]
+    lang = _SCRIPT_LANG.get(max(("HIRAGANA", "KATAKANA"), key=lambda k: names[k])
+                            if names["HIRAGANA"] + names["KATAKANA"]
                             > 0.05 * sum(names.values()) else names.most_common(1)[0][0], "latin")
+    return cyrillic_language(text) if lang == "cyr" else lang
 
 
 def name_language(path: str):

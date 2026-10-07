@@ -27,7 +27,7 @@ from .config import get_preset
 from .geometry.surface import make_surface
 from .layout.generate import make_layout
 from .layout.sources import load_manifest
-from .layout.text import find_fonts
+from .layout import refont
 from .render.generate import make_sample
 
 PARTS = dict(layout=0, geometry=1, render=2)
@@ -51,7 +51,8 @@ def _init(preset, out, seed, manifest=None):
     threadpool_limits(1)
     P = get_preset(preset)
     _W.update(P=P, out=Path(out), seed=seed, plan=load_plan(Path(out) / "plan.jsonl"),
-              manifest=load_manifest(manifest or P.paths.manifest), fonts=find_fonts(P.paths.font_dirs))
+              manifest=load_manifest(manifest or P.paths.manifest), fonts=refont.font_set(P.paths.font_dirs))
+    refont.load_glyphs()
 
 
 def _rng(i, part):
@@ -69,8 +70,9 @@ def _preview(part, i):
 
 def _layout(i, save):
     spec = _W["plan"][i]
-    L = make_layout(_rng(i, "layout"), dict(_W["manifest"][spec["entry"]], offset=spec.get("offset", 0)),
+    L = make_layout(_rng(i, "layout"), _W["manifest"][spec["entry"]],
                     layout_preset(_W["P"], spec), _W["fonts"])
+    refont.save_glyphs()
     if save:
         io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], L["page"], _preview("layout", i))
     return L["page"], L["meta"]

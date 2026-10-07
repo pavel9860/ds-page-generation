@@ -16,13 +16,11 @@ def small(name):
 
 
 def fake_manifest():
-    """Entries of every script group; raster images too small for an A4 sheet at 1:1 are every other block of six."""
+    """Pages of every script group (raster and restyled pages, as the manifest writes them after its checks)."""
     langs = ["en", "eu", "cyr", "zh", "el", "unknown"]
-    out = []
-    for i in range(120):
-        big = (i // 6) % 2 == 0
-        out.append(dict(source_path=f"x{i}.png", page_index=0, kind="raster", language=langs[i % 6], category=None,
-                        bbox_w=1200 if big else 400, bbox_h=1700 if big else 600))
+    out = [dict(source_path=f"x{i}.png", page_index=0, kind="raster", language=langs[i % 6], category=None)
+           for i in range(60)]
+    out += [dict(source_path=f"b{i % 3}.pdf", page_index=i, kind="refont", language=langs[i % 5], category="books_pdf") for i in range(60)]
     return out
 
 
@@ -41,10 +39,13 @@ def manifest(full_small):
     from dspages.layout.sources import load_manifest
     if not Path(full_small.paths.manifest).exists():
         pytest.skip("manifest not available")
-    return load_manifest(full_small.paths.manifest)
+    m = load_manifest(full_small.paths.manifest)
+    if not all("window" in e or "scale" in e for e in m[:100]):
+        pytest.skip("manifest of an older format: rebuild it")
+    return m
 
 
 @pytest.fixture(scope="session")
 def fonts(full_small):
-    from dspages.layout.text import find_fonts
-    return find_fonts(full_small.paths.font_dirs)
+    from dspages.layout.refont import font_set
+    return font_set(full_small.paths.font_dirs)

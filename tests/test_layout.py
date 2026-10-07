@@ -4,7 +4,6 @@ import numpy as np
 
 from dspages.layout.content import content_mask, place_window, window_stats
 from dspages.layout.generate import make_layout
-from dspages.layout.text import is_rtl, render_text
 
 
 def test_window_stats_counts_padding_as_empty():
@@ -50,15 +49,6 @@ def test_content_mask_finds_text_and_images():
     assert not mask[: int(120 * s)].any()
 
 
-def test_text_fills_the_page(fonts):
-    rng = np.random.default_rng(0)
-    words = " ".join(["paper"] * 5000)
-    pg = render_text(words, rng, 600, 800, 4.0, fonts, 10, 1.3)
-    rows = (pg < 128).any(1)
-    assert rows.mean() > 0.5 and rows[-60:].any()
-    assert is_rtl("שלום עולם") and not is_rtl("hello")
-
-
 def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
     rng = np.random.default_rng(0)
     pw, ph = full_small.layout.page_px
@@ -69,7 +59,7 @@ def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
         kinds.add(m["kind"])
         assert page.shape == (ph, pw) and gray.shape == (ph, pw)
         mx, my = round(m["margin"] * pw), round(m["margin"] * ph)
-        if mx and m["kind"] == "book_text":
+        if mx and m["kind"] == "refont":
             assert gray[:, :mx].min() == 255 and gray[:, -mx:].min() == 255
         inner = gray[my:ph - my, mx:pw - mx]
         mask, _ = content_mask(inner)
@@ -108,14 +98,3 @@ def test_ruled_form_is_not_a_picture(full_small):
         cv2.putText(page, "Name / Date / Signature", (80, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 0, 2)
     boxes = pictures(page, full_small.layout.pictures)
     assert picture_mask(boxes, page.shape, 1.0).mean() <= full_small.layout.max_image
-
-
-def test_formatted_text_columns_and_rtl(full_small, fonts):
-    from dataclasses import replace
-    f = replace(full_small.layout.text_format, columns=((2, 1.0),), heading_prob=1.0)
-    for text in ("word " * 3000, "שלום עולם " * 1500):
-        pg = render_text(text, np.random.default_rng(1), 800, 1000, 4.0, fonts, 10, 1.3, f)
-        cols = (pg < 128).any(0)
-        mid = cols[380:420]
-        assert cols[:300].any() and cols[500:].any() and not mid.all()
-        assert (pg < 128).any(1)[-60:].any()

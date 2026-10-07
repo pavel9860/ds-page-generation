@@ -1,14 +1,13 @@
-"""Part 1: flat page layouts from the manifest (book texts and rasterized documents) with paper effects."""
+"""Part 1: flat page layouts from the manifest (restyled PDF pages and rasterized documents) with paper effects."""
 import cv2
 import numpy as np
 
 from ..config import Preset
 from . import paper
-from .content import SCAN_MAX_SIDE, bbox, content_mask, place_window, window_stats
-from .pictures import picture_mask
+from .content import content_mask, window_stats
 from .grid import crossings, grid_page
 from .sources import is_pdf, raster_page
-from .text import book_snippet, render_text
+from .refont import sheet
 
 
 def _crop(src, x, y, w, h, pad):
@@ -21,34 +20,18 @@ def _crop(src, x, y, w, h, pad):
     return out
 
 
-def _raster_sheet(rng, entry, pw, ph, c):
-    """Sheet from a raster page: the window of place_window (fill, pictures) on the page's content. PDF pages are
-    rendered twice: small for the content mask, then once at the zoom that makes the window >= 1:1 (within
-    max_zoom); images are read once."""
+def _raster_sheet(entry, pw, ph, c):
+    """Sheet from a raster page: the manifest's window, PDF pages rendered at the zoom that makes it >= 1:1 (within
+    max_zoom)."""
+    x, y, w, h = entry["window"]
     pdf = is_pdf(entry)
-    if pdf:
-        q = min(1.0, SCAN_MAX_SIDE / max(entry["used_h"], entry["used_w"]))
-        mask, s = content_mask(raster_page(entry, q))
-        s *= q
-    else:
-        src = raster_page(entry)
-        mask, s = content_mask(src)
-    y0, y1, x0, x1 = (v / s for v in bbox(mask))
-    cap = c.max_zoom if pdf else 1.0
-    pics = picture_mask(entry.get("pictures", ()), mask.shape, s)
-    (x, y, w, h), fill, img, ok = place_window(rng, (x0, y0, x1 - x0 + 1 / s, y1 - y0 + 1 / s), pw / ph,
-                                               c.margin_frac[1], pw / cap, mask, s, pics, c.min_fill,
-                                               c.fill_grid, c.max_image)
-    k = min(max(pw / w, 1.0), cap)
-    if pdf:
-        src = raster_page(entry, k)
+    k = min(max(pw / w, 1.0), c.max_zoom) if pdf else 1.0
+    src = raster_page(entry, k)
     pad = int(np.percentile(src, 95))
     crop = _crop(src, *(round(v * k) for v in (x, y, w, h)), pad)
     gray = cv2.resize(crop, (pw, ph), interpolation=cv2.INTER_AREA if crop.shape[1] >= pw else cv2.INTER_CUBIC)
-    margin = float(max(x0 - x, x + w - x1, y0 - y, y + h - y1, 0.0) / w)
-    return gray, dict(window=(x, y, w, h), window_ok=ok, zoom=k, fill=fill, image_share=img,
-                      upscale=float(pw / crop.shape[1]),
-                      margin=margin)
+    return gray, dict(window=(x, y, w, h), zoom=k, fill=entry["fill"], image_share=entry["picture_share"],
+                      upscale=float(pw / crop.shape[1]), margin=entry["margin"])
 
 
 def sheet_fill(gray, grid):
@@ -59,31 +42,28 @@ def sheet_fill(gray, grid):
 
 
 def make_layout(rng, entry, P: Preset, fonts):
-    """-> dict(page: uint8 luminance sheet, gray: uint8 clean sheet before effects, meta)."""
+    """-> dict(page: uint8 luminance sheet, gray: uint8 clean sheet before effects, meta). Raster pages (window)
+    and restyled PDF pages (body size, scale, margin and seed) as the manifest checked them."""
     c = P.layout
     pw, ph = c.page_px
     ppm = pw / c.sheet_mm[0]
-    meta = dict(source=entry["source_path"], page_index=entry["page_index"], offset=entry.get("offset", 0),
-                kind=entry["kind"], language=entry["language"], category=entry["category"])
-    grid = rng.random() < c.grid_prob
-    if entry["kind"] == "raster" and not grid:
-        gray, m = _raster_sheet(rng, entry, pw, ph, c)
-        meta.update(m)
-    else:
+    meta = dict(source=entry["source_path"], page_index=entry["page_index"], kind=entry["kind"],
+                language=entry["language"], category=entry["category"])
+    if rng.random() < c.grid_prob:
         m = rng.uniform(*c.margin_frac)
         mx, my = round(m * pw), round(m * ph)
-        iw, ih = pw - 2 * mx, ph - 2 * my
-        if not grid:
-            pt, ls = rng.uniform(*c.font_pt), rng.uniform(*c.line_spacing)
-            text = book_snippet(entry["source_path"], entry.get("offset", 0), c.book_page_chars)
-            inner = render_text(text, rng, iw, ih, ppm, fonts, pt, ls, c.text_format)
-            meta.update(font_pt=float(pt), line_spacing=float(ls))
-        else:
-            inner = grid_page(iw, ih, ppm, c.grid)
-            meta.update(kind="grid", crossings_mm=(crossings(iw / ppm, ih / ppm, c.grid) + [mx / ppm, my / ppm]))
         gray = np.full((ph, pw), 255, np.uint8)
-        gray[my:my + ih, mx:mx + iw] = inner
-        meta.update(margin=float(m), fill=sheet_fill(gray, c.fill_grid))
+        gray[my:ph - my, mx:pw - mx] = grid_page(pw - 2 * mx, ph - 2 * my, ppm, c.grid)
+        meta.update(kind="grid", margin=float(m), fill=1.0,
+                    crossings_mm=crossings((pw - 2 * mx) / ppm, (ph - 2 * my) / ppm, c.grid) + [mx / ppm, my / ppm])
+    elif entry["kind"] == "raster":
+        gray, m = _raster_sheet(entry, pw, ph, c)
+        meta.update(m)
+    else:
+        gray, info = sheet(entry["source_path"], entry["page_index"], entry["seed"], fonts, entry["font_pt"],
+                           entry["scale"], entry["margin"], (pw, ph))
+        meta.update(margin=entry["margin"], font_pt=entry["font_pt"], scale=entry["scale"], fill=entry["fill"],
+                    body_pt=info["body_pt"])
     page, effects = paper.apply(rng, gray, ppm, c, P.geometry.shallow)
     meta["effects"] = effects
     return dict(page=page, gray=gray, meta=meta)

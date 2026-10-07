@@ -1,8 +1,10 @@
-"""Source manifest: one JSON line per usable page of the layout corpora (PDF pages, images, book texts).
+"""Source manifest: one JSON line per usable page of the layout corpora (PDF pages, images).
 
 Raster fields: source_path, page_index, language, category, kind, rotate90, deskew_deg, used_h, used_w (raster
-size), bbox_w, bbox_h (content box), fill and picture_share of the window check. Book texts: one entry each
-with chars. Rejected pages (and the check they failed) go to <out>.rejected.jsonl.
+size), window (x, y, w, h in page px: the window that passed the checks), margin, pictures, fill, picture_share.
+Restyled pages (kind "refont", digital-born PDF pages set again in other fonts): seed, margin, font_pt (body), scale (other
+sizes) and fill of the sheet (generation renders exactly that page). Rejected pages (and the check they failed) go to <out>.rejected.jsonl. No source
+document holds more than DOC_SHARE of its script group.
 
 python -m dspages.prep.manifest --out <paths.manifest>
 """
@@ -10,8 +12,10 @@ import argparse
 import glob
 import json
 import os
+import re
 import time
 import zlib
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -26,30 +30,16 @@ from ..layout.sources import RASTER_ZOOM
 from .text_extract import name_language
 
 LAYOUTS = Paths().layouts
-BOOKS = Paths().books
 MIN_CONTENT_AREA_FRAC = 0.01
 MAX_MARGIN_FRAC = 0.50
 PAGES_PER_PDF_CAP = 10                 # accepted pages per PDF
+TRIES_PER_PDF = 30                     # pages checked per PDF
+DOC_SHARE = 0.02                       # max share of a script group's pages from one source document
 CHECK_PX = 800                         # longest side of the PDF render the checks run on (none needs more)
 
 
 def _init():
     cv2.setNumThreads(1)
-
-
-def load_metadata(meta_path: str) -> dict:
-    """local_path -> {language, bucket, category, pages}, keyed after
-    normalizing the metadata's stale '/Layouts/test/corpus/...' prefix to
-    the corpus's actual on-disk '/Layouts/corpus/...' location."""
-    idx = {}
-    if not os.path.exists(meta_path):
-        return idx
-    with open(meta_path, encoding="utf-8") as f:
-        for line in f:
-            d = json.loads(line)
-            p = d["local_path"].replace("/Layouts/test/corpus/", "/Layouts/corpus/")
-            idx[p] = d
-    return idx
 
 
 def _seed(path: str) -> int:
@@ -90,25 +80,31 @@ def _page_record(gray, path, pi, language, category, scan, f=1.0):
 
     def window(pics, max_image):
         return place_window(np.random.default_rng(0), box, pw / ph, c.margin_frac[1], pw / cap, mask, s, pics,
-                            c.min_fill, c.fill_grid, max_image)[1:]
+                            c.min_fill, c.fill_grid, max_image)
 
-    fill, _, ok = window(np.zeros_like(mask), 1.0)
+    _, fill, _, ok = window(np.zeros_like(mask), 1.0)
     if not ok:
         return _reject(path, pi, language, "fill", fill=round(fill, 3))
     boxes = pictures(gray, c.pictures) * f if category != "sheet_music" else np.zeros((0, 4))  # staves read as pictures
-    fill, share, ok = window(picture_mask(boxes, mask.shape, s), c.max_image)
+    win, fill, share, ok = window(picture_mask(boxes, mask.shape, s), c.max_image)
     if not ok:
         return _reject(path, pi, language, "pictures", fill=round(fill, 3), picture_share=round(share, 3))
     angle = estimate_deskew_angle(gray) if scan else 0.0
     return dict(source_path=path, page_index=pi, language=language, category=category, kind="raster",
                 rotate90=rot, deskew_deg=round(angle, 2) if needs_deskew(angle) else 0.0, used_h=round(gray.shape[0] * f),
-                used_w=round(gray.shape[1] * f), bbox_w=round(box[2]), bbox_h=round(box[3]),
+                used_w=round(gray.shape[1] * f), window=[round(v, 1) for v in win], margin=round(_margin(box, win), 4),
                 pictures=np.round(boxes, 1).tolist(), fill=round(fill, 3), picture_share=round(share, 3))
 
 
-def _is_scan(category, has_text):
-    """Pages that get rotation and deskew: document PDF pages without a text layer. Book scans and images don't."""
-    return category != "book_scan" and not has_text
+def _margin(box, win):
+    """Widest blank margin of the window around the content box, as a fraction of the window width."""
+    (x0, y0, bw, bh), (x, y, w, h) = box, win
+    return float(max(x0 - x, x + w - x0 - bw, y0 - y, y + h - y0 - bh, 0.0) / w)
+
+
+def _is_scan(has_text):
+    """Pages that get rotation and deskew: PDF pages without a text layer and images."""
+    return not has_text
 
 
 def _box(b, s):
@@ -123,15 +119,41 @@ def _bbox_keep(b, h, w):
             and 1 - (y1 - y0 + 1) / h <= MAX_MARGIN_FRAC and 1 - (x1 - x0 + 1) / w <= MAX_MARGIN_FRAC)
 
 
+_FONTS = []
+
+
+def _refont_record(path, pi, language, category, seed):
+    """A digital-born page restyled: the settings drawn (margin, body size, scale of the other sizes, a seed for the
+    fonts), the sheet set and checked for fill and glyphs."""
+    from ..layout import refont
+    from ..layout.generate import sheet_fill
+    c = _LAYOUT
+    if not _FONTS:
+        _FONTS.append(refont.font_set(Paths().font_dirs))
+        refont.load_glyphs()
+    rng = np.random.default_rng([seed, pi])
+    m, pt, scale = rng.uniform(*c.margin_frac), rng.uniform(*c.font_pt), rng.uniform(*c.role_scale)
+    sd = int(rng.integers(1 << 31))
+    gray, info = refont.sheet(path, pi, sd, _FONTS[0], pt, scale, m, c.page_px)
+    if info["unresolved"]:
+        return _reject(path, pi, language, "glyphs")
+    fill = sheet_fill(gray, c.fill_grid)
+    if fill < c.min_fill:
+        return _reject(path, pi, language, "fill", fill=round(fill, 3))
+    return dict(source_path=path, page_index=pi, language=language, category=category, kind="refont", seed=sd,
+                margin=float(m), font_pt=float(pt), scale=float(scale), fill=fill)
+
+
 def _job_pdf(args):
-    """Pages in random order, each rendered once, until PAGES_PER_PDF_CAP pass; the rest of the document is not
-    touched. Rejected pages come back as kind="rejected" records."""
+    """Pages in random order, each handled once, until PAGES_PER_PDF_CAP pass; the rest of the document is not
+    touched. A digital-born page of a restyled source is set again; other pages (scans, garbled text, many
+    columns) are rasterized. Rejected pages come back as kind="rejected" records."""
     import pymupdf as fitz
-    pdf_path, _, language, category, seed = args
-    language = name_language(pdf_path) or language
+    from ..layout import refont
+    pdf_path, language, category, seed, digital = args
     try:
         doc = fitz.open(pdf_path)
-        order = np.random.default_rng(seed).permutation(doc.page_count)
+        order = np.random.default_rng(seed).permutation(doc.page_count)[:TRIES_PER_PDF]
     except Exception:
         return []
     recs, n = [], 0
@@ -140,101 +162,75 @@ def _job_pdf(args):
             if n >= PAGES_PER_PDF_CAP:
                 break
             page = doc[pi]
-            z = min(RASTER_ZOOM, CHECK_PX / max(page.rect.width, page.rect.height))
-            pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csGRAY, alpha=False)
-            gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
-            rec = _page_record(gray, pdf_path, pi, language, category,
-                               _is_scan(category, bool(page.get_text().strip())), RASTER_ZOOM / z)
+            if digital and refont.usable(page):
+                rec = _refont_record(pdf_path, pi, language, category, seed)
+            else:
+                z = min(RASTER_ZOOM, CHECK_PX / max(page.rect.width, page.rect.height))
+                pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csGRAY, alpha=False)
+                gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
+                rec = _page_record(gray, pdf_path, pi, language, category, _is_scan(bool(page.get_text().strip())),
+                                   RASTER_ZOOM / z)
             recs.append(rec)
-            n += rec["kind"] == "raster"
+            n += rec["kind"] != "rejected"
     except Exception:
         return recs
     finally:
         doc.close()
+        if _FONTS:
+            refont.save_glyphs()
     return recs
 
 
 def _job_image(args):
     image_path, language, category, _ = args
-    language = name_language(image_path) or language
     gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         return [_reject(image_path, 0, language, "unreadable")]
-    return [_page_record(gray, image_path, 0, language, category, _is_scan(category, True))]
+    return [_page_record(gray, image_path, 0, language, category, _is_scan(True))]
 
 
 # ---------------------------------------------------------------------------
 # source enumeration
 # ---------------------------------------------------------------------------
 
-def corpus_pdf_jobs(meta_idx: dict):
-    jobs = []
-    for sub in ("pdf", "scanned", "forms_bulk"):
-        for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus", sub, "**", "*.pdf"), recursive=True)):
-            m = meta_idx.get(p)
-            language = m["language"] if m else "unknown"
-            category = m.get("category") if m else None
-            jobs.append((p, m.get("pages") if m else None, language, category, _seed(p)))
-    return jobs
+DIGITAL = ("books_pdf", "forms", "other_docs", "magazines", "scientific_paper", "exams", "bureaucracy", "corpus_add/pdf")
+RASTER = ("filled_forms", "flyers", "sheet_music", "overflow", "corpus_add/Images")
+IMAGES = (".png", ".jpg", ".jpeg")
 
 
-def corpus_overflow_jobs():
-    pdf_jobs, img_jobs = [], []
-    for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus_overflow", "Images", "*.png"))):
-        img_jobs.append((p, "unknown", None, _seed(p)))
-    for p in sorted(glob.glob(os.path.join(LAYOUTS, "corpus_overflow", "pdf", "*"))):
-        if p.lower().endswith(".pdf"):
-            pdf_jobs.append((p, None, "unknown", None, _seed(p)))
-        elif p.lower().endswith(".png"):
-            img_jobs.append((p, "unknown", None, _seed(p)))
-    return pdf_jobs, img_jobs
+def _language(path):
+    """Language code of a file named <hash>_<topic>_<code>[_p<page>].<ext>, else the old name.<code>.<ext>, else unknown."""
+    code = re.sub(r"_p\d+$", "", os.path.splitext(os.path.basename(path))[0]).rsplit("_", 1)[-1]
+    return code if re.fullmatch(r"[a-z]{2,3}", code) else name_language(path) or "unknown"
 
 
-def pdf_png_jobs():
-    return [(p, "en", None, _seed(p))
-            for p in sorted(glob.glob(os.path.join(LAYOUTS, "Pdf", "*.png")))]
+def _files(sub, exts):
+    return sorted(p for p in glob.glob(os.path.join(LAYOUTS, sub, "**", "*"), recursive=True) if p.lower().endswith(exts))
 
 
-def xfund_funsd_jobs():
-    """<lang>.<split>/*.png dirs -- language is the dir name's prefix
-    before the dot (en = FUNSD, others = XFUND)."""
-    root = os.path.join(LAYOUTS, "XFUND and FUNSD")
-    jobs = []
-    for p in sorted(glob.glob(os.path.join(root, "*", "*.png"))):
-        lang = os.path.basename(os.path.dirname(p)).split(".")[0]
-        jobs.append((p, lang, "form", _seed(p)))
-    return jobs
+def pdf_jobs():
+    """(path, language, category, seed, digital): the digital-born sources' PDFs are restyled where they can be."""
+    return [(p, _language(p), sub.split("/")[0], _seed(p), digital)
+            for subs, digital in ((DIGITAL, True), (RASTER, False)) for sub in subs for p in _files(sub, (".pdf",))]
 
 
-def sheet_music_jobs():
-    return [(p, None, "xx", "sheet_music", _seed(p))
-            for p in sorted(glob.glob(os.path.join(LAYOUTS, "sheet_music", "*.pdf")))]
+def image_jobs():
+    return [(p, _language(p), sub.split("/")[0], _seed(p)) for sub in DIGITAL + RASTER for p in _files(sub, IMAGES)]
 
 
-def arxiv_jobs():
-    return [(p, None, "en", "scientific_paper", _seed(p))
-            for p in sorted(glob.glob(os.path.join(LAYOUTS, "scientific_paper", "arxiv_pdfs", "*.pdf")))]
-
-
-# ---------------------------------------------------------------------------
-# books: read from the index written once by prep.books
-# ---------------------------------------------------------------------------
-
-def book_index():
-    path = os.path.join(BOOKS, "index.jsonl")
-    with open(path, encoding="utf-8") as f:
-        return [json.loads(line) for line in f]
-
-
-def book_scan_jobs(index=None):
-    return [(e["pdf"], e["pages"], e["language"], "book_scan", _seed(e["pdf"])) for e in index or book_index()
-            if e["kind"] == "scan"]
-
-
-def book_text_record(e):
-    """The index line of a text book as its manifest entry (the plan draws snippets at distinct offsets)."""
-    return dict(source_path=e["txt"], page_index=0, language=e["language"], category="book", kind="book_text",
-                chars=e["chars"])
+def balance(recs, scripts, rng):
+    """Per script group at most DOC_SHARE of its pages (and at least PAGES_PER_PDF_CAP) from one source document,
+    a random subset when over."""
+    from ..conditions import script
+    group = Counter(script(r, scripts) for r in recs)
+    by_doc = {}
+    for r in recs:
+        by_doc.setdefault(r["source_path"], []).append(r)
+    out = []
+    for doc in by_doc.values():
+        cap = max(PAGES_PER_PDF_CAP, round(DOC_SHARE * group[script(doc[0], scripts)]))
+        out += [doc[i] for i in sorted(rng.permutation(len(doc))[:cap])]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -247,48 +243,32 @@ def _run_task(task):
 
 
 def main(out_path: str, workers: int, limit_files: int = None):
-    """Usable pages: up to PAGES_PER_PDF_CAP per PDF, every image, and one entry per book text."""
-    meta_idx = load_metadata(os.path.join(LAYOUTS, "corpus", "metadata.jsonl"))
-    books = book_index()
-    overflow_pdf_jobs, overflow_img_jobs = corpus_overflow_jobs()
-    groups = [
-        (corpus_pdf_jobs(meta_idx), _job_pdf),
-        (overflow_pdf_jobs, _job_pdf),
-        (overflow_img_jobs, _job_image),
-        (pdf_png_jobs(), _job_image),
-        (xfund_funsd_jobs(), _job_image),
-        (arxiv_jobs(), _job_pdf),
-        (sheet_music_jobs(), _job_pdf),
-        (book_scan_jobs(books), _job_pdf),
-    ]
-    tasks = [(fn, job) for jobs, fn in groups for job in jobs[:limit_files]]
-    np.random.default_rng(0).shuffle(tasks)                     # mixes heavy groups (book scans) into the run
-    texts = [book_text_record(e) for e in books if e["kind"] == "text"][:limit_files]
-    t0, counts = time.time(), {}
+    """Usable pages: up to PAGES_PER_PDF_CAP per PDF, every image; then balanced so no
+    source document holds more than DOC_SHARE of its script group."""
+    groups = [(pdf_jobs(), _job_pdf), (image_jobs(), _job_image)]
+    rng = np.random.default_rng(0)
+    tasks = [(fn, jobs[i]) for jobs, fn in groups for i in (rng.permutation(len(jobs))[:limit_files] if limit_files else range(len(jobs)))]
+    rng.shuffle(tasks)                     # mixes heavy documents into the run
+    t0, recs, rejected = time.time(), [], []
+    print(f"{len(tasks)} files", flush=True)
+    with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
+        for done, rs in enumerate(pool.map(_run_task, tasks, chunksize=1), 1):
+            for r in rs:
+                (rejected if r["kind"] == "rejected" else recs).append(r)
+            if done % 1000 == 0:
+                print(f"{done}/{len(tasks)} files, entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)
+    kept = balance(recs, _LAYOUT.scripts, np.random.default_rng(0))
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as out_f, \
-            open(Path(out_path).with_suffix(".rejected.jsonl"), "w", encoding="utf-8") as rej_f:
-
-        def write(rec):
-            if rec["kind"] == "rejected":
-                rej_f.write(json.dumps(rec) + "\n")
-                return
-            out_f.write(json.dumps(rec) + "\n")
-            counts[rec["language"]] = counts.get(rec["language"], 0) + 1
-
-        for rec in texts:
-            write(rec)
-        print(f"{len(tasks)} files, {len(texts)} book texts", flush=True)
-        with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
-            for done, recs in enumerate(pool.map(_run_task, tasks, chunksize=1), 1):
-                for rec in recs:
-                    write(rec)
-                if done % 1000 == 0:
-                    print(f"{done}/{len(tasks)} files, entries={sum(counts.values())} "
-                          f"elapsed={time.time() - t0:.0f}s", flush=True)
-    print(f"TOTAL {sum(counts.values())} entries, wall={time.time() - t0:.0f}s", flush=True)
-    print("language distribution:", json.dumps(counts, indent=2), flush=True)
-
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.writelines(json.dumps(r) + "\n" for r in kept)
+    with open(Path(out_path).with_suffix(".rejected.jsonl"), "w", encoding="utf-8") as f:
+        f.writelines(json.dumps(r) + "\n" for r in rejected)
+    from ..conditions import script
+    per = Counter((script(r, _LAYOUT.scripts), r["kind"]) for r in kept)
+    print(f"TOTAL {len(kept)} entries ({len(recs) - len(kept)} over the per-document share), "
+          f"wall={time.time() - t0:.0f}s", flush=True)
+    print("per script group and kind:", json.dumps({f"{g} {k}": v for (g, k), v in sorted(per.items())}, indent=1),
+          flush=True)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()

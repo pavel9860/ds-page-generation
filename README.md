@@ -3,7 +3,7 @@
 Synthetic photos of document pages with exact ground truth (UV map, 3D map, flat page) for training
 page-dewarping networks. Three independent parts:
 
-1. **Layout** — a flat sheet from a source manifest (book texts rendered with real fonts, rasterized PDF pages,
+1. **Layout** — a flat sheet from a source manifest (digital-born PDF pages restyled in other fonts and sizes, rasterized PDF pages,
    scanned forms) with paper, print and ageing effects.
 2. **Geometry** — the 3D page grid from physics: a paper strip on the table with line supports, a clamped edge
    and plastic folds (discrete elastica, SQP with contact), blended across the page between two end profiles,
@@ -73,8 +73,8 @@ python tools/analyze.py OUT             # distributions and limits -> OUT/report
 python tools/gallery.py OUT             # contact sheet -> OUT/report/gallery.jpg
 ```
 
-Data preparation: `python -m dspages.prep.books` (book PDFs to text), `python -m dspages.prep.manifest` (one entry
-per page), `python tools/inventory.py` (pages per script and language against the plan's quotas).
+Data preparation: `python -m dspages.prep.manifest` (one entry
+per page).
 
 ## License
 

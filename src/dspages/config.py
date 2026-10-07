@@ -8,7 +8,6 @@ G = 9.81
 class Paths:
     layouts: str = "/run/media/me/D/ML_DS/UVTM/Layouts"
     manifest: str = "/run/media/me/D/ML_DS/UVTM/Layouts/manifest_pages.jsonl"
-    books: str = "/run/media/me/D/ML_DS/UVTM/Layouts/books/Texts"
     out: str = "/run/media/me/D/ML_DS/UVTM/dspages"
     font_dirs: tuple = ("/usr/share/fonts", "/usr/local/share/fonts", "~/.fonts")
 
@@ -159,14 +158,6 @@ class PictureCfg:
 
 
 @dataclass(frozen=True)
-class TextFormatCfg:
-    columns: tuple = ((1, 0.85), (2, 0.12), (3, 0.03))
-    gutter_mm: tuple = (4.0, 10.0)
-    heading_prob: float = 0.3
-    heading_scale: tuple = (1.3, 2.2)
-
-
-@dataclass(frozen=True)
 class LayoutCfg:
     sheet_mm: tuple = (210.0, 297.0)
     page_px: tuple = (1024, 1440)                   # flat page and photo (width, height)
@@ -178,17 +169,16 @@ class LayoutCfg:
     max_zoom: float = 4.0                           # PDF re-render limit for a 1:1 window
     script_mix: tuple = (("latin", 0.5), ("unknown", 0.1), ("cyrillic", 0.15), ("cjk", 0.1), ("other", 0.15))
     scripts: dict = field(default_factory=lambda: {
-        "cyrillic": ("cyr", "bg", "ru", "uk", "sr", "mk", "be", "kk"),
+        "cyrillic": ("cyr", "bg", "ru", "uk", "sr", "mk", "be", "kk", "ky", "tg", "mn"),
         "cjk": ("zh", "ja", "ko"),
-        "other": ("el", "he", "ar", "fa", "hi", "bn", "th", "ka", "hy", "ta", "te", "ur"),
+        "other": ("el", "he", "ar", "fa", "hi", "bn", "th", "ka", "hy", "ta", "te", "ur", "gu", "kn", "ml", "pa",
+                  "or", "si", "km", "lo", "my", "am"),
         "unknown": ("unknown", None)})
     use_all: tuple = ("unknown",)                   # groups taking all their raster pages, outside script_mix
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
     grid: GridCfg = GridCfg()
-    font_pt: tuple = (10.0, 16.0)
-    book_page_chars: int = 12000                    # one book page: the text of a full A4 sheet at the smallest font
-    text_format: TextFormatCfg = TextFormatCfg()
-    line_spacing: tuple = (1.15, 1.6)
+    font_pt: tuple = (10.0, 16.0)                   # body text of a restyled PDF page
+    role_scale: tuple = (0.6, 1.5)                  # its other sizes (headings, notes) relative to the source ratio
     paper_tone: tuple = (0.88, 0.97)                # paper reflectance
     ink_tone: tuple = (0.04, 0.18)
     effects: dict = field(default_factory=lambda: {

@@ -13,8 +13,6 @@ from dataclasses import replace
 import numpy as np
 
 from .config import Preset
-from .layout.content import window_limits
-from .layout.sources import is_pdf
 
 
 def _bins(lo, hi, n, log=False):
@@ -79,23 +77,6 @@ def script(entry, scripts):
     return next((g for g, langs in scripts.items() if entry["language"] in langs), "latin")
 
 
-def entry_pools(P: Preset, manifest):
-    """Per script group: manifest indices of raster pages and of book texts. Raster pages count only when a window
-    of the sheet's aspect around their content (margins <= margin_frac[1]) reaches the sheet width at 1:1:
-    directly for images, within max_zoom for PDF pages."""
-    c = P.layout
-    pw, ph = c.page_px
-    pools = {g: ([], []) for g, _ in c.script_mix}
-    for i, e in enumerate(manifest):
-        g = pools.setdefault(script(e, c.scripts), ([], []))
-        if e["kind"] == "book_text":
-            g[1].append(i)
-        elif e.get("window_ok", True) and window_limits(e["bbox_w"], e["bbox_h"], pw / ph, c.margin_frac[1])[1] * (
-                c.max_zoom if is_pdf(e) else 1.0) >= pw:
-            g[0].append(i)
-    return pools
-
-
 def _counts(w, n):
     """Integer counts with sum n in proportion to w (largest remainder)."""
     p = np.asarray(w, float) / np.sum(w)
@@ -104,39 +85,32 @@ def _counts(w, n):
     return k
 
 
-def _fill(rng, raster, books, q, chars):
-    """q (entry, text offset) pairs: raster pages first, never repeated, then book snippets for the rest, spread over
-    the books by their length at evenly spaced offsets from a random phase (distinct text while a book holds
-    them). A group short of both stays under its quota."""
-    r = rng.permutation(raster)[:q].astype(int)
-    e, o = [r], [np.zeros(len(r), int)]
-    if q > len(r) and len(books):
-        for b, k in zip(books, _counts([chars[b] for b in books], q - len(r))):
-            e.append(np.full(k, b))
-            o.append((rng.integers(chars[b]) + np.arange(k) * chars[b] // max(k, 1)) % chars[b])
-    return np.concatenate(e), np.concatenate(o)
+def entry_pools(P: Preset, manifest):
+    """Per script group: manifest indices of its pages (raster pages and book pages, all checked by the manifest)."""
+    pools = {g: [] for g, _ in P.layout.script_mix}
+    for i, e in enumerate(manifest):
+        pools.setdefault(script(e, P.layout.scripts), []).append(i)
+    return pools
 
 
 def plan(P: Preset, n, seed, manifest):
     """Up to n sample specs with exact factor marginals, script groups included. Groups of use_all take all their
-    raster pages; script_mix shares the rest of n. A group's entries are its raster pages (never repeated), then
-    book snippets for the rest of its quota; groups without either stay under quota, their samples dropped."""
+    pages; script_mix shares the rest of n. Pages are never repeated: a group short of pages stays under its quota,
+    its samples dropped."""
     rng = np.random.default_rng(seed)
     c = P.layout
     pools = entry_pools(P, manifest)
-    whole = {g: len(pools[g][0]) for g in c.use_all if g in pools and len(pools[g][0])}
+    whole = {g: len(pools[g]) for g in c.use_all if pools.get(g)}
     rest = max(0, n - sum(whole.values()))
-    share = [(g, w) for g, w in c.script_mix if g not in whole and any(pools.get(g, ((), ())))]
+    share = [(g, w) for g, w in c.script_mix if g not in whole and pools.get(g)]
     wsum = sum(w for _, w in share)
     mix = tuple((g, float(v)) for g, v in whole.items()) + tuple((g, rest * w / wsum) for g, w in share)
     cols = {k: _exact(rng, v, n) for k, v in (*factors(P).items(), ("script", mix))}
     rows = {g: np.flatnonzero(np.array(cols["script"]) == g) for g, _ in mix}
-    chars = {i: manifest[i].get("chars", 1) for _, b in pools.values() for i in b}
-    entry, offset = np.full(n, -1), np.zeros(n, int)
+    entry = np.full(n, -1)
     for g, idx in rows.items():
-        e, o = _fill(rng, *pools[g], len(idx), chars)
-        perm = rng.permutation(len(e))
-        entry[idx[:len(e)]], offset[idx[:len(e)]] = e[perm], o[perm]
+        e = rng.permutation(pools[g])[:len(idx)]
+        entry[idx[:len(e)]] = e
     specs = []
     for i in np.flatnonzero(entry >= 0):
         s = _canonical({k: cols[k][i] for k in cols})
@@ -145,7 +119,7 @@ def plan(P: Preset, n, seed, manifest):
             sc = P.geometry.scene
             s["bend_dir"] = float(rng.uniform(-sc.book_bend_deg, sc.book_bend_deg))
             s["along_long"] = bool(rng.random() < sc.book_along_long_prob)
-        s["entry"], s["offset"] = int(entry[i]), int(offset[i])
+        s["entry"] = int(entry[i])
         specs.append(s)
     return specs
 

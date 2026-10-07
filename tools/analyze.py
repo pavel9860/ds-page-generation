@@ -2,7 +2,7 @@
 
 python tools/analyze.py RUN_DIR [--preset full] [--manifest M] [--n_check 300] [--workers 6]
 Plan and part metas: distributions and samples outside the limits. With the manifest: the page conditions of the
-raster pages used (fill, picture share, skew) and the repetition of pages, snippets and documents. On n_check
+raster pages used (fill, picture share, skew) and the repetition of pages, restyled pages and documents. On n_check
 samples: UV maps (the warped image mapped back to the flat page, tools/uv_check.py).
 Writes RUN_DIR/report/*.png and RUN_DIR/report/summary.json.
 """
@@ -72,9 +72,9 @@ def _uv(path):
 
 
 def repetition(plan, man):
-    """Uses per raster page, per book snippet (entry, offset) and per source document."""
-    raster = Counter((s["entry"]) for s in plan if man[s["entry"]]["kind"] == "raster")
-    snip = Counter((s["entry"], s["offset"]) for s in plan if man[s["entry"]]["kind"] == "book_text")
+    """Uses per raster page, per book page and per source document."""
+    raster = Counter(s["entry"] for s in plan if man[s["entry"]]["kind"] == "raster")
+    snip = Counter(s["entry"] for s in plan if man[s["entry"]]["kind"] == "refont")
     docs = Counter(man[s["entry"]]["source_path"] for s in plan)
     return raster, snip, docs
 
@@ -160,7 +160,7 @@ def main():
         raster, snip, docs = repetition(plan, man)
         summary.update(cond, raster_page_max_uses=max(raster.values(), default=0),
                        raster_pages_repeated=sum(v > 1 for v in raster.values()),
-                       snippets_repeated=sum(v > 1 for v in snip.values()),
+                       restyled_pages_repeated=sum(v > 1 for v in snip.values()),
                        docs_used=len(docs), doc_uses_q=np.quantile(list(docs.values()), [0.5, 0.9, 0.99, 1]).tolist())
         _grid(6, out, "pages", lambda ax: [
             _hist(ax[0], [e.get("fill") for e in used], "fill of the raster pages used", P.layout.min_fill),
@@ -168,7 +168,7 @@ def main():
                   P.layout.max_image),
             _hist(ax[2], [e.get("deskew_deg", 0) for e in used], "stored deskew [deg]", 3.0),
             _bars(ax[3], Counter(min(v, 5) for v in raster.values()), "uses per raster page (5 = 5+)"),
-            _bars(ax[4], Counter(min(v, 5) for v in snip.values()), "uses per book snippet (5 = 5+)"),
+            _bars(ax[4], Counter(min(v, 5) for v in snip.values()), "uses per restyled page (5 = 5+)"),
             _hist(ax[5], list(docs.values()), "samples per source document")])
 
     paths = sorted((run / "samples").glob("*.npz"))
