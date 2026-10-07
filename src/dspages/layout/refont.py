@@ -1643,7 +1643,7 @@ def sheet(path, number, seed, fonts, body_pt, scale, margin, size):
 
 
 def garbled(segs, latin):
-    """Text that did not come out as text of one script (a font without a text map): mixed scripts or private-use codes.
+    """Text that did not come out as text of one script (a font without a text map): mixed scripts, private-use or control codes.
     Latin letters in a page of a language that is not written in Latin are such text too (a legacy font's own codes)."""
     text = "".join(s["text"] for l in segs for s in l["spans"])
     letters = [c for c in text if c.isalpha()]
@@ -1651,7 +1651,7 @@ def garbled(segs, latin):
     if not letters or not marks:
         return True
     name, top = Counter(_script(c) for c in letters).most_common(1)[0]
-    private = sum(unicodedata.category(c) == "Co" for c in marks)
+    private = sum(unicodedata.category(c) in ("Co", "Cc") for c in marks)
     return (name == "latin" and not latin) or top < C.script_purity * len(letters) or private > C.private_share * len(marks)
 
 

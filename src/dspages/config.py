@@ -298,10 +298,10 @@ class LayoutCfg:
     check_px: int = 800                             # longest side of the render the raster checks run on
     script_mix: tuple = (("latin", 0.5), ("unknown", 0.1), ("cyrillic", 0.15), ("cjk", 0.1), ("other", 0.15))
     scripts: dict = field(default_factory=lambda: {
-        "cyrillic": ("cyr", "bg", "ru", "uk", "sr", "mk", "be", "kk", "ky", "tg", "mn"),
+        "cyrillic": ("cyr", "bg", "ru", "uk", "sr", "mk", "be", "kk", "ky", "tg", "mn", "kz", "tj"),
         "cjk": ("zh", "ja", "ko"),
         "other": ("el", "he", "ar", "fa", "hi", "bn", "th", "ka", "hy", "ta", "te", "ur", "gu", "kn", "ml", "pa",
-                  "or", "si", "km", "lo", "my", "am"),
+                  "or", "si", "km", "lo", "my", "am", "as", "mni", "mr", "sa", "bo", "ckb", "ku", "ps", "ne", "mai", "sd"),
         "unknown": ("unknown", None)})
     use_all: tuple = ("unknown",)                   # groups taking all their raster pages, outside script_mix
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry

@@ -26,7 +26,7 @@ IMAGES = (".png", ".jpg", ".jpeg")
 def name_parts(path):
     """(topic, language) of a file named <hash>_<topic>_<code>[_p<page>].<ext>; unknown for any other name."""
     parts = re.sub(r"_p\d+$", "", os.path.splitext(os.path.basename(path))[0]).split("_")
-    ok = len(parts) >= 3 and re.fullmatch(r"[a-z]{2,3}", parts[-1])
+    ok = len(parts) >= 3 and re.fullmatch(r"[a-z]{2,3}", parts[-1]) and parts[-1] != "xx"
     return ("_".join(parts[1:-1]), parts[-1]) if ok else ("unknown", "unknown")
 
 
