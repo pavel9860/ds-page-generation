@@ -1,9 +1,6 @@
 # Tasks (delete a task when it is done)
 
 ## Triplets (tools/triplets.py, manifest m3 = the first 600-page manifest with its garbled pages replaced)
-- 046, 066, 080: check by position that the frames are filled where the stream lasts and that nothing is missing; they are single-page sources, so the stream ends on the first page.
-- 047: find what is lost at 11 pt (formatting? by position metric).
-- 075: gaps in the text columns (frames filled?).
 - Overlaps left: widened single-line blocks over a neighbour (cases 8, 9, 38, 40, 55): limit the widening by every block of the line band.
 
 ## Code
