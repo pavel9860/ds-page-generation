@@ -24,9 +24,28 @@ def _size_class(size):
     return round(math.log(size) / math.log(C.head_ratio))
 
 
-def _column(b):
-    """The column of a block: its interval, or for a block outside the page's columns its own width."""
-    return b["colspan"] or (round(b["bbox"].x0), round(b["bbox"].x1))
+def _columns(cand):
+    """id -> (x0, x1) of the column of each candidate: candidates whose x ranges overlap by half the narrower one share
+    a column (a short line or a block without a detected column joins the column it lies in)."""
+    parent = {id(b): id(b) for b in cand}
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i, a in enumerate(cand):
+        for b in cand[i + 1:]:
+            A, B = a["bbox"], b["bbox"]
+            if min(A.x1, B.x1) - max(A.x0, B.x0) > 0.5 * min(A.width, B.width):
+                parent[root(id(a))] = root(id(b))
+    span = {}
+    for b in cand:
+        r = root(id(b))
+        lo, hi = span.get(r, (b["bbox"].x0, b["bbox"].x1))
+        span[r] = (min(lo, b["bbox"].x0), max(hi, b["bbox"].x1))
+    return {id(b): span[root(id(b))] for b in cand}
 
 
 def _cells(cand, blocks, rules, g):
@@ -45,7 +64,7 @@ def _cells(cand, blocks, rules, g):
     return {id(a) for row in bands.values() for a in row if any(b is not a and beside(a, b) for b in row)}
 
 
-def _mates(cand):
+def _mates(cand, col):
     """Candidates of a column that stand side by side on one line (the fields of a row), not paragraphs."""
     out = set()
     ordered = sorted(cand, key=lambda b: b["bbox"].y0)
@@ -54,19 +73,19 @@ def _mates(cand):
             if b["bbox"].y0 >= a["bbox"].y1:
                 break
             overlap = min(a["bbox"].y1, b["bbox"].y1) - max(a["bbox"].y0, b["bbox"].y0)
-            if (_column(a) == _column(b) and overlap > C.row_overlap * min(a["bbox"].height, b["bbox"].height)
+            if (col[id(a)] == col[id(b)] and overlap > C.row_overlap * min(a["bbox"].height, b["bbox"].height)
                     and (b["bbox"].x0 >= a["bbox"].x1 - 1 or a["bbox"].x0 >= b["bbox"].x1 - 1)):
                 out |= {id(a), id(b)}
     return out
 
 
-def _runs(cand, others):
+def _runs(cand, others, col):
     """Candidates of a column in runs: a run ends at a gap of frame_gap lines or at a block between two paragraphs."""
     runs = []
-    for b in sorted(cand, key=lambda b: (_column(b), b["bbox"].y0)):
+    for b in sorted(cand, key=lambda b: (col[id(b)], b["bbox"].y0)):
         prev = runs[-1][-1] if runs else None
         pitch = b["src_pitch"]
-        split = (prev is None or _column(prev) != _column(b) or b["bbox"].y0 - prev["bbox"].y1 > C.frame_gap * pitch
+        split = (prev is None or col[id(prev)] != col[id(b)] or b["bbox"].y0 - prev["bbox"].y1 > C.frame_gap * pitch
                  or any(min(o["bbox"].x1, b["bbox"].x1) > max(o["bbox"].x0, b["bbox"].x0) and prev["bbox"].y1 - pitch / 2 <= o["bbox"].y0
                         and o["bbox"].y1 <= b["bbox"].y0 + pitch / 2 for o in others))
         if split:
@@ -75,24 +94,41 @@ def _runs(cand, others):
     return runs
 
 
-def split_page(blocks, rules, g, boxes=()):
+def _walled(cand, blocks, walls, g):
+    """Candidates between two vertical rules with a block beyond one of them on their level: cells of a table ruled by
+    its columns only."""
+    out = set()
+    for b in cand:
+        x0, x1, mid = b["bbox"].x0 * g, b["bbox"].x1 * g, (b["bbox"].y0 + b["bbox"].y1) / 2 * g
+        xs = [x for x, a, z in walls if a <= mid <= z]
+        left, right = max((x for x in xs if x <= x0 + 2), default=None), min((x for x in xs if x >= x1 - 2), default=None)
+        if left is not None and right is not None and any(
+                o is not b and min(o["bbox"].y1, b["bbox"].y1) > max(o["bbox"].y0, b["bbox"].y0)
+                and (o["bbox"].x1 * g <= left + 2 or o["bbox"].x0 * g >= right - 2) for o in blocks):
+            out.add(id(b))
+    return out
+
+
+def split_page(blocks, rules, g, boxes=(), walls=()):
     """-> (sections, fixed): the frames (runs of body paragraphs of a column) grouped in sections, the frames between two
     blocks that span the columns, each in reading order; and the other blocks. A paragraph in a box (a cell, a panel) or on
     a tabbed line is not a frame's."""
     classes = {_size_class(b["size"]) for b in blocks if not b["pinned"] and not b.get("image") and len(b["lines"]) >= C.paragraph_lines}
     cand = [b for b in blocks if not b["pinned"] and not b.get("image") and _size_class(b["size"]) in classes
             and not any(l.get("tabbed") for l in b["lines"]) and not any(x.contains(b["bbox"] + (2, 2, -2, -2)) for x in boxes)]
-    cells = _cells(cand, [b for b in blocks if not b["pinned"] and not b.get("image")], rules, g) | _mates(cand)
+    texts = [b for b in blocks if not b["pinned"] and not b.get("image")]
+    cells = _cells(cand, texts, rules, g) | _mates(cand, _columns(cand)) | _walled(cand, texts, walls, g)
     cand = [b for b in cand if id(b) not in cells]
+    col = _columns(cand)
     taken = {id(b) for b in cand}
     others = [b for b in blocks if id(b) not in taken and not b["pinned"]]
-    runs = [r for r in _runs(cand, others) if sum(len(b["lines"]) for b in r) >= C.frame_lines and max(len(b["lines"]) for b in r) >= C.paragraph_lines]
+    runs = [r for r in _runs(cand, others, col) if sum(len(b["lines"]) for b in r) >= C.frame_lines and max(len(b["lines"]) for b in r) >= C.paragraph_lines]
     framed = {id(b) for r in runs for b in r}
-    cols = {_column(b) for b in cand}
+    cols = set(col.values())
     breaks = sorted(b["bbox"].y1 for b in others if sum(min(b["bbox"].x1, c[1]) - max(b["bbox"].x0, c[0]) > 0 for c in cols) > min(1, len(cols) - 1))
     rtl = sum(b["rtl"] for b in cand) > len(cand) / 2
     region = lambda r: bisect.bisect_right(breaks, r[0]["bbox"].y0 + 1)
-    runs.sort(key=lambda r: (region(r), -r[0]["bbox"].x0 if rtl else r[0]["bbox"].x0))
+    runs.sort(key=lambda r: (region(r), -col[id(r[0])][0] if rtl else col[id(r[0])][0], r[0]["bbox"].y0))
     return [list(sec) for _, sec in itertools.groupby(runs, key=region)], [b for b in blocks if id(b) not in framed]
 
 
@@ -298,7 +334,7 @@ def layout(src, number, rng, fonts, body_pt, scale, width_px):
     need = {(s["bold"], s["italic"]) for s in spans if not s["mono"]}
     cols_px = [(c[0] * g, c[1] * g) for c in R._columns(first)]
     first += R.pictures(src, number, ph, pw, below=bottom)
-    sections, fixed = split_page(first, R._hrules(elems, g), g, R.cell_boxes(elems, pw * ph))
+    sections, fixed = split_page(first, R._hrules(elems, g), g, R.cell_boxes(elems, pw * ph), R._vrules(elems, g))
     frames = [r for sec in sections for r in sec]
     role_of = lambda sz: "head" if sz > body * C.head_ratio else "body"
     px_of = lambda sz: sz * sc_font * R.ratio(sz, body, scale)
@@ -345,7 +381,7 @@ def layout(src, number, rng, fonts, body_pt, scale, width_px):
             if nxt not in later:
                 blocks = R.page_blocks(src, nxt, False, running) if R.text_page(src, nxt) else []
                 gfx = R.graphics(src, nxt, False, ph, pw, number)
-                later[nxt] = split_page(blocks, R._hrules(gfx, g), g, R.cell_boxes(gfx, pw * ph))[0]
+                later[nxt] = split_page(blocks, R._hrules(gfx, g), g, R.cell_boxes(gfx, pw * ph), R._vrules(gfx, g))[0]
             units[-1].extend(_units([r for sec in later[nxt] for r in sec], g, k, gap))
             return True
 

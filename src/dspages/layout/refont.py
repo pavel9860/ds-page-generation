@@ -33,7 +33,8 @@ NOTO_PREFIXES = ("notosans", "notoserif", "noto")      # longest first: NotoKufi
 TERMINAL = tuple(".;:!?…。")
 MATH_LETTERS = {cp: unicodedata.normalize("NFKC", chr(cp)) for cp in range(0x1D400, 0x1D800)
                 if len(unicodedata.normalize("NFKC", chr(cp))) == 1 and unicodedata.normalize("NFKC", chr(cp)) != chr(cp)}
-ITEM = re.compile(r"\s*(\d{1,3}[.)]|[•·▪■◦○●∙–—*])\s*\S")
+ITEM = re.compile(r"\s*(\d{1,3}[.)]\s*|[•·▪■◦○●∙–—*-]\s+)\S")
+VALUE = re.compile(r"[\s.…·_\-–—\d/,:()%+]+")                # a table value: numbers, leaders
 MARKER = re.compile(r"[(\[]?(\d{1,3}|[ivxIVX]{1,4}|[a-zA-Zа-яА-Я])[.)\]]?|[•·▪■□◦○●∙\-–—*]")
 THAI_PUA = {0xF700: 0x0E10, 0xF701: 0x0E34, 0xF702: 0x0E35, 0xF703: 0x0E36, 0xF704: 0x0E37, 0xF705: 0x0E48,
             0xF706: 0x0E49, 0xF707: 0x0E4A, 0xF708: 0x0E4B, 0xF709: 0x0E4C, 0xF70A: 0x0E48, 0xF70B: 0x0E49,
@@ -313,10 +314,10 @@ def join_rows(segs, cols, vlines=()):
     for a in rows:
         for b in buckets[int(((a["bbox"].y0 + a["bbox"].y1) / 2) // C.row_bin)]:
             sz = max(_rsize(a), _rsize(b))
-            if (b is not a and (a["col"] is None or b["col"] is None or a["col"] == b["col"])
-                    and min(a["bbox"].y1, b["bbox"].y1) - max(a["bbox"].y0, b["bbox"].y0) > 0.5 * min(a["bbox"].height, b["bbox"].height)
-                    and (a["bbox"].x1 <= b["bbox"].x0 or b["bbox"].x1 <= a["bbox"].x0)
-                    and min(a["bbox"].width, b["bbox"].width) < C.min_width_em * sz):
+            narrow = min((a, b), key=lambda r: r["bbox"].width)
+            if (b is not a and min(a["bbox"].y1, b["bbox"].y1) - max(a["bbox"].y0, b["bbox"].y0) > 0.5 * min(a["bbox"].height, b["bbox"].height)
+                    and (a["bbox"].x1 <= b["bbox"].x0 or b["bbox"].x1 <= a["bbox"].x0) and narrow["bbox"].width < C.min_width_em * sz
+                    and (a["col"] is None or b["col"] is None or a["col"] == b["col"] or VALUE.fullmatch(_text(narrow)))):
                 a["tabbed"] = b["tabbed"] = True
     return sorted(rows, key=lambda r: (r["bbox"].y0, r["bbox"].x0))
 
