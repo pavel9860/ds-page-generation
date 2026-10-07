@@ -24,7 +24,7 @@ def factors(P: Preset):
     """name -> ((value, weight), ...) for geometry, view and layout."""
     g, s = P.geometry, P.geometry.scene
     bend = _bins(-g.bend_dir_deg, g.bend_dir_deg, 5)
-    cam, li, m, lc = P.render.camera, P.render.light, P.layout.margin_frac, P.layout
+    li, m, lc = P.render.light, P.layout.margin_frac, P.layout
     return dict(
         combo=tuple((c, w) for c, w in s.combos),
         flat=((True, s.near_flat_prob), (False, 1 - s.near_flat_prob)),
@@ -35,8 +35,6 @@ def factors(P: Preset):
         shallow=((True, g.shallow.prob), (False, 1 - g.shallow.prob)),
         deep=g.deep.levels,
         bend_deep=((True, g.deep.on_bends_prob), (False, 1 - g.deep.on_bends_prob)),
-        dist_bin=tuple((b, 1.0) for b in _bins(*cam.dist_mm, 4, log=True)),
-        tilt_bin=tuple((b, 1.0) for b in _bins(*cam.tilt_deg, 3)),
         sharp=((True, li.sharp_prob), (False, 1 - li.sharp_prob)),
         margin_bin=tuple((b, 1.0) for b in _bins(*m, 3)) if m[1] > m[0] else ((m, 1.0),),
         font_bin=tuple((b, 1.0) for b in _bins(*lc.font_pt, 4)),
@@ -51,7 +49,7 @@ def _canonical(c):
 
 
 GROUPS = dict(geometry=("combo", "flat", "two", "along_long", "bend_bin", "gsm", "shallow", "deep", "bend_deep"),
-              view=("dist_bin", "tilt_bin", "sharp"), layout=("margin_bin", "font_bin", "scale_bin"))
+              view=("sharp",), layout=("margin_bin", "font_bin", "scale_bin"))
 
 
 def cells(P: Preset, group):
@@ -131,10 +129,9 @@ def geometry_cond(spec):
 
 
 def view_preset(P: Preset, spec):
-    """The preset with camera and light narrowed to the spec's bins."""
+    """The preset with the light of the spec."""
     r = P.render
-    return replace(P, render=replace(r, camera=replace(r.camera, dist_mm=spec["dist_bin"], tilt_deg=spec["tilt_bin"]),
-                                     light=replace(r.light, sharp_prob=float(spec["sharp"]))))
+    return replace(P, render=replace(r, light=replace(r.light, sharp_prob=float(spec["sharp"]))))
 
 
 def layout_preset(P: Preset, spec):

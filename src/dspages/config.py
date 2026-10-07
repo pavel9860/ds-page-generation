@@ -122,6 +122,7 @@ class GeometryCfg:
     bend_dir_deg: float = 45.0
     support_frac: tuple = (0.2, 1.0)
     shell_nodes: tuple = (21, 29)
+    view_tries: int = 5                             # surfaces drawn until one has a possible camera view (CameraCfg)
     scene: SceneCfg = SceneCfg()
     shallow: ShallowCreaseCfg = ShallowCreaseCfg()
     deep: DeepCreaseCfg = DeepCreaseCfg()
@@ -333,13 +334,15 @@ class LayoutCfg:
 
 @dataclass(frozen=True)
 class CameraCfg:
-    dist_mm: tuple = (200.0, 600.0)                 # camera to page centre
-    tilt_deg: tuple = (0.0, 50.0)                   # optical axis to the table normal
+    dist_mm: tuple = (200.0, 400.0)                 # camera to page centre (the tilt follows from the page's shape)
     roll_deg: tuple = (-4.8, 4.8)
     fill: tuple = (0.93, 1.0)                       # page bbox to frame, along the tighter side
     max_offset: float = 0.3                         # camera's horizontal offset from the page centre / page size
+    side_offset: float = 0.5                        # the offset allowed when no view within max_offset sees all the page
     shift: float = 0.3                              # page centre offset, fraction of the free space
-    incidence_deg: float = 50.0                     # max view angle to the surface normal, anywhere on the page
+    incidence_deg: float = 65.0                     # max view angle to the surface normal, anywhere on the page
+    view_dirs: int = 256                            # view directions spread evenly over the tilts the offsets allow
+    view_step: int = 4                              # the views are worked out on every 4th node of the page grid
 
 
 @dataclass(frozen=True)

@@ -87,7 +87,7 @@ def _layout(i, save):
 
 def _geometry(i, save):
     P = _W["P"]
-    s = make_surface(_rng(i, "geometry"), P.geometry, P.paper, geometry_cond(_W["plan"][i]))
+    s = make_surface(_rng(i, "geometry"), P.geometry, P.paper, geometry_cond(_W["plan"][i]), P.render.camera)
     surf = {k: s[k].astype(np.float32) for k in ("X", "Y", "Z")}
     if save:
         meta = dict(label=s["label"], cond=s["cond"], paper=s["paper"], scene_a=s["scene_a"], scene_b=s["scene_b"],

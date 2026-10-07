@@ -5,10 +5,6 @@ from numba import njit
 
 from ..config import CameraCfg
 
-DIRECTIONS = 64
-DIST_STEPS = 12
-DIST_GROWTH = 1.3
-SEARCH_STEP = 3                 # the pose search checks every 3rd point; the chosen pose is reported over all of them
 
 
 def vertex_normals(X, Y, Z):
@@ -54,47 +50,86 @@ def _worst_cos(eyes, P, N):
     return out
 
 
+@njit(cache=True, fastmath=True)
+def _nearest(dirs, target, P, N, cos_max, cap, first):
+    """Per view direction d the smallest distance D from target with every point P (unit normals N) seen within
+    arccos(cos_max) of its normal from target + D d and from any farther eye on that ray (per point the condition
+    N.(w + D d) >= cos_max |w + D d|, w = target - P, holds beyond the larger root of a quadratic in D, and only when
+    N.d > cos_max); inf when no distance up to cap[d] is (the points stop being checked then). first: stop at the first
+    possible direction (the others stay inf)."""
+    c2 = cos_max * cos_max
+    out = np.full(dirs.shape[0], np.inf)
+    for i in range(dirs.shape[0]):
+        dx, dy, dz = dirs[i, 0], dirs[i, 1], dirs[i, 2]
+        need = 0.0
+        for j in range(P.shape[0]):
+            wx, wy, wz = target[0] - P[j, 0], target[1] - P[j, 1], target[2] - P[j, 2]
+            a = N[j, 0] * dx + N[j, 1] * dy + N[j, 2] * dz
+            if a <= cos_max:
+                need = np.inf
+                break
+            b = N[j, 0] * wx + N[j, 1] * wy + N[j, 2] * wz
+            dw = dx * wx + dy * wy + dz * wz
+            A, B, Cq = a * a - c2, 2.0 * (a * b - c2 * dw), b * b - c2 * (wx * wx + wy * wy + wz * wz)
+            disc = B * B - 4.0 * A * Cq
+            d = max((-B + np.sqrt(disc)) / (2.0 * A) if disc >= 0 else -np.inf, -b / a)
+            if d > need:
+                need = d
+                if need > cap[i]:
+                    need = np.inf
+                    break
+        out[i] = need
+        if first and need < np.inf:
+            break
+    return out
+
+
+def views(P, N, c: CameraCfg, offset, first=False):
+    """The possible views of a page grid (P, N: (nv, nu, 3) points [mm] and unit normals): view_dirs directions spread
+    evenly over the tilts an offset of offset x the page size allows from dist_mm[0], overhead first, each with its
+    distances [lo, hi] in dist_mm where every view_step-th node of the grid is seen within incidence_deg of its normal and
+    the camera's horizontal offset from the page centre stays within the offset. first: only up to the first possible
+    direction. -> target, dirs (m, 3), tilts, azimuths, lo, hi (lo > hi: the direction is not possible)."""
+    target = 0.5 * (P.min((0, 1)) + P.max((0, 1)))
+    reach = offset * float(max(np.ptp(P[..., 0]), np.ptp(P[..., 1])))
+    k = np.arange(c.view_dirs)
+    azs = k * np.pi * (3 - np.sqrt(5))
+    tilts = np.arcsin(min(1.0, reach / c.dist_mm[0])) * np.sqrt((k + 0.5) / c.view_dirs)
+    dirs = np.stack([np.sin(tilts) * np.cos(azs), np.sin(tilts) * np.sin(azs), np.cos(tilts)], -1)
+    hi = np.minimum(c.dist_mm[1], reach / np.maximum(np.sin(tilts), 1e-9))
+    s = c.view_step
+    sub = lambda A: np.ascontiguousarray(A[::s, ::s].reshape(-1, 3), np.float64)
+    lo = np.maximum(_nearest(dirs, target, sub(P), sub(N), np.cos(np.radians(c.incidence_deg)), hi, first), c.dist_mm[0])
+    return target, dirs, tilts, azs, lo, hi
+
+
 def make_camera(rng, P, N, size, c: CameraCfg):
-    """P, N: (n, 3) surface points and unit normals. -> camera dict (eye, R, f, cx, cy) and view parameters.
-    Distance, tilt, azimuth, roll and fill are drawn. The pose is the one nearest to the drawn direction, among
-    DIRECTIONS view directions within tilt_deg with the camera's horizontal offset from the page centre <=
-    max_offset x the page size, at the smallest of DIST_STEPS distances from the drawn one up
-    (x DIST_GROWTH each) where every point is seen within incidence_deg of its normal (the least oblique pose if
-    none is). The focal length sets the fill. min_px_per_mm reports the smallest local image scale
-    f cos(incidence) / depth on the page."""
+    """P, N: (nv, nu, 3) page grid points and unit normals. -> camera dict (eye, R, f, cx, cy) and view parameters.
+    A view drawn among the possible ones (views, offset max_offset, else side_offset: a side view): a direction uniformly,
+    then a distance log-uniformly in its range, moved out to where every node of the grid is within incidence_deg; the
+    overhead view at the far end of dist_mm when none is possible (the geometry avoids it). Roll and fill are drawn; the focal length sets the fill. min_px_per_mm reports the smallest local
+    image scale f cos(incidence) / depth on the page."""
     w, h = size
-    target = 0.5 * (P.min(0) + P.max(0))
-    dist0 = float(np.exp(rng.uniform(*np.log(c.dist_mm))))
-    az0 = rng.uniform(0, 2 * np.pi)
-    tilt0 = np.radians(rng.uniform(*c.tilt_deg))
     roll = np.radians(rng.uniform(*c.roll_deg))
     fill = rng.uniform(*c.fill)
-    tmax = np.radians(c.tilt_deg[1])
-    k = np.arange(DIRECTIONS)
-    azs = np.concatenate([[az0], k * np.pi * (3 - np.sqrt(5))])
-    d0 = np.array([np.sin(tilt0) * np.cos(az0), np.sin(tilt0) * np.sin(az0), np.cos(tilt0)])
-    reach = c.max_offset * float(np.ptp(P[:, :2], 0).max())
-    cos_max = np.cos(np.radians(c.incidence_deg))
-    Ps, Ns = P[::SEARCH_STEP], N[::SEARCH_STEP]
-    best = None
-    for dist in dist0 * DIST_GROWTH ** np.arange(DIST_STEPS):
-        t_d = min(tmax, np.arcsin(min(1.0, reach / dist)))      # directions spread over the tilts the offset allows
-        tilts = np.concatenate([[tilt0], t_d * np.sqrt((k + 0.5) / DIRECTIONS)])
-        dirs = np.stack([np.sin(tilts) * np.cos(azs), np.sin(tilts) * np.sin(azs), np.cos(tilts)], -1)
-        eyes = target + dist * dirs
-        worst = np.where(dist * np.sin(tilts) <= reach * (1 + 1e-9), _worst_cos(eyes, Ps, Ns), -1.0)
-        ok = np.flatnonzero(worst >= cos_max)
-        if ok.size:
-            best = (dist, int(ok[np.argmax(dirs[ok] @ d0)]), eyes, worst, tilts)
-            break
-        j = int(worst.argmax())
-        if best is None or worst[j] > best[3][best[1]]:
-            best = (dist, j, eyes, worst, tilts)
-    dist, k, eyes, worst, tilts = best
-    worst = _worst_cos(eyes[k:k + 1], P, N)[0]
-    ray = eyes[k] - P
+    target, dirs, tilts, azs, lo, hi = views(P, N, c, c.max_offset)
+    ok = np.flatnonzero(lo <= hi)
+    if not ok.size:
+        target, dirs, tilts, azs, lo, hi = views(P, N, c, c.side_offset)
+        ok = np.flatnonzero(lo <= hi)
+    P, N = P.reshape(-1, 3).astype(np.float64), N.reshape(-1, 3).astype(np.float64)
+    if ok.size:
+        k = int(rng.choice(ok))
+        dist = float(np.exp(rng.uniform(np.log(lo[k]), np.log(hi[k]))))
+        full = _nearest(dirs[k:k + 1], target, P, N, np.cos(np.radians(c.incidence_deg)), np.array([np.inf]), False)[0]
+        dist = max(dist, full) if np.isfinite(full) else dist
+    else:
+        k, dist = 0, float(c.dist_mm[1])
+    eye = target + dist * dirs[k]
+    worst = _worst_cos(eye[None], P, N)[0]
+    ray = eye - P
     cos_k = np.einsum("nk,nk->n", ray, N) / np.linalg.norm(ray, axis=1)
-    cam = dict(eye=eyes[k], R=look_at(eyes[k], target, roll), f=1.0, cx=0.0, cy=0.0)
+    cam = dict(eye=eye, R=look_at(eye, target, roll), f=1.0, cx=0.0, cy=0.0)
     xy, z = project(P, cam)
     lo, hi = xy.min(0), xy.max(0)
     f = fill * min(w / (hi[0] - lo[0]), h / (hi[1] - lo[1]))

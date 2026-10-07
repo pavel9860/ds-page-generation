@@ -111,8 +111,6 @@ def main():
         _bars(ax[1], Counter(s["gsm"] for s in plan), "paper g/m2"),
         _bars(ax[2], Counter(s["deep"] or "-" for s in plan), "deep crease level"),
         _hist(ax[3], [s["bend_dir"] for s in plan], "bend direction [deg]"),
-        _bars(ax[4], Counter(f"{b[0]:.0f}-{b[1]:.0f}" for s in plan for b in [s["dist_bin"]]), "camera distance bin [mm]"),
-        _bars(ax[5], Counter(f"{b[0]:.0f}-{b[1]:.0f}" for s in plan for b in [s["tilt_bin"]]), "camera tilt bin [deg]"),
         _bars(ax[6], Counter(("sharp" if s["sharp"] else "area") for s in plan), "light"),
         _bars(ax[7], Counter(f"flat={s['flat']} two={s['two']}" for s in plan), "near-flat / two profiles"),
         _bars(ax[8], Counter(f"{b[0]:.2f}-{b[1]:.2f}" for s in plan for b in [s["margin_bin"]]), "margin bin")])

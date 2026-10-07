@@ -70,7 +70,7 @@ def make_sample(rng, page, surf, P: Preset):
     Pts = np.stack([X, Y, Z], -1).reshape(-1, 3)
     N = vertex_normals(X, Y, Z).reshape(-1, 3)
     faces = grid_faces(nv, nu)
-    cam, view = make_camera(rng, Pts, N, px, c.camera)
+    cam, view = make_camera(rng, Pts.reshape(nv, nu, 3), N.reshape(nv, nu, 3), px, c.camera)
     pix, depth = project(Pts, cam)
     uu, vv = np.meshgrid(np.linspace(0, 1, nu), np.linspace(0, 1, nv))
     shading = c.effects["shading"].prob > 0 and rng.random() < c.effects["shading"].prob

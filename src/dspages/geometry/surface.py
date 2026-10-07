@@ -6,6 +6,8 @@ at n_slices positions across g. Sag (shell under gravity) acts outside the suppo
 deep crease network are height maps in page coordinates, carried onto the box. Rows and columns of the box are
 laid out inextensibly, then the page grid (u, v) is sampled from the box and turned back to the page frame.
 """
+from dataclasses import replace
+
 import numpy as np
 from numba import njit
 from scipy.interpolate import RegularGridInterpolator
@@ -15,6 +17,7 @@ from ..creases import deep, shallow
 from .sag import solve_sag
 from .scenes import lerp_scene, sample_ends, scene_label
 from .strip import solve_strip
+from ..render.camera import vertex_normals, views
 
 ISO_PASSES = 2                  # row and column passes that give a creased sheet its lengths back (strain < 1e-4)
 
@@ -92,7 +95,24 @@ def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
     return 1e-3 * h, (np.arange(h.shape[0]) * pitch * 1e-3, np.arange(h.shape[1]) * pitch * 1e-3), lines
 
 
-def make_surface(rng, g: GeometryCfg, paper, cond):
+def make_surface(rng, g: GeometryCfg, paper, cond, camera=None):
+    """make_page drawn again (up to view_tries) until a camera view of it is possible (camera: CameraCfg; None: once)."""
+    for _ in range(g.view_tries if camera is not None else 1):
+        s = make_page(rng, g, paper, cond)
+        if camera is None or seen(s, camera):
+            break
+    return s
+
+
+def seen(s, camera):
+    """Whether a camera view of a page grid (make_page output) is possible within camera.side_offset."""
+    k = camera.view_step
+    X, Y, Z = s["X"][::k, ::k], s["Y"][::k, ::k], s["Z"][::k, ::k]
+    _, _, _, _, lo, hi = views(np.stack([X, Y, Z], -1), vertex_normals(X, Y, Z), replace(camera, view_step=1), camera.side_offset, True)
+    return bool((lo <= hi).any())
+
+
+def make_page(rng, g: GeometryCfg, paper, cond):
     """-> dict with the page grid X, Y, Z [mm] (rows down the sheet, columns across; face up, right-handed: Y points
     up the sheet) and what
     made it: scenes at both ends, paper, conditions, crease lines, max membrane strain of the laid-out box."""
