@@ -5,7 +5,6 @@
 - 047: find what is lost at 11 pt (formatting? by position metric).
 - 075: gaps in the text columns (frames filled?).
 - Overlaps left: widened single-line blocks over a neighbour (cases 8, 9, 38, 40, 55): limit the widening by every block of the line band.
-- Rebuild the manifest and the triplets after the script groups and the control-code check (cases 8, 123, 147).
 
 ## Code
 - Delete the old placement code in layout/refont.py (place, row_groups, follow_top, Mapper use, pour, column_gap, flow, layout, their config numbers) and move what the template uses into one place.

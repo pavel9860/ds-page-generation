@@ -1,6 +1,6 @@
 """Triplets of restyled pages: the original PDF page | two restyles with different seeds, sizes and margins.
 
-python tools/triplets.py OUT_DIR [--manifest M] [--n 200] [--seed 0] [--workers 12] [--preset full]
+python tools/triplets.py OUT_DIR [--manifest M] [--n 200] [--seed 0] [--workers 12] [--preset full] [--only 6,8,9]
 Pages are random "refont" entries of the manifest; the sizes and margins of a restyle are drawn from the preset's
 ranges like the generation does. Writes OUT_DIR/<i>_<category>_<file>_p<page>.png (half size).
 """
@@ -58,12 +58,14 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--preset", default="full")
+    ap.add_argument("--only", default=None, help="comma-separated triplet numbers to make (the others are left as they are)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     pages = [e for e in load_manifest(a.manifest or get_preset(a.preset).paths.manifest) if e["kind"] == "refont"]
+    only = None if a.only is None else {int(i) for i in a.only.split(",")}
     pick = np.random.default_rng(a.seed).permutation(len(pages))[:a.n]
     with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset,)) as pool:
-        for name in pool.map(_triplet, [(i, pages[j], a.out, a.seed) for i, j in enumerate(pick)], chunksize=1):
+        for name in pool.map(_triplet, [(i, pages[j], a.out, a.seed) for i, j in enumerate(pick) if only is None or i in only], chunksize=1):
             print(name, flush=True)
 
 
