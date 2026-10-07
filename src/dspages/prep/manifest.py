@@ -184,11 +184,16 @@ def _allocate(tree, need):
     return batch
 
 
+def _rank(f):
+    """Which files fill a target first: PDFs of text set in them (0), then the other PDFs (1), then images (2)."""
+    return 0 if f["digital"] else 1 if f["path"].lower().endswith(".pdf") else 2
+
+
 def _tree(files, c, quota):
-    """script group -> language -> topic -> files in random order, each with the pages it may give: pages_per_pdf, a
-    book its doc_share of its group's quota, an image one."""
+    """script group -> language -> topic -> files, the first to take last: by _rank, in random order within a rank. Each
+    file has the pages it may give: pages_per_pdf, a book its doc_share of its group's quota, an image one."""
     tree = {g: defaultdict(lambda: defaultdict(list)) for g, _ in c.script_mix}
-    for i in np.random.default_rng(0).permutation(len(files)):
+    for i in sorted(np.random.default_rng(0).permutation(len(files)), key=lambda i: -_rank(files[i])):
         f = files[i]
         g = script(f, c.scripts)
         cap = max(c.pages_per_pdf, round(c.doc_share * quota[g])) if f["category"] == BOOKS else c.pages_per_pdf
