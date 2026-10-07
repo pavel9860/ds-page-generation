@@ -35,7 +35,6 @@ def factors(P: Preset):
     li, m, lc = P.render.light, P.layout.margin_frac, P.layout
     return dict(
         combo=tuple((c, w) for c, w in s.combos),
-        flat=((True, s.near_flat_prob), (False, 1 - s.near_flat_prob)),
         two=((True, g.two_profile_prob), (False, 1 - g.two_profile_prob)),
         along_long=((True, g.along_long_prob), (False, 1 - g.along_long_prob)),
         bend_bin=bend,
@@ -52,11 +51,11 @@ def factors(P: Preset):
 def _canonical(c):
     crumple = c["combo"][3]
     out = {k: v for k, v in c.items() if k != "bend_deep"}
-    return dict(out, flat=c["flat"] and not crumple, two=c["two"] and not crumple,
+    return dict(out, two=c["two"] and not crumple,
                 deep=c["deep"] if crumple else "light" if c.get("bend_deep") else "")
 
 
-GROUPS = dict(geometry=("combo", "flat", "two", "along_long", "bend_bin", "gsm", "shallow", "deep", "bend_deep"),
+GROUPS = dict(geometry=("combo", "two", "along_long", "bend_bin", "gsm", "shallow", "deep", "bend_deep"),
               view=("sharp",), layout=("margin_bin", "font_bin", "scale_bin"))
 
 
@@ -149,7 +148,7 @@ def plan(P: Preset, n, seed, manifest):
 
 
 def geometry_cond(spec):
-    return {k: spec[k] for k in ("combo", "flat", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
+    return {k: spec[k] for k in ("combo", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
 
 
 def view_preset(P: Preset, spec):

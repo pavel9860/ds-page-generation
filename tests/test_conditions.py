@@ -21,7 +21,7 @@ def test_plan_marginals_exact(full_small):
     assert all(man[s["entry"]]["kind"] == "refont" for s in specs if s["combo"][0] == "open")
     for s in specs:
         assert s["combo"][3] or s["deep"] in ("", "light")
-        assert not s["combo"][3] or (not s["two"] and not s["flat"] and s["deep"])
+        assert not s["combo"][3] or (not s["two"] and s["deep"])
         assert -full_small.geometry.bend_dir_deg <= s["bend_dir"] <= full_small.geometry.bend_dir_deg
 
 

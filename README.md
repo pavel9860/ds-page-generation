@@ -62,7 +62,7 @@ Both draw paper types of 50, 60, 80, 100 and 120 g/m².
 
 ## Conditions
 
-`dspages/conditions.py` lists every factor of a preset (scene combination, near-flat, two profiles, orientation,
+`dspages/conditions.py` lists every factor of a preset (scene combination, two profiles, orientation,
 bend direction, paper, creases, camera distance and tilt, light, margins) with its probability. A plan gives each
 factor value its exact share and pairs factors by independent shuffles; `cells(P, group)` enumerates the
 combinations of a group.

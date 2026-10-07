@@ -28,7 +28,7 @@ def _samples(P, n):
     yy, xx = np.mgrid[0:ph, 0:pw]
     page = np.where((xx // 6 + yy // 6) % 2 == 0, 30, 230).astype(np.uint8)
     for k, spec in enumerate(plan(P, n, 1, fake_manifest())):
-        cond = {key: spec[key] for key in ("combo", "flat", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
+        cond = {key: spec[key] for key in ("combo", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
         surf = make_surface(np.random.default_rng(k), P.geometry, P.paper, cond)
         yield page, surf, make_sample(np.random.default_rng(k), page, surf, P)
 

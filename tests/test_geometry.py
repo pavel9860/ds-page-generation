@@ -62,7 +62,7 @@ def _arc(p):
 
 def _conds(P):
     for i, (combo, _) in enumerate(P.geometry.scene.combos):
-        yield dict(combo=combo, flat=bool(i % 3 == 0), two=not combo[3] and i % 2 == 0, along_long=bool(i % 2),
+        yield dict(combo=combo, two=not combo[3] and i % 2 == 0, along_long=bool(i % 2),
                    bend_dir=float(-40 + 7 * i), gsm=P.paper.gsm[i % len(P.paper.gsm)], shallow=bool(i % 2),
                    deep=("medium", "heavy")[i % 2] if combo[3] else "light" if i % 4 == 1 else "")
 
@@ -83,7 +83,7 @@ def test_surface_isometric_on_table(full_small, i):
 
 
 def test_surface_right_handed_face_up(full_small):
-    cond = dict(combo=(False, 0, False, False), flat=False, two=False, along_long=False, bend_dir=0.0, gsm=80,
+    cond = dict(combo=(False, 0, False, False), two=False, along_long=False, bend_dir=0.0, gsm=80,
                 shallow=False, deep="")
     s = make_surface(np.random.default_rng(0), full_small.geometry, full_small.paper, cond)
     du = np.array([s["X"][0, -1] - s["X"][0, 0], s["Y"][0, -1] - s["Y"][0, 0], 0])
@@ -106,7 +106,7 @@ def test_crease_heights_bounded(full_small):
 def test_a_surface_does_not_depend_on_what_ran_before(full_small):
     """The parts of a sample draw from their own streams: a layout made first does not change the page surface."""
     from dspages.layout import paper
-    cond = dict(combo=(False, 0, False, True), flat=False, two=False, along_long=False, bend_dir=0.0, gsm=80, shallow=True,
+    cond = dict(combo=(False, 0, False, True), two=False, along_long=False, bend_dir=0.0, gsm=80, shallow=True,
                 deep="heavy")
     a = make_surface(np.random.default_rng(3), full_small.geometry, full_small.paper, cond)["Z"]
     paper.apply(np.random.default_rng(9), np.full((300, 200), 255, np.uint8), 5.0, full_small.layout, full_small.geometry.shallow)

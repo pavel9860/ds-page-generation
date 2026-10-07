@@ -70,10 +70,6 @@ class SceneCfg:
     fold_k_sigma: float = 0.7
     fold_k: tuple = (0.003, 0.05)
     fold_side_b_angle_jitter: float = 0.25
-    near_flat_prob: float = 0.0
-    flat_support_h: tuple = (0.001, 0.005)
-    flat_fold_deg: tuple = (1.0, 8.0)
-    flat_clamp_deg: tuple = (2.0, 10.0)
 
 
 @dataclass(frozen=True)

@@ -132,7 +132,7 @@ def make_page(rng, g: GeometryCfg, paper, cond):
     up = np.linspace(0.0, lp, int(np.ceil(lp / pitch)) + 1)
     vg = np.linspace(0.0, wg, int(np.ceil(wg / pitch)) + 1)
 
-    sa, sb = sample_ends(rng, g.scene, lp, wg, cond["two"], cond["combo"], cond["flat"])
+    sa, sb = sample_ends(rng, g.scene, lp, wg, cond["two"], cond["combo"])
     t = np.linspace(0.0, 1.0, g.n_slices if cond["two"] else 1)
     slices, y = [], None
     for tk in t:
