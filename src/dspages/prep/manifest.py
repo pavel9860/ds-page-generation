@@ -2,15 +2,16 @@
 
 Raster fields: source_path, page_index, language, category, kind, rotate90, deskew_deg, used_h, used_w (raster
 size), window (x, y, w, h in page px: the window that passed the checks), margin, pictures, fill, picture_share.
-Restyled pages (kind "refont", digital-born PDF pages set again in other fonts): seed, margin, font_pt (body), scale (other
-sizes) and fill of the sheet (generation renders exactly that page). Rejected pages (and the check they failed) go to <out>.rejected.jsonl. No source
-document holds more than DOC_SHARE of its script group.
+Restyled pages (kind "refont": pages of text set in the PDF, set again in other fonts, sizes and margins drawn per
+sample at generation): source_path, page_index, language, category. Rejected pages (and the check they failed) go to
+<out>.rejected.jsonl.
 
 python -m dspages.prep.manifest --out <paths.manifest>
 """
 import argparse
 import glob
 import json
+import math
 import os
 import re
 import time
@@ -21,21 +22,17 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pymupdf as fitz
 
+from ..conditions import script
 from ..config import Paths, get_preset
 from ..layout.content import bbox, content_mask, place_window, window_limits
+from ..layout import refont
 from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90
 from ..layout.pictures import picture_mask, pictures
 from ..layout.sources import RASTER_ZOOM
-from .text_extract import name_language
 
 LAYOUTS = Paths().layouts
-MIN_CONTENT_AREA_FRAC = 0.01
-MAX_MARGIN_FRAC = 0.50
-PAGES_PER_PDF_CAP = 10                 # accepted pages per PDF
-TRIES_PER_PDF = 30                     # pages checked per PDF
-DOC_SHARE = 0.02                       # max share of a script group's pages from one source document
-CHECK_PX = 800                         # longest side of the PDF render the checks run on (none needs more)
 
 
 def _init():
@@ -102,11 +99,6 @@ def _margin(box, win):
     return float(max(x0 - x, x + w - x0 - bw, y0 - y, y + h - y0 - bh, 0.0) / w)
 
 
-def _is_scan(has_text):
-    """Pages that get rotation and deskew: PDF pages without a text layer and images."""
-    return not has_text
-
-
 def _box(b, s):
     """(x0, y0, w, h) in page px of a mask bbox (y0, y1, x0, x1) at scale s."""
     y0, y1, x0, x1 = (v / s for v in b)
@@ -115,166 +107,122 @@ def _box(b, s):
 
 def _bbox_keep(b, h, w):
     y0, y1, x0, x1 = b
-    return ((y1 - y0 + 1) * (x1 - x0 + 1) >= MIN_CONTENT_AREA_FRAC * h * w
-            and 1 - (y1 - y0 + 1) / h <= MAX_MARGIN_FRAC and 1 - (x1 - x0 + 1) / w <= MAX_MARGIN_FRAC)
-
-
-_FONTS = []
-
-
-def _refont_record(path, pi, language, category, seed):
-    """A digital-born page restyled: the settings drawn (margin, body size, scale of the other sizes, a seed for the
-    fonts), the sheet set and checked for fill and glyphs."""
-    from ..layout import refont
-    from ..layout.generate import sheet_fill
-    c = _LAYOUT
-    if not _FONTS:
-        _FONTS.append(refont.font_set(Paths().font_dirs))
-        refont.load_glyphs()
-    rng = np.random.default_rng([seed, pi])
-    m, pt, scale = rng.uniform(*c.margin_frac), rng.uniform(*c.font_pt), rng.uniform(*c.role_scale)
-    sd = int(rng.integers(1 << 31))
-    gray, info = refont.sheet(path, pi, sd, _FONTS[0], pt, scale, m, c.page_px)
-    if info["unresolved"]:
-        return _reject(path, pi, language, "glyphs")
-    fill = sheet_fill(gray, c.fill_grid)
-    if fill < c.min_fill:
-        return _reject(path, pi, language, "fill", fill=round(fill, 3))
-    return dict(source_path=path, page_index=pi, language=language, category=category, kind="refont", seed=sd,
-                margin=float(m), font_pt=float(pt), scale=float(scale), fill=fill)
+    return ((y1 - y0 + 1) * (x1 - x0 + 1) >= _LAYOUT.min_content_area * h * w
+            and 1 - (y1 - y0 + 1) / h <= _LAYOUT.max_blank_margin and 1 - (x1 - x0 + 1) / w <= _LAYOUT.max_blank_margin)
 
 
 def _job_pdf(args):
-    """Pages in random order, each handled once, until PAGES_PER_PDF_CAP pass; the rest of the document is not
-    touched. A digital-born page of a restyled source is set again; other pages (scans, garbled text, many
-    columns) are rasterized. Rejected pages come back as kind="rejected" records."""
-    import pymupdf as fitz
-    from ..layout import refont
-    pdf_path, language, category, seed, digital = args
+    """The pages of a PDF in random order, until `cap` are accepted or the tries are used. A page of text set in the PDF
+    is restyled at generation; any other (a scan, garbled text, many columns) is rasterized."""
+    path, language, category, digital, cap = args
+    c = _LAYOUT
     try:
-        doc = fitz.open(pdf_path)
-        order = np.random.default_rng(seed).permutation(doc.page_count)[:TRIES_PER_PDF]
-    except Exception:
-        return []
+        doc = fitz.open(path)
+    except fitz.FileDataError:
+        return [_reject(path, 0, language, "unreadable")]
     recs, n = [], 0
-    try:
-        for pi in order.tolist():
-            if n >= PAGES_PER_PDF_CAP:
-                break
+    with doc:
+        for pi in np.random.default_rng(_seed(path)).permutation(doc.page_count)[:c.tries_per_page * cap].tolist():
             page = doc[pi]
             if digital and refont.usable(page):
-                rec = _refont_record(pdf_path, pi, language, category, seed)
+                rec = dict(source_path=path, page_index=pi, language=language, category=category, kind="refont")
             else:
-                z = min(RASTER_ZOOM, CHECK_PX / max(page.rect.width, page.rect.height))
+                z = min(RASTER_ZOOM, c.check_px / max(page.rect.width, page.rect.height))
                 pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csGRAY, alpha=False)
-                gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width).copy()
-                rec = _page_record(gray, pdf_path, pi, language, category, _is_scan(bool(page.get_text().strip())),
-                                   RASTER_ZOOM / z)
+                gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
+                rec = _page_record(gray, path, pi, language, category, not page.get_text().strip(), RASTER_ZOOM / z)
             recs.append(rec)
             n += rec["kind"] != "rejected"
-    except Exception:
-        return recs
-    finally:
-        doc.close()
-        if _FONTS:
-            refont.save_glyphs()
+            if n == cap:
+                break
     return recs
 
 
 def _job_image(args):
-    image_path, language, category, _ = args
-    gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    path, language, category, _, _ = args
+    gray = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
-        return [_reject(image_path, 0, language, "unreadable")]
-    return [_page_record(gray, image_path, 0, language, category, _is_scan(True))]
+        return [_reject(path, 0, language, "unreadable")]
+    return [_page_record(gray, path, 0, language, category, True)]
 
 
 # ---------------------------------------------------------------------------
-# source enumeration
+# source files
 # ---------------------------------------------------------------------------
 
-DIGITAL = ("books_pdf", "forms", "other_docs", "magazines", "scientific_paper", "exams", "bureaucracy", "corpus_add/pdf")
-RASTER = ("filled_forms", "flyers", "sheet_music", "overflow", "corpus_add/Images")
-IMAGES = (".png", ".jpg", ".jpeg")
+DIGITAL = ("books_pdf", "bureaucracy", "corpus_add/pdf", "exams", "other_docs", "scientific_paper")  # restyled
+RASTER = ("certificates", "corpus_add/Images")                                                       # as images
+BOOKS = "books_pdf"
 
 
 def _language(path):
-    """Language code of a file named <hash>_<topic>_<code>[_p<page>].<ext>, else the old name.<code>.<ext>, else unknown."""
+    """Language code of a file named <hash>_<topic>_<code>[_p<page>].<ext>."""
     code = re.sub(r"_p\d+$", "", os.path.splitext(os.path.basename(path))[0]).rsplit("_", 1)[-1]
-    return code if re.fullmatch(r"[a-z]{2,3}", code) else name_language(path) or "unknown"
+    return code if re.fullmatch(r"[a-z]{2,3}", code) else "unknown"
 
 
-def _files(sub, exts):
-    return sorted(p for p in glob.glob(os.path.join(LAYOUTS, sub, "**", "*"), recursive=True) if p.lower().endswith(exts))
-
-
-def pdf_jobs():
-    """(path, language, category, seed, digital): the digital-born sources' PDFs are restyled where they can be."""
-    return [(p, _language(p), sub.split("/")[0], _seed(p), digital)
-            for subs, digital in ((DIGITAL, True), (RASTER, False)) for sub in subs for p in _files(sub, (".pdf",))]
-
-
-def image_jobs():
-    return [(p, _language(p), sub.split("/")[0], _seed(p)) for sub in DIGITAL + RASTER for p in _files(sub, IMAGES)]
-
-
-def balance(recs, scripts, rng):
-    """Per script group at most DOC_SHARE of its pages (and at least PAGES_PER_PDF_CAP) from one source document,
-    a random subset when over."""
-    from ..conditions import script
-    group = Counter(script(r, scripts) for r in recs)
-    by_doc = {}
-    for r in recs:
-        by_doc.setdefault(r["source_path"], []).append(r)
-    out = []
-    for doc in by_doc.values():
-        cap = max(PAGES_PER_PDF_CAP, round(DOC_SHARE * group[script(doc[0], scripts)]))
-        out += [doc[i] for i in sorted(rng.permutation(len(doc))[:cap])]
-    return out
+def list_files(path):
+    """The source files (path, language, category, digital) of the listing file, made when missing."""
+    if not os.path.exists(path):
+        rows = [dict(path=p, language=_language(p), category=sub.split("/")[0], digital=digital and p.lower().endswith(".pdf"))
+                for subs, digital in ((DIGITAL, True), (RASTER, False)) for sub in subs
+                for p in sorted(glob.glob(os.path.join(LAYOUTS, sub, "**", "*"), recursive=True))
+                if p.lower().endswith((".pdf", ".png", ".jpg", ".jpeg"))]
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(r) + "\n" for r in rows)
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f]
 
 
 # ---------------------------------------------------------------------------
 # driver
 # ---------------------------------------------------------------------------
 
-def _run_task(task):
-    fn, args = task
-    return fn(args)
+def _run(row):
+    fn = _job_pdf if row["path"].lower().endswith(".pdf") else _job_image
+    return fn((row["path"], row["language"], row["category"], row["digital"], row["cap"]))
 
 
-def main(out_path: str, workers: int, limit_files: int = None):
-    """Usable pages: up to PAGES_PER_PDF_CAP per PDF, every image; then balanced so no
-    source document holds more than DOC_SHARE of its script group."""
-    groups = [(pdf_jobs(), _job_pdf), (image_jobs(), _job_image)]
+def main(out_path, workers, pages=None):
+    """Pages by the targets: each script group gets its share of `pages`.
+    A group's files are taken in random order, pages_per_pdf pages of each (a book: its share of the group), a round
+    after another until the group's quota is met. A page is taken once, restyled or not."""
+    c = _LAYOUT
     rng = np.random.default_rng(0)
-    tasks = [(fn, jobs[i]) for jobs, fn in groups for i in (rng.permutation(len(jobs))[:limit_files] if limit_files else range(len(jobs)))]
-    rng.shuffle(tasks)                     # mixes heavy documents into the run
-    t0, recs, rejected = time.time(), [], []
-    print(f"{len(tasks)} files", flush=True)
+    files = list_files(Paths().files)
+    quota = {g: round((pages or c.manifest_pages) * w) for g, w in c.script_mix}
+    queue = {g: [] for g, _ in c.script_mix}
+    for i in rng.permutation(len(files)):
+        queue.setdefault(script(files[i], c.scripts), []).append(files[i])
+    got, recs, rejected, t0 = Counter(), [], [], time.time()
     with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
-        for done, rs in enumerate(pool.map(_run_task, tasks, chunksize=1), 1):
-            for r in rs:
-                (rejected if r["kind"] == "rejected" else recs).append(r)
-            if done % 1000 == 0:
-                print(f"{done}/{len(tasks)} files, entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)
-    kept = balance(recs, _LAYOUT.scripts, np.random.default_rng(0))
+        while True:
+            batch = []
+            for g, q in queue.items():
+                take = min(len(q), math.ceil(max(quota[g] - got[g], 0) / c.pages_per_pdf))
+                cap = max(c.pages_per_pdf, round(c.doc_share * quota[g]))
+                batch += [dict(f, cap=cap if f["category"] == BOOKS else c.pages_per_pdf) for f in q[:take]]
+                queue[g] = q[take:]
+            if not batch:
+                break
+            for rs in pool.map(_run, batch, chunksize=1):
+                for r in rs:
+                    (rejected if r["kind"] == "rejected" else recs).append(r)
+                    got[script(r, c.scripts)] += r["kind"] != "rejected"
+            print(f"entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
-        f.writelines(json.dumps(r) + "\n" for r in kept)
+        f.writelines(json.dumps(r) + "\n" for r in recs)
     with open(Path(out_path).with_suffix(".rejected.jsonl"), "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r) + "\n" for r in rejected)
-    from ..conditions import script
-    per = Counter((script(r, _LAYOUT.scripts), r["kind"]) for r in kept)
-    print(f"TOTAL {len(kept)} entries ({len(recs) - len(kept)} over the per-document share), "
-          f"wall={time.time() - t0:.0f}s", flush=True)
-    print("per script group and kind:", json.dumps({f"{g} {k}": v for (g, k), v in sorted(per.items())}, indent=1),
-          flush=True)
+    print(f"TOTAL {len(recs)} entries, {len(rejected)} rejected, wall={time.time() - t0:.0f}s", flush=True)
+    print("per script group:", dict(got), "quota:", quota, flush=True)
+
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--workers", type=int, default=12)
-    ap.add_argument("--limit_files", type=int, default=None,
-                    help="cap per-source-group file count, for a fast dry run")
+    ap.add_argument("--pages", type=int, default=None, help="pages to collect (default: the config's manifest_pages)")
     args = ap.parse_args()
-    main(args.out, args.workers, args.limit_files)
+    main(args.out, args.workers, args.pages)

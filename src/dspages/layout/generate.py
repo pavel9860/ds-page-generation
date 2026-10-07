@@ -60,10 +60,11 @@ def make_layout(rng, entry, P: Preset, fonts):
         gray, m = _raster_sheet(entry, pw, ph, c)
         meta.update(m)
     else:
-        gray, info = sheet(entry["source_path"], entry["page_index"], entry["seed"], fonts, entry["font_pt"],
-                           entry["scale"], entry["margin"], (pw, ph))
-        meta.update(margin=entry["margin"], font_pt=entry["font_pt"], scale=entry["scale"], fill=entry["fill"],
-                    body_pt=info["body_pt"])
+        m, pt, scale = rng.uniform(*c.margin_frac), rng.uniform(*c.font_pt), rng.uniform(*c.role_scale)
+        gray, info = sheet(entry["source_path"], entry["page_index"], int(rng.integers(1 << 31)), fonts, pt, scale, m, (pw, ph))
+        mx, my = round(m * pw), round(m * ph)
+        meta.update(margin=float(m), font_pt=float(pt), scale=float(scale), body_pt=info["body_pt"],
+                    fill=sheet_fill(gray[my:ph - my, mx:pw - mx], c.fill_grid))
     page, effects = paper.apply(rng, gray, ppm, c, P.geometry.shallow)
     meta["effects"] = effects
     return dict(page=page, gray=gray, meta=meta)

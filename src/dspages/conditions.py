@@ -24,7 +24,7 @@ def factors(P: Preset):
     """name -> ((value, weight), ...) for geometry, view and layout."""
     g, s = P.geometry, P.geometry.scene
     bend = _bins(-g.bend_dir_deg, g.bend_dir_deg, 5)
-    cam, li, m = P.render.camera, P.render.light, P.layout.margin_frac
+    cam, li, m, lc = P.render.camera, P.render.light, P.layout.margin_frac, P.layout
     return dict(
         combo=tuple((c, w) for c, w in s.combos),
         flat=((True, s.near_flat_prob), (False, 1 - s.near_flat_prob)),
@@ -38,7 +38,9 @@ def factors(P: Preset):
         dist_bin=tuple((b, 1.0) for b in _bins(*cam.dist_mm, 4, log=True)),
         tilt_bin=tuple((b, 1.0) for b in _bins(*cam.tilt_deg, 3)),
         sharp=((True, li.sharp_prob), (False, 1 - li.sharp_prob)),
-        margin_bin=tuple((b, 1.0) for b in _bins(*m, 3)) if m[1] > m[0] else ((m, 1.0),))
+        margin_bin=tuple((b, 1.0) for b in _bins(*m, 3)) if m[1] > m[0] else ((m, 1.0),),
+        font_bin=tuple((b, 1.0) for b in _bins(*lc.font_pt, 4)),
+        scale_bin=tuple((b, 1.0) for b in _bins(*lc.role_scale, 3)))
 
 
 def _canonical(c):
@@ -49,7 +51,7 @@ def _canonical(c):
 
 
 GROUPS = dict(geometry=("combo", "flat", "two", "along_long", "bend_bin", "gsm", "shallow", "deep", "bend_deep"),
-              view=("dist_bin", "tilt_bin", "sharp"), layout=("margin_bin",))
+              view=("dist_bin", "tilt_bin", "sharp"), layout=("margin_bin", "font_bin", "scale_bin"))
 
 
 def cells(P: Preset, group):
@@ -86,7 +88,7 @@ def _counts(w, n):
 
 
 def entry_pools(P: Preset, manifest):
-    """Per script group: manifest indices of its pages (raster pages and book pages, all checked by the manifest)."""
+    """Per script group: manifest indices of its pages (restyled and raster)."""
     pools = {g: [] for g, _ in P.layout.script_mix}
     for i, e in enumerate(manifest):
         pools.setdefault(script(e, P.layout.scripts), []).append(i)
@@ -136,4 +138,5 @@ def view_preset(P: Preset, spec):
 
 
 def layout_preset(P: Preset, spec):
-    return replace(P, layout=replace(P.layout, margin_frac=spec["margin_bin"]))
+    return replace(P, layout=replace(P.layout, margin_frac=spec["margin_bin"], font_pt=spec["font_bin"],
+                                     role_scale=spec["scale_bin"]))

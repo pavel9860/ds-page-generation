@@ -30,20 +30,20 @@ def test_cells_are_a_distribution(full_small):
         assert abs(sum(p for _, p in cs) - 1) < 1e-9 and len(cs) > 0
 
 
-def test_script_mix_pages_never_repeated(full_small):
+def test_pages_are_never_repeated_and_stay_in_their_script_group(full_small):
     man = fake_manifest()
-    pools = entry_pools(full_small, man)
-    n = 1000
-    specs = plan(full_small, n, 1, man)
-    got = Counter(s["script"] for s in specs)
-    for g, w in full_small.layout.script_mix:
-        if g not in full_small.layout.use_all:
-            assert got[g] <= len(pools[g])
+    specs = plan(full_small, 1000, 1, man)
     assert all(script(man[s["entry"]], full_small.layout.scripts) == s["script"] for s in specs)
     entries = [s["entry"] for s in specs]
     assert len(entries) == len(set(entries))
 
 
+def test_layout_bins_cover_the_config_ranges(full_small):
+    specs = plan(full_small, 60, 2, fake_manifest())
+    c = full_small.layout
+    for key, (lo, hi) in (("font_bin", c.font_pt), ("scale_bin", c.role_scale)):
+        got = Counter(s[key] for s in specs)
+        assert min(a for a, _ in got) == lo and max(b for _, b in got) == hi and max(got.values()) - min(got.values()) <= 1
 def test_unknown_uses_all(full_small):
     man = fake_manifest()
     specs = plan(full_small, 300, 3, man)

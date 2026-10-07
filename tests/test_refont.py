@@ -58,7 +58,7 @@ def test_no_gap_in_columns_when_next_page_has_text(fonts, seed):
     page(doc, 110, 110, head=False)
     lay = refont.layout(doc, 0, np.random.default_rng(seed), fonts, 11.0, 1.0, 1024)
     img = refont.render(doc, lay)
-    line = lay["info"]["body_pt"] * lay["size"][0] / refont.SHEET_PT_W * 1.3
+    line = lay["info"]["body_pt"] * lay["size"][0] / refont.C.sheet_pt_w * 1.3
     for c0, c1 in lay["cols"]:
         longest, last = blank_runs(img, c0, c1)
         assert longest <= 4 * line, f"column {c0:.0f}-{c1:.0f} has a {longest}px empty stretch (line {line:.0f}px)"
@@ -108,7 +108,7 @@ def test_a_long_paragraph_does_not_hold_back_its_neighbour_column(fonts, seed):
     columns_with_a_short_first_line(doc)
     lay = refont.layout(doc, 0, np.random.default_rng(seed), fonts, 11.0, 1.0, 1024)
     img = refont.render(doc, lay)
-    line = lay["info"]["body_pt"] * lay["size"][0] / refont.SHEET_PT_W * 1.3
+    line = lay["info"]["body_pt"] * lay["size"][0] / refont.C.sheet_pt_w * 1.3
     for c0, c1 in lay["cols"]:
         longest, _ = blank_runs(img, c0, c1)
         assert longest <= 4 * line, f"column {c0:.0f}-{c1:.0f} has a {longest}px empty stretch (line {line:.0f}px)"

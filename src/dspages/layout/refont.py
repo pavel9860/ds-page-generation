@@ -17,9 +17,10 @@ import pymupdf
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageDraw, ImageFont
 
+from ..config import RefontCfg
 from .text import _font_cmap, find_fonts
 
-SHEET_PT_W = 210.0 / 25.4 * 72
+C = RefontCfg()
 STYLE_OF = {"": 0, "regular": 0, "roman": 0, "book": 0, "bold": 1, "italic": 2, "oblique": 2, "bolditalic": 3,
             "boldoblique": 3}
 LEADING_VOWELS = "เแโไใ"
@@ -27,76 +28,7 @@ JOINERS = "‌‍"
 NO_SPACE_SCRIPTS = ("THAI", "LAO", "KHMER", "MYANMAR", "CJK", "HIRAGANA", "KATAKANA", "HANGUL", "IDEOGRAPHIC")
 CJK_NAMES = ("hiragana", "katakana", "hangul", "bopomofo", "ideographic")
 NOTO_PREFIXES = ("notosans", "notoserif")
-HEAD_RATIO = 1.18
-HEADER_PT = 45
-FOOTER_PT = 70
-MAX_PAGES = 6
-BEZIER_STEPS = 8
-FONT_STEP = 2
-ROW_BIN = 10
-ROW_REACH = 3
-FRAME_SPAN = 0.6
-FRAME_THIN = 0.08
-EDGE_ZONE = 0.1
-BACKGROUND_SHARE = 0.25
-PAGE_AREA_PT = 595.0 * 842.0
-TRIM_MAX = 0.85
-TILT = 0.3
-RULE_THIN = 2.5
-RULE_LONG = 8.0
-SCRIPT_PURITY = 0.8
-PRIVATE_SHARE = 0.05
-GUTTER_COVER = 0.2
-GUTTER_EM = 0.5
-MAX_COLUMNS = 4
-EDGE_BIN = 3
-EDGE_LINES = 3
-SPLIT_EM = 1.6
-FIT_FLOOR = 0.8
-MAX_STRETCH = 3.0
-RAGGED_LINES = 5
-RAGGED_PERCENTILE = 0.9
-OVERLAY_SHARE = 0.6
-POUR = True
-POUR_MIN_LINES = 2
-INDENT_LINES = 4
-MIN_PIC_SCALE = 0.3
-START_SHARE = 0.6
-AA = 4
-RAGGED_FILL = 0.45
 TERMINAL = tuple(".;:!?…。")
-RUN_STEP = 4
-RUN_ZONE = 0.14
-GAP_LINES = 2.5
-MAX_FILL = 8
-SHORT_LINE_EM = 3.0
-CJK_SHARE = 0.25
-FLUSH_SHARE = 0.6
-TABLE_STEP = 6
-TABLE_ROWS = 3
-COLUMN_LINE = 6
-JUSTIFY_EDGE = 0.8
-EDGE_SLACK = 0.06
-ROW_OVERLAP = 0.6
-ROOM = 1.5
-FONT_TRIES = 6
-ROW_LINES = 6
-ROW_SEARCH = 8
-TAB_EM = 0.9
-JUSTIFY_FILL = 0.85
-EDGE_TOL = 0.03
-SIZE_STEP = 4
-RIGID_PT = 40
-TOUCH_PT = 1.5
-GLYPH_GAP = 0.3
-MIN_NOTO_CMAP = 40
-MIN_TEXT_CHARS = 150
-MAX_IMAGE_SHARE = 0.5
-RULE_MIN_PT = 20
-SHRINK = 0.93
-SUPERSCRIPT_RATIO = 0.75
-GAP_BODY = 1.5
-TEXT_IMAGE_SHARE = 0.4
 THAI_PUA = {0xF700: 0x0E10, 0xF701: 0x0E34, 0xF702: 0x0E35, 0xF703: 0x0E36, 0xF704: 0x0E37, 0xF705: 0x0E48,
             0xF706: 0x0E49, 0xF707: 0x0E4A, 0xF708: 0x0E4B, 0xF709: 0x0E4C, 0xF70A: 0x0E48, 0xF70B: 0x0E49,
             0xF70C: 0x0E4A, 0xF70D: 0x0E4B, 0xF70E: 0x0E4C, 0xF70F: 0x0E0D, 0xF710: 0x0E31, 0xF711: 0x0E4D,
@@ -110,7 +42,7 @@ def _rtl_char(ch):
 
 def is_rtl(text):
     letters = [c for c in text if c.isalpha()]
-    return bool(letters) and sum(_rtl_char(c) for c in letters) > 0.3 * len(letters)
+    return bool(letters) and sum(_rtl_char(c) for c in letters) > C.rtl_share * len(letters)
 
 
 def _script(ch):
@@ -136,48 +68,65 @@ def span_mono(s):
     return bool(s["flags"] & 8) or any(k in s["font"].lower() for k in ("mono", "courier", "consolas"))
 
 
-def extract_segments(page, dy):
-    """Text lines of a page. A line whose spans are far apart (a gutter between columns, a tab) is cut into one segment per run."""
-    segs = []
-    for b in page.get_text("dict")["blocks"]:
-        for l in b.get("lines", []):
-            if abs(l["dir"][1]) > TILT:
-                first = l["spans"][0]
-                box = pymupdf.Rect(l["bbox"])
-                if "".join(s["text"] for s in l["spans"]).strip():
-                    segs.append(dict(bbox=box + (0, dy, 0, dy), spans=[dict(
-                        text="\ufffc", size=round(first["size"] * SIZE_STEP) / SIZE_STEP, gray=_gray(first["color"]), bold=False, italic=False,
-                        mono=False, nat=first["ascender"] - first["descender"], glyph=box, tall=True, bbox=box + (0, dy, 0, dy))]))
-                continue
-            runs, sp = [], []
-            for s in l["spans"]:
-                text = s["text"].replace("\x00", "").replace("\xa0", " ").translate(THAI_PUA)
-                if text.strip():
-                    bold, italic = span_style(s)
-                    glyph = pymupdf.Rect(s["bbox"]) if all(unicodedata.category(c) == "Co" for c in text.strip()) else None
-                    span = dict(text=text, size=round(s["size"] * SIZE_STEP) / SIZE_STEP, gray=_gray(s["color"]), bold=bold,
-                                italic=italic, mono=span_mono(s), nat=s["ascender"] - s["descender"], glyph=glyph,
-                                bbox=pymupdf.Rect(s["bbox"]) + (0, dy, 0, dy))
-                    if sp and max(span["bbox"].x0 - sp[-1]["bbox"].x1, sp[-1]["bbox"].x0 - span["bbox"].x1) > SPLIT_EM * span["size"]:
-                        runs.append(sp)
-                        sp = []
-                    sp.append(span)
-            if sp:
-                runs.append(sp)
-            for run in runs:
-                box = pymupdf.Rect(run[0]["bbox"])
-                for span in run[1:]:
-                    box |= span["bbox"]
-                segs.append(dict(bbox=pymupdf.Rect(box.x0, pymupdf.Rect(l["bbox"]).y0 + dy, box.x1, pymupdf.Rect(l["bbox"]).y1 + dy), spans=run))
+def _tilted(l, dy):
+    """A tilted line is one picture-like glyph run: set as a pixmap of the page."""
+    first = l["spans"][0]
+    box = pymupdf.Rect(l["bbox"])
+    span = dict(text="\ufffc", size=round(first["size"] * C.size_step) / C.size_step, gray=_gray(first["color"]), bold=False,
+                italic=False, mono=False, nat=first["ascender"] - first["descender"] or C.line_em, glyph=box, tall=True, bbox=box + (0, dy, 0, dy))
+    return [dict(bbox=box + (0, dy, 0, dy), spans=[span])]
+
+
+def _span(s, text, dy):
+    bold, italic = span_style(s)
+    glyph = pymupdf.Rect(s["bbox"]) if all(unicodedata.category(c) == "Co" for c in text.strip()) else None
+    return dict(text=text, size=round(s["size"] * C.size_step) / C.size_step, gray=_gray(s["color"]), bold=bold, italic=italic,
+                mono=span_mono(s), nat=s["ascender"] - s["descender"] or C.line_em, glyph=glyph, bbox=pymupdf.Rect(s["bbox"]) + (0, dy, 0, dy))
+
+
+def _runs(l, dy):
+    """Segments of a line: its spans, cut where they are far apart (a gutter between columns, a tab)."""
+    spans = []
+    for s in l["spans"]:
+        text = s["text"].replace("\x00", "").replace("\xa0", " ").translate(THAI_PUA)
+        if text.strip() and round(s["size"] * C.size_step) > 0:
+            spans.append(_span(s, text, dy))
+    runs = []
+    for span in spans:
+        far = runs and max(span["bbox"].x0 - runs[-1][-1]["bbox"].x1, runs[-1][-1]["bbox"].x0 - span["bbox"].x1) > C.split_em * span["size"]
+        if far or not runs:
+            runs.append([])
+        runs[-1].append(span)
+    y0, y1 = pymupdf.Rect(l["bbox"]).y0 + dy, pymupdf.Rect(l["bbox"]).y1 + dy
+    return [dict(bbox=pymupdf.Rect(min(sp["bbox"].x0 for sp in run), y0, max(sp["bbox"].x1 for sp in run), y1), spans=run) for run in runs]
+
+
+def _unique(segs):
+    """The lines, a copy of a line laid over another (a shadow, a bold made by overprint) dropped. Lines are compared
+    with those of the same text that start within duplicate_pt of them."""
     seen, unique = defaultdict(list), []
+    step = C.duplicate_pt
     for seg in segs:
-        key = _text(seg)
         box = seg["bbox"]
-        if any((box & o).get_area() >= 0.7 * min(box.get_area(), o.get_area()) for o in seen[key]) and box.get_area() > 0:
+        cx, cy = round(box.x0 / step), round(box.y0 / step)
+        near = [o for dx in (-1, 0, 1) for dy in (-1, 0, 1) for o in seen[(_text(seg), cx + dx, cy + dy)]]
+        if box.get_area() > 0 and any((box & o).get_area() >= C.duplicate_overlap * min(box.get_area(), o.get_area()) for o in near):
             continue
-        seen[key].append(box)
+        seen[(_text(seg), cx, cy)].append(box)
         unique.append(seg)
     return unique
+
+
+def extract_segments(page, dy):
+    """Text lines of a page, each cut into one segment per run."""
+    lines = [l for b in page.get_text("dict")["blocks"] for l in b.get("lines", [])]
+    segs = []
+    for l in lines:
+        if abs(l["dir"][1]) > C.tilt:
+            segs += _tilted(l, dy) if "".join(s["text"] for s in l["spans"]).strip() else []
+        else:
+            segs += _runs(l, dy)
+    return _unique(segs)
 
 
 def _rsize(r):
@@ -200,18 +149,18 @@ def column_intervals(segs):
         for s in l["spans"]:
             cnt[round(s["size"] * 2) / 2] += len(s["text"])
     body = cnt.most_common(1)[0][0] if cnt else 0.0
-    lefts = Counter(round(l["bbox"].x0 / EDGE_BIN) for l in segs)
-    rights = Counter(round(l["bbox"].x1 / EDGE_BIN) for l in segs)
+    lefts = Counter(round(l["bbox"].x0 / C.edge_bin) for l in segs)
+    rights = Counter(round(l["bbox"].x1 / C.edge_bin) for l in segs)
     spans = sorted((l["bbox"].x0, l["bbox"].x1) for l in segs
-                   if _rsize(l) <= 1.15 * body and l["bbox"].width >= COLUMN_LINE * _rsize(l)
-                   and (lefts[round(l["bbox"].x0 / EDGE_BIN)] >= EDGE_LINES or rights[round(l["bbox"].x1 / EDGE_BIN)] >= EDGE_LINES))
+                   if _rsize(l) <= C.body_band * body and l["bbox"].width >= C.column_line * _rsize(l)
+                   and (lefts[round(l["bbox"].x0 / C.edge_bin)] >= C.edge_lines or rights[round(l["bbox"].x1 / C.edge_bin)] >= C.edge_lines))
     if not spans:
         return []
     lo, hi = int(min(x0 for x0, _ in spans)), int(max(x1 for _, x1 in spans)) + 1
     cover = np.zeros(hi - lo + 1)
     for x0, x1 in spans:
         cover[int(x0) - lo:int(x1) - lo + 1] += 1
-    solid = cover >= GUTTER_COVER * cover.max()
+    solid = cover >= C.gutter_cover * cover.max()
     cols, start = [], None
     for i, on in enumerate(list(solid) + [False]):
         if on and start is None:
@@ -221,7 +170,7 @@ def column_intervals(segs):
             start = None
     merged = []
     for c in cols:
-        if merged and c[0] - merged[-1][1] < GUTTER_EM * body:
+        if merged and c[0] - merged[-1][1] < C.gutter_em * body:
             merged[-1][1] = c[1]
         else:
             merged.append(c)
@@ -234,7 +183,7 @@ def column_intervals(segs):
 
 def column_of(bbox, cols):
     """Index of the column a box lies in; None when it spans several columns or lies in none."""
-    hits = [i for i, (a, z) in enumerate(cols) if min(bbox.x1, z) - max(bbox.x0, a) >= 0.2 * max(bbox.width, 1.0)]
+    hits = [i for i, (a, z) in enumerate(cols) if min(bbox.x1, z) - max(bbox.x0, a) >= C.column_hit * max(bbox.width, 1.0)]
     return hits[0] if len(hits) == 1 else None
 
 
@@ -247,16 +196,16 @@ def join_rows(segs, cols, vlines=()):
         lx0, ly0, lx1, ly1 = bb.x0, bb.y0, bb.x1, bb.y1
         sz = max(s["size"] for s in l["spans"])
         col = column_of(bb, cols)
-        key = int(((ly0 + ly1) / 2) // ROW_BIN)
+        key = int(((ly0 + ly1) / 2) // C.row_bin)
         target = None
-        for k in range(key - ROW_REACH, key + ROW_REACH + 1):
+        for k in range(key - C.row_reach, key + C.row_reach + 1):
             for r in buckets.get(k, ()):
                 x1, (py0, py1, psz) = r["x1"], r["last"]
-                if not -0.1 * sz < lx0 - x1 < 1.6 * sz:
+                if not -C.join_back_em * sz < lx0 - x1 < C.join_ahead_em * sz:
                     continue
                 small = min(py1 - py0, ly1 - ly0)
-                inline = abs((py0 + py1) / 2 - (ly0 + ly1) / 2) < 0.3 * sz or (
-                    min(sz, psz) < SUPERSCRIPT_RATIO * max(sz, psz) and min(py1, ly1) - max(py0, ly0) >= 0.5 * small)
+                inline = abs((py0 + py1) / 2 - (ly0 + ly1) / 2) < C.inline_share * sz or (
+                    min(sz, psz) < C.superscript_ratio * max(sz, psz) and min(py1, ly1) - max(py0, ly0) >= 0.5 * small)
                 if not inline or not (col is None or r["col"] is None or col == r["col"]):
                     continue
                 mid = ly0 + 0.5 * (ly1 - ly0)
@@ -289,30 +238,30 @@ def paragraphs(segs, rules=((), ())):
     rows = join_rows(segs, cols, rules[0])
     colw = defaultdict(float)
     for r in rows:
-        k = (round(_rsize(r)), round(r["bbox"].x0 / 4))
+        k = (round(_rsize(r)), round(r["bbox"].x0 / C.para_bin))
         colw[k] = max(colw[k], r["bbox"].width)
     blocks = []
     for r in rows:
         sz = _rsize(r)
-        k = round(r["bbox"].x0 / 4)
+        k = round(r["bbox"].x0 / C.para_bin)
         W = max(colw[(round(sz), j)] for j in (k - 1, k, k + 1))
-        for b in reversed(blocks[-8:]):
+        for b in reversed(blocks[-C.lookback:]):
             last = b["lines"][-1]["bbox"]
             pitch = r["bbox"].y0 - last.y0
-            ref = b["pitch"] if len(b["lines"]) > 1 else 2.2 * sz
+            ref = b["pitch"] if len(b["lines"]) > 1 else C.single_pitch_em * sz
             edge = abs(r["bbox"].x0 - last.x0) < 3 or abs(r["bbox"].x1 - last.x1) < 3
             ruled = any(y0 <= y <= y1 and x0 < min(last.x1, r["bbox"].x1) and x1 > max(last.x0, r["bbox"].x0) for y, x0, x1 in rules[1]
                         for y0, y1 in [(last.y1 - 0.5 * sz, r["bbox"].y0 + 0.5 * sz)])
-            first_ltr = len(b["lines"]) == 1 and 0.5 * sz < last.x0 - r["bbox"].x0 < 4 * sz and abs(last.x1 - r["bbox"].x1) < 0.6 * sz + 3
-            first_rtl = len(b["lines"]) == 1 and 0.5 * sz < r["bbox"].x1 - last.x1 < 4 * sz and abs(last.x0 - r["bbox"].x0) < 0.6 * sz + 3
-            step_ltr = (len(b["lines"]) <= INDENT_LINES and all(l["bbox"].x0 > r["bbox"].x0 + 0.5 * sz for l in b["lines"])
-                        and abs(last.x1 - r["bbox"].x1) < 0.6 * sz + 3)
-            step_rtl = (len(b["lines"]) <= INDENT_LINES and all(l["bbox"].x1 < r["bbox"].x1 - 0.5 * sz for l in b["lines"])
-                        and abs(last.x0 - r["bbox"].x0) < 0.6 * sz + 3)
-            if (abs(_rsize(b["lines"][-1]) - sz) < 0.3 and (edge or first_ltr or first_rtl or step_ltr or step_rtl) and b["col"] == r["col"]
+            first_ltr = len(b["lines"]) == 1 and C.indent_min_em * sz < last.x0 - r["bbox"].x0 < C.indent_max_em * sz and abs(last.x1 - r["bbox"].x1) < C.edge_match_em * sz + 3
+            first_rtl = len(b["lines"]) == 1 and C.indent_min_em * sz < r["bbox"].x1 - last.x1 < C.indent_max_em * sz and abs(last.x0 - r["bbox"].x0) < C.edge_match_em * sz + 3
+            step_ltr = (len(b["lines"]) <= C.indent_lines and all(l["bbox"].x0 > r["bbox"].x0 + 0.5 * sz for l in b["lines"])
+                        and abs(last.x1 - r["bbox"].x1) < C.edge_match_em * sz + 3)
+            step_rtl = (len(b["lines"]) <= C.indent_lines and all(l["bbox"].x1 < r["bbox"].x1 - 0.5 * sz for l in b["lines"])
+                        and abs(last.x0 - r["bbox"].x0) < C.edge_match_em * sz + 3)
+            if (abs(_rsize(b["lines"][-1]) - sz) < C.same_size_pt and (edge or first_ltr or first_rtl or step_ltr or step_rtl) and b["col"] == r["col"]
                     and not ruled
-                    and 0.5 * sz < pitch < ref * 1.2 and b["W"] > 8 * sz
-                    and (last.width > 0.8 * b["W"] or (last.width > RAGGED_FILL * b["W"] and not _text(b["lines"][-1]).rstrip().endswith(TERMINAL)))):
+                    and C.indent_min_em * sz < pitch < ref * C.pitch_tol and b["W"] > C.min_width_em * sz
+                    and (last.width > C.full_line * b["W"] or (last.width > C.ragged_fill * b["W"] and not _text(b["lines"][-1]).rstrip().endswith(TERMINAL)))):
                 if len(b["lines"]) == 1:
                     b["pitch"] = pitch
                 b["lines"].append(r)
@@ -328,19 +277,19 @@ def paragraphs(segs, rules=((), ())):
             b["bbox"] = pymupdf.Rect(edge, b["bbox"].y0, b["bbox"].x1, b["bbox"].y1) if b["rtl"] else pymupdf.Rect(
                 b["bbox"].x0, b["bbox"].y0, edge, b["bbox"].y1)
         b["colspan"] = cols[b["col"]] if b["col"] is not None else None
-        if b["align"] != "justify" and len(b["lines"]) >= RAGGED_LINES:
+        if b["align"] != "justify" and len(b["lines"]) >= C.ragged_lines:
             ends = sorted(l["bbox"].x0 if b["rtl"] else l["bbox"].x1 for l in b["lines"])
-            cut = ends[int((1 - RAGGED_PERCENTILE) * (len(ends) - 1))] if b["rtl"] else ends[int(RAGGED_PERCENTILE * (len(ends) - 1))]
+            cut = ends[int((1 - C.ragged_percentile) * (len(ends) - 1))] if b["rtl"] else ends[int(C.ragged_percentile * (len(ends) - 1))]
             b["bbox"] = pymupdf.Rect(max(b["bbox"].x0, cut), b["bbox"].y0, b["bbox"].x1, b["bbox"].y1) if b["rtl"] else pymupdf.Rect(
                 b["bbox"].x0, b["bbox"].y0, min(b["bbox"].x1, cut), b["bbox"].y1)
         if b["colspan"] is not None:
             clamped = pymupdf.Rect(max(b["bbox"].x0, b["colspan"][0]), b["bbox"].y0, min(b["bbox"].x1, b["colspan"][1]), b["bbox"].y1)
-            if clamped.width >= TRIM_MAX * b["bbox"].width:
+            if clamped.width >= C.trim_max * b["bbox"].width:
                 b["bbox"] = clamped
         nat = statistics.median(s["nat"] for l in b["lines"] for s in l["spans"])
         pitch = (statistics.median(b["lines"][i + 1]["bbox"].y0 - b["lines"][i]["bbox"].y0
                                    for i in range(len(b["lines"]) - 1)) if len(b["lines"]) > 1 else b["size"] * nat)
-        b["lead"] = min(max(pitch / (b["size"] * nat), 1.0), 2.4)
+        b["lead"] = min(max(pitch / (b["size"] * nat), 1.0), C.max_lead)
     return blocks
 
 
@@ -360,12 +309,12 @@ def _align(b):
     starts = [start(r) for r in (ls[1:] if n > 2 else ls)]
     ends = [end(r) for r in (ls[1:-1] if n > 3 else ls[:-1] if n == 3 else ls)]
     ref = Counter(round(v) for v in starts).most_common(1)[0][0]
-    start_flush = sum(abs(v - ref) <= 3 for v in starts) >= START_SHARE * len(starts)
+    start_flush = sum(abs(v - ref) <= 3 for v in starts) >= C.start_share * len(starts)
     text = "".join(_text(l) for l in b["lines"])
-    tol = (SHORT_LINE_EM if sum(_nobreak(c) for c in text) > CJK_SHARE * len(text) else JUSTIFY_EDGE) * b["size"]
+    tol = (C.short_line_em if sum(_nobreak(c) for c in text) > C.cjk_share * len(text) else C.justify_edge) * b["size"]
     edge = max(ends, key=lambda e: sum(abs(x - e) <= tol for x in ends))
-    end_flush = sum(abs(e - edge) <= tol for e in ends) >= FLUSH_SHARE * len(ends)
-    if start_flush and end_flush and min(r.width for r in ls[1:-1] or ls) > JUSTIFY_FILL * max(r.width for r in ls):
+    end_flush = sum(abs(e - edge) <= tol for e in ends) >= C.flush_share * len(ends)
+    if start_flush and end_flush and min(r.width for r in ls[1:-1] or ls) > C.justify_fill * max(r.width for r in ls):
         return "justify", edge
     if _spread([(r.x0 + r.x1) / 2 for r in ls]) < 3 and not (start_flush or end_flush):
         return "center", None
@@ -427,8 +376,8 @@ def families(fonts):
         suffix = base.split("-", 1)[1].lower() if "-" in base else ""
         if _traits(p)[1]:
             italic = suffix == "italic"
-            fam[_family_key(p)].setdefault(2 * italic, (p, 400))
-            fam[_family_key(p)].setdefault(2 * italic + 1, (p, 700))
+            fam[_family_key(p)].setdefault(2 * italic, (p, C.regular_weight))
+            fam[_family_key(p)].setdefault(2 * italic + 1, (p, C.bold_weight))
         elif suffix in STYLE_OF:
             fam[_family_key(p)].setdefault(STYLE_OF[suffix], (p, None))
     save_traits()
@@ -443,7 +392,7 @@ def style_file(files, bold, italic):
 
 def pick_family(rng, fams, chars, bold=False, italic=False, need=()):
     letters = {c for c in chars if c.isalpha()} or set(chars)
-    scripts = {k for k, v in Counter(_script(c) for c in letters).items() if v >= 0.15 * len(letters)}
+    scripts = {k for k, v in Counter(_script(c) for c in letters).items() if v >= C.script_share * len(letters)}
     cps = {ord(c) for c in chars}
     score = {}
     for k, v in fams.items():
@@ -458,7 +407,7 @@ def pick_family(rng, fams, chars, bold=False, italic=False, need=()):
 
 
 def font(path, px, wght):
-    return _font(path, round(px * FONT_STEP) / FONT_STEP, wght)
+    return _font(path, round(px * C.font_step) / C.font_step, wght)
 
 
 @lru_cache(maxsize=4096)
@@ -546,33 +495,42 @@ def _pieces(word):
     return out + [cur]
 
 
+def _glyph_token(s, px, space, tab):
+    return dict(text="", glyph=(s["number"], s["glyph"]), size=s["size"], px=px, gray=s["gray"], gap=space, tab=tab, brk=False,
+                rtl=False, path=None, wght=None, tall=s.get("tall", False))
+
+
+def _word_tokens(s, typesetter, role, px, space, tab):
+    """Tokens of a span's words: the pieces of a word each in the font that has its letters. -> (tokens, space, tab)."""
+    toks = []
+    for i, w in enumerate(s["text"].replace("\n", " ").split(" ")):
+        space = space or i > 0
+        for piece in _pieces(w) if w else ():
+            for path, wght, text in typesetter.resolve(role, piece, s["bold"], s["italic"]):
+                toks.append(dict(text=text, path=path, wght=wght, px=px, gray=s["gray"], gap=space, tab=tab, size=s["size"],
+                                 sig=(round(s["size"], 1), s["bold"], s["italic"], s["mono"], s["gray"]),
+                                 brk=_nobreak(text), rtl=any(_rtl_char(c) for c in text if c.isalpha())))
+                space, tab = False, 0.0
+    return toks, space, tab
+
+
 def tokens(b, typesetter, role_of, px_of):
     toks, space, prev, tab = [], False, None, 0.0
     for l in b["lines"]:
         for s in l["spans"]:
             if prev is not None and abs(s["bbox"].y0 - prev.y0) < 0.5 * s["size"]:
                 src_gap = max(s["bbox"].x0 - prev.x1, prev.x0 - s["bbox"].x1)
-                if src_gap > 0.15 * s["size"]:
+                if src_gap > C.source_gap_em * s["size"]:
                     space = True
-                    tab = src_gap if src_gap > TAB_EM * s["size"] else 0.0
+                    tab = src_gap if src_gap > C.tab_em * s["size"] else 0.0
             prev = s["bbox"]
-            role = "mono" if s["mono"] else role_of(s["size"])
-            px = px_of(s["size"])
             if s["glyph"] is not None:
-                toks.append(dict(text="", glyph=(s["number"], s["glyph"]), size=s["size"], px=px, gray=s["gray"], gap=space,
-                                 tab=tab, brk=False, rtl=False, path=None, wght=None, tall=s.get("tall", False)))
+                toks.append(_glyph_token(s, px_of(s["size"]), space, tab))
                 space, tab = False, 0.0
                 continue
-            for i, w in enumerate(s["text"].replace("\n", " ").split(" ")):
-                space = space or i > 0
-                if not w:
-                    continue
-                for piece in _pieces(w):
-                    for path, wght, text in typesetter.resolve(role, piece, s["bold"], s["italic"]):
-                        toks.append(dict(text=text, path=path, wght=wght, px=px, gray=s["gray"], gap=space, tab=tab, size=s["size"],
-                                         sig=(round(s["size"], 1), s["bold"], s["italic"], s["mono"], s["gray"]),
-                                         brk=_nobreak(text), rtl=any(_rtl_char(c) for c in text if c.isalpha())))
-                        space, tab = False, 0.0
+            role = "mono" if s["mono"] else role_of(s["size"])
+            more, space, tab = _word_tokens(s, typesetter, role, px_of(s["size"]), space, tab)
+            toks += more
         space = not _nobreak(_text(l)[-1:])
     return toks
 
@@ -580,7 +538,7 @@ def tokens(b, typesetter, role_of, px_of):
 def gap_w(t):
     if not t["gap"]:
         return 0.0
-    space = GLYPH_GAP * t["px"] if t["path"] is None else font(t["path"], t["px"], t["wght"]).getlength(" ")
+    space = C.glyph_gap * t["px"] if t["path"] is None else font(t["path"], t["px"], t["wght"]).getlength(" ")
     return max(space, t["tab"] * t["px"] / t["size"])
 
 
@@ -652,7 +610,7 @@ def follow_top(x0, x1, y0, pinned, k, done, gfx, gap_cap, sc):
     """Top of a block below the blocks that share its columns: their new bottoms plus the source gap, scaled."""
     if pinned:
         return y0
-    above = [a for a in done if min(a["x1"], x1) - max(a["x0"], x0) >= max(2.0, 0.25 * min(a["x1"] - a["x0"], x1 - x0))
+    above = [a for a in done if min(a["x1"], x1) - max(a["x0"], x0) >= max(2.0, C.follow_overlap * min(a["x1"] - a["x0"], x1 - x0))
              and a["oy0"] < y0 - 0.5 and not a["pinned"]]
 
     nearest = max(above, key=lambda a: a["oy1"], default=None)
@@ -670,13 +628,13 @@ def single_align(x0, x1, c0, c1, rtl):
     """Where a one-line block sits in its column: centred, flush to an edge, or left."""
     colw = max(c1 - c0, 1.0)
     left, right = x0 - c0, c1 - x1
-    if left < EDGE_TOL * colw + 2 and right < EDGE_TOL * colw + 2:
+    if left < C.edge_tol * colw + 2 and right < C.edge_tol * colw + 2:
         return "right" if rtl else "left"
-    if left > 0.1 * colw and abs(left - right) < EDGE_TOL * colw + 3:
+    if left > C.align_inset * colw and abs(left - right) < C.edge_tol * colw + 3:
         return "center"
-    if right < EDGE_TOL * colw + 2 and left > 0.1 * colw:
+    if right < C.edge_tol * colw + 2 and left > C.align_inset * colw:
         return "right"
-    if left < EDGE_TOL * colw + 2:
+    if left < C.edge_tol * colw + 2:
         return "left"
     return "right" if rtl and right < left else "left"
 
@@ -705,7 +663,7 @@ def prepare(b, blocks, page_w, g, typesetter, role_of, px_of, cols):
     multi = len(b["lines"]) > 1
     bpx = px_of(b["size"])
     lettered = next((t for t in toks if t["path"] is not None), None)
-    asc, desc = font(lettered["path"], bpx, lettered["wght"]).getmetrics() if lettered else (0.8 * bpx, 0.2 * bpx)
+    asc, desc = font(lettered["path"], bpx, lettered["wght"]).getmetrics() if lettered else (C.ascent_share * bpx, (1 - C.ascent_share) * bpx)
     cx = (x0 + x1) / 2
     c0, c1 = (b["colspan"][0] * g, b["colspan"][1] * g) if b.get("colspan") else (min(a for a, _ in cols), max(z for _, z in cols))
     W, bx0, ind1, ind2 = x1 - x0, x0, 0.0, 0.0
@@ -715,20 +673,20 @@ def prepare(b, blocks, page_w, g, typesetter, role_of, px_of, cols):
     else:
         align = single_align(x0, x1, c0, c1, b["rtl"])
         row = [(o["bbox"].x0 * g, o["bbox"].x1 * g) for o in blocks if o is not b and not o.get("image")
-               and min(o["bbox"].y1, bb.y1) - max(o["bbox"].y0, bb.y0) > ROW_OVERLAP * min(o["bbox"].height, bb.height)]
-        slack = EDGE_SLACK * (c1 - c0)
+               and min(o["bbox"].y1, bb.y1) - max(o["bbox"].y0, bb.y0) > C.row_overlap * min(o["bbox"].height, bb.height)]
+        slack = C.edge_slack * (c1 - c0)
         e0, e1 = max(c0 - slack, 2.0), min(c1 + slack, page_w * g - 2.0)
         right = min((a for a, z in row if a >= x1 - 1), default=e1)
         left = max((z for a, z in row if z <= x0 + 1), default=e0)
         cap = {"left": min(e1, right) - x0, "right": x1 - max(e0, left),
                "center": 2 * min(cx - max(e0, left), min(e1, right) - cx)}[align]
-        Wa = max(min(ROOM * W, cap), W)
+        Wa = max(min(C.room * W, cap), W)
         bx0, W = {"left": x0, "right": x1 - Wa, "center": cx - Wa / 2}[align], Wa
     lines = wrap(toks, W, ind1, ind2)
     natural = 0.0 if multi else sum(measure(t)[1] for t in toks) + sum(gap_w(t) for t in toks[1:])
     return dict(b=b, image=False, fit=natural / max(W, 1.0), x0=x0, x1=x1, y0=y0, y1=y1, bx0=bx0, W=W, align=align, ind=(ind1, ind2), lines=lines,
                 pitch=(asc + desc) * b["lead"], asc=asc, desc=desc, multi=multi, pinned=b["pinned"], k=b["k"], rtl=b["rtl"],
-                bpx=bpx, tol=0.35 * b["size"] * g, wrapped=not multi and len(lines) > 1)
+                bpx=bpx, tol=C.row_tol_em * b["size"] * g, wrapped=not multi and len(lines) > 1)
 
 
 def row_groups(prepared, gfx):
@@ -746,26 +704,26 @@ def row_groups(prepared, gfx):
         return len(m["b"]["lines"]) == 1
 
     levels = defaultdict(set)
-    flat = [p for p in prepared if not p["pinned"] and not p["image"] and len(p["lines"]) <= ROW_LINES]
+    flat = [p for p in prepared if not p["pinned"] and not p["image"] and len(p["lines"]) <= C.row_lines]
     for i, p in enumerate(flat):
-        for q in flat[i + 1:i + 1 + 4 * ROW_SEARCH]:
+        for q in flat[i + 1:i + 1 + 4 * C.row_search]:
             if q["y0"] - p["y0"] > max(p["tol"], q["tol"]):
                 break
             if abs(q["y0"] - p["y0"]) <= max(p["tol"], q["tol"]) and (q["x0"] >= p["x1"] - 1 or q["x1"] <= p["x0"] + 1):
-                levels[tuple(sorted((round(p["x0"] / TABLE_STEP), round(q["x0"] / TABLE_STEP))))].add(round(p["y0"] / TABLE_STEP))
-    tabular = {k for k, v in levels.items() if len(v) >= TABLE_ROWS}
+                levels[tuple(sorted((round(p["x0"] / C.table_step), round(q["x0"] / C.table_step))))].add(round(p["y0"] / C.table_step))
+    tabular = {k for k, v in levels.items() if len(v) >= C.table_rows}
 
     def columns_repeat(m, p):
-        return tuple(sorted((round(m["x0"] / TABLE_STEP), round(p["x0"] / TABLE_STEP)))) in tabular
+        return tuple(sorted((round(m["x0"] / C.table_step), round(p["x0"] / C.table_step)))) in tabular
 
     groups = []
     for p in prepared:
-        if p["pinned"] or p["image"] or len(p["lines"]) > ROW_LINES or p["b"].get("at") is not None or p["b"].get("moved") or p["on"] is not None:
+        if p["pinned"] or p["image"] or len(p["lines"]) > C.row_lines or p["b"].get("at") is not None or p["b"].get("moved") or p["on"] is not None:
             groups.append([p])
             continue
-        for gr in reversed(groups[-ROW_SEARCH:]):
+        for gr in reversed(groups[-C.row_search:]):
             q = gr[0]
-            if (not q["pinned"] and not q["image"] and len(q["lines"]) <= ROW_LINES and q["k"] == p["k"]
+            if (not q["pinned"] and not q["image"] and len(q["lines"]) <= C.row_lines and q["k"] == p["k"]
                     and abs(p["y0"] - q["y0"]) <= max(p["tol"], q["tol"])
                     and all(p["x0"] >= m["x1"] - 1 or p["x1"] <= m["x0"] + 1 for m in gr)
                     and ((one_line(p) and all(one_line(m) for m in gr)) or ruled(gr + [p]) or all(columns_repeat(m, p) for m in gr))):
@@ -802,7 +760,7 @@ def place(blocks, page_w, g, typesetter, role_of, px_of, sc, limit, cols, gfx, g
         if below:
             q, ov = max(((q, max(min(p["x1"], q["x1"]) - max(p["x0"], q["x0"]), 0) * max(min(p["y1"], q["y1"]) - max(p["y0"], q["y0"]), 0))
                          for q in below), key=lambda t: t[1])
-            if ov >= OVERLAY_SHARE * area:
+            if ov >= C.overlay_share * area:
                 p["on"], p["y_order"] = id(q["b"]), max(p["y0"], q["y0"]) + 1e-3
     prepared.sort(key=lambda p: (p.get("y_order", p["y0"]), p["x0"]))
     items, done, rects, glyphs, pics, used = [], [], [], [], [], []
@@ -812,7 +770,7 @@ def place(blocks, page_w, g, typesetter, role_of, px_of, sc, limit, cols, gfx, g
         pinned = p["pinned"]
         if p["image"]:
             scale = 1.0 if pinned else min(1.0, (limit - top) / p["h"])
-            if scale < MIN_PIC_SCALE:
+            if scale < C.min_pic_scale:
                 state["truncated"] = True
                 return None
             h = p["h"] * scale
@@ -842,7 +800,7 @@ def place(blocks, page_w, g, typesetter, role_of, px_of, sc, limit, cols, gfx, g
             elif a == "justify":
                 extra = (W - ind_l - lw) / (len(ln) - 1)
                 space = max((sw for _, _, _, sw in ln[1:]), default=0.0)
-                if space and extra > MAX_STRETCH * space:
+                if space and extra > C.max_stretch * space:
                     a, extra = ("right" if rtl else "left"), 0.0
             if a == "center":
                 x = x0 + (W - lw) / 2
@@ -856,7 +814,7 @@ def place(blocks, page_w, g, typesetter, role_of, px_of, sc, limit, cols, gfx, g
             for t, f, w, sw in (visual(ln) if rtl else ln):
                 x += 0.0 if rtl else sw
                 if t["path"] is None:
-                    glyphs.append((x, top + 0.8 * t["glyph"][1].height * t["px"] / t["size"] if t["tall"] else y, t))
+                    glyphs.append((x, top + C.ascent_share * t["glyph"][1].height * t["px"] / t["size"] if t["tall"] else y, t))
                 else:
                     items.append((x, y, f, t["text"], t["gray"], "rtl" if t["rtl"] else "ltr"))
                     used.append((t["sig"], t["path"], t["wght"], round(t["px"], 1)))
@@ -949,8 +907,8 @@ def _paths(d):
                 cur.append((it[2].x, it[2].y))
             else:
                 c1, c2, p2 = it[2:5]
-                for k in range(1, BEZIER_STEPS + 1):
-                    t = k / BEZIER_STEPS
+                for k in range(1, C.bezier_steps + 1):
+                    t = k / C.bezier_steps
                     u = 1 - t
                     cur.append((u ** 3 * p1.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t ** 3 * p2.x,
                                 u ** 3 * p1.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t ** 3 * p2.y))
@@ -976,8 +934,8 @@ def _fill(img, pts, gray, alpha):
     x1, y1 = min(int(max(xs)) + 2, img.width), min(int(max(ys)) + 2, img.height)
     if x1 <= x0 or y1 <= y0:
         return
-    big = Image.new("L", ((x1 - x0) * AA, (y1 - y0) * AA), 0)
-    ImageDraw.Draw(big).polygon([((x - x0) * AA, (y - y0) * AA) for x, y in pts], fill=int(255 * alpha))
+    big = Image.new("L", ((x1 - x0) * C.aa, (y1 - y0) * C.aa), 0)
+    ImageDraw.Draw(big).polygon([((x - x0) * C.aa, (y - y0) * C.aa) for x, y in pts], fill=int(255 * alpha))
     img.paste(gray, (x0, y0), big.resize((x1 - x0, y1 - y0), Image.BOX))
 
 
@@ -987,8 +945,8 @@ def _key(r):
 
 def page_frame(r, ph, pw):
     """A bar along the page edge that spans most of the page: a frame, kept whole where it is."""
-    tall = r.height >= FRAME_SPAN * ph and r.width <= FRAME_THIN * pw and (r.x0 < EDGE_ZONE * pw or r.x1 > (1 - EDGE_ZONE) * pw)
-    wide = r.width >= FRAME_SPAN * pw and r.height <= FRAME_THIN * ph and (r.y0 < EDGE_ZONE * ph or r.y1 > (1 - EDGE_ZONE) * ph)
+    tall = r.height >= C.frame_span * ph and r.width <= C.frame_thin * pw and (r.x0 < C.edge_zone * pw or r.x1 > (1 - C.edge_zone) * pw)
+    wide = r.width >= C.frame_span * pw and r.height <= C.frame_thin * ph and (r.y0 < C.edge_zone * ph or r.y1 > (1 - C.edge_zone) * ph)
     return tall or wide
 
 
@@ -999,8 +957,8 @@ def graphics(doc, number, dy, first, ph, pw, home=None, below=None):
     repeated = set() if first else {_key(d["rect"]) for d in doc[home].get_drawings()}
     for d in doc[number].get_drawings():
         r = d["rect"]
-        fixed = r.y1 < HEADER_PT or r.y0 > ph - FOOTER_PT or page_frame(r, ph, pw) or (below is not None and r.y0 >= below)
-        if not first and (fixed or _key(r) in repeated or r.width * r.height > 0.7 * pw * ph):
+        fixed = r.y1 < C.header_pt or r.y0 > ph - C.footer_pt or page_frame(r, ph, pw) or (below is not None and r.y0 >= below)
+        if not first and (fixed or _key(r) in repeated or r.width * r.height > C.repeat_cover * pw * ph):
             continue
         out.append(("draw", d, dy, number, fixed and first))
     return out
@@ -1014,10 +972,10 @@ def pictures(doc, number, dy, first, ph, pw, home=None, below=None):
     repeated = set() if first else {_key(pymupdf.Rect(im["bbox"])) for im in doc[home].get_image_info()}
     for im in page.get_image_info():
         r = pymupdf.Rect(im["bbox"])
-        fixed = r.y1 < HEADER_PT or r.y0 > ph - FOOTER_PT or (below is not None and r.y0 >= below)
-        if r.width * r.height > 0.6 * pw * ph or (not first and (fixed or _key(r) in repeated)):
+        fixed = r.y1 < C.header_pt or r.y0 > ph - C.footer_pt or (below is not None and r.y0 >= below)
+        if r.width * r.height > C.fixed_cover * pw * ph or (not first and (fixed or _key(r) in repeated)):
             continue
-        if sum((w & r).get_area() for w in words) >= TEXT_IMAGE_SHARE * r.get_area():
+        if sum((w & r).get_area() for w in words) >= C.text_image_share * r.get_area():
             continue
         out.append(dict(image=True, rect=r, number=number, bbox=r + (0, dy, 0, dy), pinned=fixed and first, k=0 if first else 1))
     return out
@@ -1068,14 +1026,14 @@ def touching_ranges(elems, g):
             i = parent[i]
         return i
 
-    order = sorted((i for i in range(len(ds)) if ds[i][0]["rect"].get_area() < BACKGROUND_SHARE * PAGE_AREA_PT), key=lambda i: ds[i][0]["rect"].x0)
+    order = sorted((i for i in range(len(ds)) if ds[i][0]["rect"].get_area() < C.background_share * C.page_area_pt), key=lambda i: ds[i][0]["rect"].x0)
     for a, i in enumerate(order):
         ri, dyi = ds[i][0]["rect"], ds[i][1]
         for j in order[a + 1:]:
             rj, dyj = ds[j][0]["rect"], ds[j][1]
-            if rj.x0 > ri.x1 + TOUCH_PT:
+            if rj.x0 > ri.x1 + C.touch_pt:
                 break
-            if rj.y0 + dyj <= ri.y1 + dyi + TOUCH_PT and ri.y0 + dyi <= rj.y1 + dyj + TOUCH_PT:
+            if rj.y0 + dyj <= ri.y1 + dyi + C.touch_pt and ri.y0 + dyi <= rj.y1 + dyj + C.touch_pt:
                 parent[find(i)] = find(j)
     span, size = {}, defaultdict(int)
     for i, (d, dy) in enumerate(ds):
@@ -1091,7 +1049,7 @@ def drawing_paths(d, dy, fixed, anchors, sc, g, spans=None):
     shift, so rules stay straight; a small shape (logo, bullet, checkbox) moves as a whole instead of stretching."""
     r = d["rect"]
     shared = (spans or {}).get(id(d))
-    rigid = r.width <= RIGID_PT and r.height <= RIGID_PT and shared is None
+    rigid = r.width <= C.rigid_pt and r.height <= C.rigid_pt and shared is None
     mp = anchors if isinstance(anchors, Mapper) else Mapper(anchors, sc)
     out = []
     for path in _paths(d):
@@ -1122,7 +1080,7 @@ def draw_graphics(img, elems, anchors, sc, g, cutoff, spans, roots, limit):
         alpha = 1.0 if d.get("fill_opacity") is None else d["fill_opacity"]
         width = max(1, round((d.get("width") or 1.0) * g))
         for pts in drawing_paths(d, dy, fixed, anchors, sc, g, spans):
-            if fill is not None and alpha > 0.02 and len(pts) > 2:
+            if fill is not None and alpha > C.min_alpha and len(pts) > 2:
                 _fill(img, pts, _gray_f(fill), alpha)
             if stroke is not None and len(pts) > 1:
                 ImageDraw.Draw(img).line(pts + ([pts[0]] if d.get("closePath") else []), fill=_gray_f(stroke), width=width)
@@ -1132,31 +1090,34 @@ def text_page(page):
     """False for scanned or picture pages: little text, or pictures covering most of the page."""
     area = page.rect.get_area()
     image = sum((pymupdf.Rect(im["bbox"]) & page.rect).get_area() for im in page.get_image_info())
-    return len(page.get_text().strip()) >= MIN_TEXT_CHARS and image <= MAX_IMAGE_SHARE * area
+    return len(page.get_text().strip()) >= C.min_text_chars and image <= C.max_image_share * area
 
 
-def running_bands(blocks, ph):
-    """Vertical positions of the header and footer lines of a page, in RUN_STEP bins."""
-    return {round((b["bbox"].y0 - 0) / RUN_STEP) for b in blocks if not b.get("image") and (b["bbox"].y0 < RUN_ZONE * ph or b["bbox"].y0 > (1 - RUN_ZONE) * ph)}
+def running_bands(blocks):
+    """Vertical positions of the header and footer lines of a page, in C.run_step bins."""
+    return {round(b["bbox"].y0 / C.run_step) for b in blocks if not b.get("image") and b["edge"]}
+
+
+def _rule_boxes(d):
+    """Boxes (x0, y0, x1, y1) of the straight lines and rectangles of a drawing."""
+    boxes = []
+    for it in d["items"]:
+        if it[0] == "l":
+            (xa, ya), (xb, yb) = (it[1].x, it[1].y), (it[2].x, it[2].y)
+            boxes.append((min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb)))
+        elif it[0] == "re":
+            boxes.append((it[1].x0, it[1].y0, it[1].x1, it[1].y1))
+    return boxes
 
 
 def line_rules(page, dy):
     """Vertical lines (x, y0, y1) and horizontal lines (y, x0, x1) of a page: cell borders and rules."""
     v, h = [], []
-    for d in page.get_drawings():
-        for it in d["items"]:
-            if it[0] == "l":
-                (xa, ya), (xb, yb) = (it[1].x, it[1].y), (it[2].x, it[2].y)
-                boxes = [(min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb))]
-            elif it[0] == "re":
-                boxes = [(it[1].x0, it[1].y0, it[1].x1, it[1].y1)]
-            else:
-                continue
-            for x0, y0, x1, y1 in boxes:
-                if x1 - x0 <= RULE_THIN and y1 - y0 >= RULE_LONG:
-                    v.append(((x0 + x1) / 2, y0 + dy, y1 + dy))
-                elif y1 - y0 <= RULE_THIN and x1 - x0 >= RULE_LONG:
-                    h.append(((y0 + y1) / 2 + dy, x0, x1))
+    for x0, y0, x1, y1 in (b for d in page.get_drawings() for b in _rule_boxes(d)):
+        if x1 - x0 <= C.rule_thin and y1 - y0 >= C.rule_long:
+            v.append(((x0 + x1) / 2, y0 + dy, y1 + dy))
+        elif y1 - y0 <= C.rule_thin and x1 - x0 >= C.rule_long:
+            h.append(((y0 + y1) / 2 + dy, x0, x1))
     return v, h
 
 
@@ -1171,18 +1132,22 @@ def parsed(page, dy):
     return moved, ([(x, y0 + dy, y1 + dy) for x, y0, y1 in v], [(y + dy, x0, x1) for y, x0, x1 in h])
 
 
-def page_blocks(page, dy, ph, first, running=()):
+def page_blocks(page, dy, first, running=()):
+    """Paragraphs of a page moved down by dy. Header and footer zones are those of the whole page, whatever its crop."""
     segs, rules = parsed(page, dy)
     blocks = paragraphs(segs, rules)
+    offset, full = page.cropbox_position.y - dy, page.mediabox.height
     for b in blocks:
         for l in b["lines"]:
             for sp in l["spans"]:
                 sp["number"] = page.number
-        b["pinned"] = b["bbox"].y0 - dy > ph - FOOTER_PT or b["bbox"].y1 - dy < HEADER_PT
+        top, bottom = b["bbox"].y0 + offset, b["bbox"].y1 + offset
+        b["pinned"] = top > full - C.footer_pt or bottom < C.header_pt
+        b["edge"] = top < C.run_zone * full or top > (1 - C.run_zone) * full
         b["k"] = 0 if first else 1
+
     def repeats(b):
-        y = round((b["bbox"].y0 - dy) / RUN_STEP)
-        return (b["bbox"].y0 - dy < RUN_ZONE * ph or b["bbox"].y0 - dy > (1 - RUN_ZONE) * ph) and any(abs(y - r) <= 1 for r in running)
+        return b["edge"] and any(abs(round((b["bbox"].y0 - dy) / C.run_step) - r) <= 1 for r in running)
 
     return [b for b in blocks if first or not (b["pinned"] or repeats(b))]
 
@@ -1201,26 +1166,25 @@ def _columns(blocks):
     return [[min(a for a, _ in xs), max(z for _, z in xs)]] if xs else [[0.0, 1.0]]
 
 
+def _horizontal(d):
+    """Horizontal rules of a drawing as (x0, y, x1): thin fills and straight stroked edges."""
+    segs = []
+    if d.get("color") is not None:
+        for path in _paths(d):
+            for (xa, ya), (xb, yb) in zip(path, path[1:] + ([path[0]] if d.get("closePath") else [])):
+                if abs(ya - yb) < 0.5 and abs(xa - xb) >= C.rule_min_pt:
+                    segs.append((min(xa, xb), ya, max(xa, xb)))
+    r = d["rect"]
+    if d.get("fill") is not None and r.height <= 2 and r.width >= C.rule_min_pt:
+        segs.append((r.x0, r.y0, r.x1))
+    return segs
+
+
 def rule_segments(elems, anchors, sc, g):
-    """Horizontal rules (thin fills and straight stroked edges) as (x0, y, x1) in output px."""
-    out = []
+    """Horizontal rules as (x0, y, x1) in output px."""
     mp = anchors if isinstance(anchors, Mapper) else Mapper(anchors, sc)
-    for kind, d, dy, number, fixed in elems:
-        if kind != "draw":
-            continue
-        segs = []
-        if d.get("color") is not None:
-            for path in _paths(d):
-                for (xa, ya), (xb, yb) in zip(path, path[1:] + ([path[0]] if d.get("closePath") else [])):
-                    if abs(ya - yb) < 0.5 and abs(xa - xb) >= RULE_MIN_PT:
-                        segs.append((min(xa, xb), ya, max(xa, xb)))
-        r = d["rect"]
-        if d.get("fill") is not None and r.height <= 2 and r.width >= RULE_MIN_PT:
-            segs.append((r.x0, r.y0, r.x1))
-        for x0, y, x1 in segs:
-            ym = (y + dy) * g if fixed else mp(x0 * g, x1 * g, (y + dy) * g)
-            out.append((x0 * g, ym, x1 * g))
-    return out
+    return [(x0 * g, (y + dy) * g if fixed else mp(x0 * g, x1 * g, (y + dy) * g), x1 * g)
+            for kind, d, dy, number, fixed in elems if kind == "draw" for x0, y, x1 in _horizontal(d)]
 
 
 def crossings(rects, rules):
@@ -1228,7 +1192,7 @@ def crossings(rects, rules):
     n = 0
     for r in rects:
         h = r["y1"] - r["y0"]
-        n += sum(1 for x0, y, x1 in rules if x0 < r["x1"] and x1 > r["x0"] and r["y0"] + 0.25 * h < y < r["y1"] - 0.25 * h)
+        n += sum(1 for x0, y, x1 in rules if x0 < r["x1"] and x1 > r["x0"] and r["y0"] + C.cross_share * h < y < r["y1"] - C.cross_share * h)
     return n
 
 
@@ -1236,10 +1200,10 @@ def column_gap(done, cols, pitch, sc):
     """First gap a block left in a column by waiting for its neighbours: (block above, block below, column, size)."""
     for c0, c1 in cols:
         col = sorted((a for a in done if not a["pinned"] and a["n"]
-                      and min(a["x1"], c1) - max(a["x0"], c0) >= 0.3 * min(a["x1"] - a["x0"], c1 - c0)), key=lambda a: a["ny0"])
+                      and min(a["x1"], c1) - max(a["x0"], c0) >= C.gap_overlap * min(a["x1"] - a["x0"], c1 - c0)), key=lambda a: a["ny0"])
         for a, b in zip(col, col[1:]):
             gap = b["ny0"] - a["ny1"]
-            if gap > GAP_LINES * pitch and gap > 2 * max(b["oy0"] - a["oy1"], 0.0) * sc + 2 * pitch:
+            if gap > C.gap_lines * pitch and gap > 2 * max(b["oy0"] - a["oy1"], 0.0) * sc + 2 * pitch:
                 return a, b, (c0, c1), gap
     return None
 
@@ -1256,14 +1220,14 @@ def pour(res, blocks, cols, limit, g):
         x0, x1 = b["bbox"].x0 * g, b["bbox"].x1 * g
         best = max(range(len(cols)), key=lambda i: min(x1, cols[i][1]) - max(x0, cols[i][0]))
         share = (min(x1, cols[best][1]) - max(x0, cols[best][0])) / max(x1 - x0, 1.0)
-        if share >= 0.7:
+        if share >= C.touch_share:
             members.append((best, b, a))
         else:
             region = max(region, a["ny1"])
     members = [m for m in members if m[2]["ny0"] >= region - 1]
     used = sorted({c for c, _, _ in members})
     widths = [cols[c][1] - cols[c][0] for c in used]
-    if len(used) < 2 or max(widths) > 1.08 * min(widths):
+    if len(used) < 2 or max(widths) > C.width_match * min(widths):
         return False
     rtl = sum(b["rtl"] for _, b, _ in members if not b.get("image")) > sum(1 for _, b, _ in members if not b.get("image")) / 2
     order = sorted(used, reverse=rtl)
@@ -1292,7 +1256,7 @@ def pour(res, blocks, cols, limit, g):
                 y += height + gap
                 break
             fit = int(room // pitch) if not b.get("image") else 0
-            if fit >= POUR_MIN_LINES and lines_left - fit >= POUR_MIN_LINES:
+            if fit >= C.pour_min_lines and lines_left - fit >= C.pour_min_lines:
                 part = b if skip == 0 else dict(b)
                 _assign(part, cols[col], g, y, skip, fit, b, offset)
                 if skip:
@@ -1315,10 +1279,10 @@ def _assign(part, col, g, y, skip, count, original, offset):
 def flow(doc, number, first, typesetter, body, mult, target, sc_font, scale, cols_px, elems0, g, pw, ph):
     """Blocks of the page and of the following pages placed until every column is full; text of the following pages
     also fills gaps a block left in a column."""
-    role_of = lambda sz: "head" if sz > body * HEAD_RATIO else "body"
+    role_of = lambda sz: "head" if sz > body * C.head_ratio else "body"
     px_of = lambda sz: sz * sc_font * mult * ratio(sz, body, scale)
     sc = sc_font * mult / g
-    gap_cap = GAP_BODY * body * g
+    gap_cap = C.gap_body * body * g
     elems = list(elems0)
     gfx = _gfx_rects(elems, g, pw * g * ph * g)
     text_bottom = max((b["bbox"].y1 for b in first if not b["pinned"]), default=None)
@@ -1328,17 +1292,17 @@ def flow(doc, number, first, typesetter, body, mult, target, sc_font, scale, col
     st = dict(limit=max(b["bbox"].y1 for b in first if not b["pinned"] and not b.get("image")) * g, used=1, dy=0.0,
               bottom=extent(first, 0.0)[1])
     blocks, memo = list(first), {}
-    running = running_bands(first, ph)
+    running = running_bands(first)
 
     def load_next():
-        if st["used"] >= MAX_PAGES or number + st["used"] >= len(doc):
+        if st["used"] >= C.max_pages or number + st["used"] >= len(doc):
             return False
         nxt = doc[number + st["used"]]
-        probe = page_blocks(nxt, 0.0, ph, False, running) if text_page(nxt) else []
+        probe = page_blocks(nxt, 0.0, False, running) if text_page(nxt) else []
         if probe:
             top, bot = extent(probe, 0.0)
             st["dy"] += st["bottom"] + body - top
-            blocks.extend(page_blocks(nxt, st["dy"], ph, False, running) + pictures(doc, number + st["used"], st["dy"], False, ph, pw, number))
+            blocks.extend(page_blocks(nxt, st["dy"], False, running) + pictures(doc, number + st["used"], st["dy"], False, ph, pw, number))
             st["bottom"] = bot
             st["limit"] = max(st["limit"], bot * g)
             more = graphics(doc, number + st["used"], st["dy"], False, ph, pw, number)
@@ -1352,21 +1316,21 @@ def flow(doc, number, first, typesetter, body, mult, target, sc_font, scale, col
 
     res = run()
     slack = 2 * px_of(body)
-    pitch = px_of(body) * 1.3
+    pitch = px_of(body) * C.line_pitch
     while True:
         full = all(any(a["ny1"] >= st["limit"] - slack and a["x0"] < c[1] and a["x1"] > c[0] for a in res["anchors"] if not a["pinned"])
                    for c in cols_px)
         if full or not load_next():
             break
         res = run()
-    exhausted = not (st["used"] < MAX_PAGES and number + st["used"] < len(doc))
-    if not full and exhausted and POUR and not res["truncated"] and pour(res, blocks, cols_px, st["limit"], g):
+    exhausted = not (st["used"] < C.max_pages and number + st["used"] < len(doc))
+    if not full and exhausted and C.pour and not res["truncated"] and pour(res, blocks, cols_px, st["limit"], g):
         res = run()
         full = all(any(a["ny1"] >= st["limit"] - slack and a["x0"] < c[1] and a["x1"] > c[0] for a in res["anchors"] if not a["pinned"])
                    for c in cols_px)
     tried = set()
-    for _ in range(MAX_FILL):
-        if POUR and not full and exhausted:
+    for _ in range(C.max_fill):
+        if C.pour and not full and exhausted:
             break
         gap = column_gap(res["anchors"], cols_px, pitch, sc)
         if gap is None:
@@ -1385,7 +1349,7 @@ def flow(doc, number, first, typesetter, body, mult, target, sc_font, scale, col
             break
         c = cand[0]
         top = above["oy1"] + 0.5 * g
-        if top > below["oy0"] - 0.6 * g:
+        if top > below["oy0"] - C.fill_clearance * g:
             top = (above["oy0"] + below["oy0"]) / 2
         c["bbox"] = pymupdf.Rect(c["bbox"].x0, top / g, c["bbox"].x1, top / g + c["bbox"].height)
         c["fit"], c["moved"] = size, True
@@ -1401,7 +1365,7 @@ def flow(doc, number, first, typesetter, body, mult, target, sc_font, scale, col
 
 def ratio(size, body, scale):
     """Factor of a font size: the sizes that are not the body's (headings, notes) are scaled by `scale`."""
-    return scale if size > body * HEAD_RATIO or size * HEAD_RATIO < body else 1.0
+    return scale if size > body * C.head_ratio or size * C.head_ratio < body else 1.0
 
 
 def layout(doc, number, rng, fonts, body_pt, scale, width_px):
@@ -1410,7 +1374,7 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
     page = doc[number]
     pw, ph = page.rect.width, page.rect.height
     g = width_px / pw
-    first = page_blocks(page, 0.0, ph, True)
+    first = page_blocks(page, 0.0, True)
     cnt = Counter()
     for b in first:
         for l in b["lines"]:
@@ -1418,15 +1382,15 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
                 cnt[round(s["size"] * 2) / 2] += len(s["text"])
     body = cnt.most_common(1)[0][0]
     target = body_pt
-    sc_font = target * (width_px / SHEET_PT_W) / body
+    sc_font = target * (width_px / C.sheet_pt_w) / body
     chars = {c for b in first for l in b["lines"] for s in l["spans"] for c in s["text"] if not c.isspace()}
     need = {(s["bold"], s["italic"]) for b in first for l in b["lines"] for s in l["spans"] if not s["mono"]}
     cols_px = [(c[0] * g, c[1] * g) for c in _columns(first)]
     elems0 = graphics(doc, number, 0.0, True, ph, pw, below=max((b["bbox"].y1 for b in first if not b["pinned"]), default=None))
-    role_of = lambda sz: "head" if sz > body * HEAD_RATIO else "body"
+    role_of = lambda sz: "head" if sz > body * C.head_ratio else "body"
     px_of = lambda sz: sz * sc_font * ratio(sz, body, scale)
     best = None
-    for attempt in range(FONT_TRIES):
+    for attempt in range(C.font_tries):
         typesetter = Typesetter(fonts, rng, chars, need)
         fit = max((p["fit"] for p in (prepare(b, first, pw, g, typesetter, role_of, px_of, cols_px) for b in first if not b.get("image") and len(b["lines"]) == 1) if p),
                   default=0.0)
@@ -1435,7 +1399,7 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
         if fit <= 1.0:
             break
     fit, typesetter = best
-    mult = max(min(1.0, 1.0 / fit) if fit else 1.0, FIT_FLOOR)
+    mult = max(min(1.0, 1.0 / fit) if fit else 1.0, C.fit_floor)
     lay = flow(doc, number, first, typesetter, body, mult, target, sc_font, scale, cols_px, elems0, g, pw, ph)
     info = dict(head=typesetter.role["head"], body=typesetter.role["body"], mono=typesetter.role["mono"],
                 body_pt=round(target * mult, 1), body_src_pt=body, pages=lay["used_pages"], dropped=typesetter.dropped,
@@ -1547,14 +1511,14 @@ def render(doc, lay):
         number, rect = t["glyph"]
         k = t["px"] / t["size"]
         pm = doc[number].get_pixmap(matrix=pymupdf.Matrix(k, k), clip=rect, colorspace=pymupdf.csGRAY)
-        img.paste(Image.frombytes("L", (pm.w, pm.h), pm.samples), (round(x), round(y - 0.8 * pm.h)))
+        img.paste(Image.frombytes("L", (pm.w, pm.h), pm.samples), (round(x), round(y - C.ascent_share * pm.h)))
     return img
 
 
 def content_box(page):
     """Rectangle of what the page shows: text lines, pictures and graphics (a background fill over the page does not count)."""
     boxes = [l["bbox"] for l in extract_segments(page, 0.0)] + [pymupdf.Rect(i["bbox"]) for i in page.get_image_info()]
-    boxes += [d["rect"] for d in page.get_drawings() if d["rect"].get_area() < BACKGROUND_SHARE * page.rect.get_area()]
+    boxes += [d["rect"] for d in page.get_drawings() if d["rect"].get_area() < C.background_share * page.rect.get_area()]
     box = pymupdf.Rect()
     for b in boxes:
         box |= b
@@ -1568,7 +1532,7 @@ def sheet(path, number, seed, fonts, body_pt, scale, margin, size):
     mx, my = round(margin * sw), round(margin * sh)
     with pymupdf.open(path) as doc:
         box = content_box(doc[number])
-        for k in range(number, min(number + MAX_PAGES, len(doc))):
+        for k in range(number, min(number + C.max_pages, len(doc))):
             doc[k].set_cropbox(box & doc[k].mediabox)
         w = min(sw - 2 * mx, round((sh - 2 * my) * box.width / box.height))
         lay = layout(doc, number, np.random.default_rng(seed), fonts, body_pt, scale, w)
@@ -1578,24 +1542,31 @@ def sheet(path, number, seed, fonts, body_pt, scale, margin, size):
     return np.asarray(out), lay["info"]
 
 
-def garbled(page):
+def garbled(segs):
     """Text that did not come out as text of one script (a font without a text map): mixed scripts or private-use codes."""
-    text = "".join(s["text"] for l in extract_segments(page, 0.0) for s in l["spans"])
+    text = "".join(s["text"] for l in segs for s in l["spans"])
     letters = [c for c in text if c.isalpha()]
     marks = [c for c in text if not c.isspace()]
     if not letters or not marks:
         return True
     top = Counter(_script(c) for c in letters).most_common(1)[0][1]
     private = sum(unicodedata.category(c) == "Co" for c in marks)
-    return top < SCRIPT_PURITY * len(letters) or private > PRIVATE_SHARE * len(marks)
+    return top < C.script_purity * len(letters) or private > C.private_share * len(marks)
+
+
+def over_pictures(page, segs):
+    """Share of the text lines that lie inside a picture: a scan with its recognized text hidden under it, not set text."""
+    images = [pymupdf.Rect(im["bbox"]) for im in page.get_image_info()]
+    return sum(any(l["bbox"] in im for im in images) for l in segs) / max(len(segs), 1)
 
 
 def usable(page):
-    return text_page(page) and not garbled(page) and column_count(page) <= MAX_COLUMNS
-
-
-def column_count(page):
-    return len(column_intervals(extract_segments(page, 0.0)))
+    """A page of text set in the PDF: a body (not only header and footer), text of one script, no more than
+    max_columns columns, no scan with a hidden text layer."""
+    segs = parsed(page, 0.0)[0]
+    body = [l for l in segs if l["bbox"].y1 >= C.header_pt and l["bbox"].y0 <= page.rect.height - C.footer_pt]
+    return (bool(body) and text_page(page) and not garbled(segs) and len(column_intervals(segs)) <= C.max_columns
+            and over_pictures(page, segs) <= C.over_picture_share)
 
 
 def font_set(font_dirs):
@@ -1603,5 +1574,5 @@ def font_set(font_dirs):
     base = find_fonts(tuple(font_dirs))
     dirs = [os.path.expanduser(d) for d in font_dirs]
     extra = sorted(f for d in dirs if os.path.isdir(d) for ext in ("ttf", "otf") for f in glob.glob(f"{d}/**/*.{ext}", recursive=True)
-                   if os.path.basename(f).lower().startswith("noto") and f not in set(base) and len(_font_cmap(f)) >= MIN_NOTO_CMAP)
+                   if os.path.basename(f).lower().startswith("noto") and f not in set(base) and len(_font_cmap(f)) >= C.min_noto_cmap)
     return base + tuple(extra)
