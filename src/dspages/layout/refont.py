@@ -102,20 +102,40 @@ def _runs(l, dy):
     return [dict(bbox=pymupdf.Rect(min(sp["bbox"].x0 for sp in run), y0, max(sp["bbox"].x1 for sp in run), y1), spans=run) for run in runs]
 
 
-def _unique(segs):
-    """The lines, a copy of a line laid over another (a shadow, a bold made by overprint) dropped. Lines are compared
-    with those of the same text that start within duplicate_pt of them."""
-    seen, unique = defaultdict(list), []
-    step = C.duplicate_pt
-    for seg in segs:
-        box = seg["bbox"]
-        cx, cy = round(box.x0 / step), round(box.y0 / step)
-        near = [o for dx in (-1, 0, 1) for dy in (-1, 0, 1) for o in seen[(_text(seg), cx + dx, cy + dy)]]
-        if box.get_area() > 0 and any((box & o).get_area() >= C.duplicate_overlap * min(box.get_area(), o.get_area()) for o in near):
-            continue
-        seen[(_text(seg), cx, cy)].append(box)
-        unique.append(seg)
-    return unique
+def _embolden(line, over):
+    """The words an overprinted run repeats become bold in the line under it (a span is split where the run covers part of it)."""
+    for o in over["spans"]:
+        word = o["text"].strip()
+        for k, sp in enumerate(line["spans"]):
+            width = sp["bbox"].width
+            if width <= 0 or min(sp["bbox"].x1, o["bbox"].x1) - max(sp["bbox"].x0, o["bbox"].x0) < 0.5 * min(width, o["bbox"].width):
+                continue
+            at = sp["text"].find(word)
+            if at < 0:
+                continue
+            n = len(sp["text"])
+            edge = lambda c: sp["bbox"].x0 + width * c / n
+            parts = [(sp["text"][:at], 0, at, sp["bold"]), (word, at, at + len(word), True), (sp["text"][at + len(word):], at + len(word), n, sp["bold"])]
+            line["spans"][k:k + 1] = [dict(sp, text=t, bold=b, bbox=pymupdf.Rect(edge(a), sp["bbox"].y0, edge(z), sp["bbox"].y1)) for t, a, z, b in parts if t]
+            break
+
+
+def _overprint(segs):
+    """A line drawn over another (fake bold: some words, or the whole line, printed again in the same place) is not a line of
+    its own: the words it repeats are bold in the line under it. Lines are compared with those that start within a line's reach."""
+    kept, rows, order = [], defaultdict(list), {id(l): i for i, l in enumerate(segs)}
+    for seg in sorted(segs, key=lambda l: -l["bbox"].get_area()):
+        box, bin_ = seg["bbox"], round(seg["bbox"].y0 / C.overprint_pt)
+        text = "".join(_text(seg).split())
+        under = next((k for b in (bin_ - 1, bin_, bin_ + 1) for k in rows[b]
+                      if box.get_area() > 0 and (box & k["bbox"]).get_area() >= C.duplicate_overlap * box.get_area()
+                      and text in "".join(_text(k).split())), None)
+        if under is None:
+            kept.append(seg)
+            rows[bin_].append(seg)
+        else:
+            _embolden(under, seg)
+    return sorted(kept, key=lambda l: order[id(l)])
 
 
 def extract_segments(page, dy):
@@ -127,7 +147,7 @@ def extract_segments(page, dy):
             segs += _tilted(l, dy) if "".join(s["text"] for s in l["spans"]).strip() else []
         else:
             segs += _runs(l, dy)
-    return _unique(segs)
+    return _overprint(segs)
 
 
 def _rsize(r):

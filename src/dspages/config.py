@@ -232,6 +232,11 @@ class RefontCfg:
     gap_body: float = 1.5
     text_image_share: float = 0.4
     align_inset: float = 0.1
+    leading_max: float = 1.3                        # most a short frame spreads its lines to fill itself
+    grow_max: float = 2.0                           # most a size class grows to fill its frames
+    fill_share: float = 0.97                        # frames filled less than this are grown
+    letter_em: float = 1.5                          # a drawing no larger than this many line heights, inside a line, is a letter
+    letter_cover: float = 0.3                       # share of a span the letter drawings cover that makes it bold
     contain_share: float = 0.5                      # share of a block inside another one that makes the other hold it
     min_lead: float = 0.9                           # lines are at least this share of the font's own height apart
     min_line_em: float = 3.0                        # shortest line (in line heights) set beside an obstacle
@@ -241,7 +246,7 @@ class RefontCfg:
     frame_slack: float = 0.3                        # share of a line a frame may be overrun by
     shadow_share: float = 0.7                       # width of a block covered by nearer ones above a block: they carry it
     shadow_bin: float = 8.0                         # px, the resolution of that cover
-    duplicate_pt: float = 3.0                       # lines of one text starting this close may be copies
+    overprint_pt: float = 16.0                      # a line is compared with the lines starting within this height of it
     over_picture_share: float = 0.5                 # text lines inside pictures: more means a scan with hidden text
     line_em: float = 1.2                            # line height of a font without metrics
     join_back_em: float = 0.1

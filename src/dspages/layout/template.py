@@ -7,6 +7,7 @@ inside it. Rules, frames and pictures stay where the source has them, so nothing
 while the stream lasts.
 """
 import bisect
+import itertools
 import math
 import unicodedata
 from collections import Counter, defaultdict, deque
@@ -72,7 +73,8 @@ def _runs(cand, others):
 
 
 def split_page(blocks, rules, g):
-    """-> (frames, fixed): the frames (blocks of body paragraphs of a column, in reading order) and the other blocks."""
+    """-> (sections, fixed): the frames (runs of body paragraphs of a column) grouped in sections, the frames between two
+    blocks that span the columns, each in reading order; and the other blocks."""
     classes = {_size_class(b["size"]) for b in blocks if not b["pinned"] and not b.get("image") and len(b["lines"]) >= C.paragraph_lines}
     cand = [b for b in blocks if not b["pinned"] and not b.get("image") and _size_class(b["size"]) in classes]
     cells = _cells(cand, rules, g) | _mates(cand)
@@ -82,10 +84,31 @@ def split_page(blocks, rules, g):
     runs = [r for r in _runs(cand, others) if sum(len(b["lines"]) for b in r) >= C.frame_lines and max(len(b["lines"]) for b in r) >= C.paragraph_lines]
     framed = {id(b) for r in runs for b in r}
     cols = {_column(b) for b in cand}
-    breaks = sorted(b["bbox"].y1 for b in others if sum(min(b["bbox"].x1, c[1]) - max(b["bbox"].x0, c[0]) > 0 for c in cols) > 1)
+    breaks = sorted(b["bbox"].y1 for b in others if sum(min(b["bbox"].x1, c[1]) - max(b["bbox"].x0, c[0]) > 0 for c in cols) > min(1, len(cols) - 1))
     rtl = sum(b["rtl"] for b in cand) > len(cand) / 2
-    runs.sort(key=lambda r: (bisect.bisect_right(breaks, r[0]["bbox"].y0 + 1), -r[0]["bbox"].x0 if rtl else r[0]["bbox"].x0))
-    return runs, [b for b in blocks if id(b) not in framed]
+    region = lambda r: bisect.bisect_right(breaks, r[0]["bbox"].y0 + 1)
+    runs.sort(key=lambda r: (region(r), -r[0]["bbox"].x0 if rtl else r[0]["bbox"].x0))
+    return [list(sec) for _, sec in itertools.groupby(runs, key=region)], [b for b in blocks if id(b) not in framed]
+
+
+def _letters(elems, blocks):
+    """The drawings that are letters (small filled shapes inside a text line) repeat the line's text, a bold made of
+    outlines: they are left out of the graphics, and a span they cover is bold. -> the other drawings."""
+    lines = [l for b in blocks if not b.get("image") for l in b["lines"]]
+    covered, keep = defaultdict(float), []
+    for e in elems:
+        r = e[1]["rect"]
+        host = next((l for l in lines if r.get_area() > 0 and e[1].get("fill") is not None and r.height <= C.letter_em * l["bbox"].height
+                     and r.width <= C.letter_em * l["bbox"].height and (r & l["bbox"]).get_area() >= C.contain_share * r.get_area()), None)
+        span = host and max(host["spans"], key=lambda sp: (r & sp["bbox"]).get_area())
+        if span is not None and (r & span["bbox"]).get_area() > 0:
+            covered[id(span)] += r.width
+        else:
+            keep.append(e)
+    for l in lines:
+        for sp in l["spans"]:
+            sp["bold"] = sp["bold"] or covered[id(sp)] >= C.letter_cover * sp["bbox"].width
+    return keep
 
 
 def _metrics(b, toks, px_of, g):
@@ -163,6 +186,14 @@ def _free(obstacles, x0, x1, top, bottom):
     return a, b - a
 
 
+def _stretch(out, start, top, k):
+    """The lines a frame got since `start` spread down by k from its top (the leading grows) so a short text fills it."""
+    out["items"][start["items"]:] = [(x, top + (y - top) * k, *rest) for x, y, *rest in out["items"][start["items"]:]]
+    out["glyphs"][start["glyphs"]:] = [(x, top + (y - top) * k, t) for x, y, t in out["glyphs"][start["glyphs"]:]]
+    for r in out["rects"][start["rects"]:]:
+        r["y0"], r["y1"] = top + (r["y0"] - top) * k, top + (r["y1"] - top) * k
+
+
 def _pour(frames, units, more, obstacles, typesetter, role_of, px_of, g, width, out):
     """The stream of paragraphs poured through the frames in turn, line by line, around the obstacles (a box or a picture
     that lies in a frame); a paragraph that does not end in a frame goes on in the next. `more` adds the paragraphs of the
@@ -172,7 +203,7 @@ def _pour(frames, units, more, obstacles, typesetter, role_of, px_of, g, width, 
         x0, x1 = max(min(b["bbox"].x0 for b in fr) * g, 0.0), min(max(b["bbox"].x1 for b in fr) * g, width)
         top, bottom = fr[0]["bbox"].y0 * g, fr[-1]["bbox"].y1 * g
         near = [o for o in obstacles if o[0] < x1 and o[2] > x0 and o[1] < bottom and o[3] > top]
-        y, ended = top, False
+        y, ended, start = top, False, {k: len(out[k]) for k in ("items", "glyphs", "rects")}
         while not ended and _available(units, more):
             u = units[0]
             if u["toks"] is None:
@@ -198,8 +229,26 @@ def _pour(frames, units, more, obstacles, typesetter, role_of, px_of, g, width, 
                 u["toks"], u["cont"] = [t for ln in lines[1:] for t, *_ in ln], True
             if not u["toks"]:
                 units.popleft()
+        if not ended and not near and y > top:
+            _stretch(out, start, top, min((bottom - top) / (y - top), C.leading_max))
+            y = top + (y - top) * min((bottom - top) / (y - top), C.leading_max)
+        out["fill"].append((_size_class(fr[0]["size"]), y - top, bottom - top))
         full = full and ended
     return full
+
+
+def _fill_frames(build, mult, res):
+    """Frames the stream left short (a page with no text after it) are filled by growing the letters of their size class:
+    each class by what its frames lack. The grown page is taken when it still sets all the text the first did."""
+    short = defaultdict(lambda: [0.0, 0.0])
+    for cls, used, room in res["out"]["fill"]:
+        short[cls][0] += used
+        short[cls][1] += room
+    grow = {c: min((room / max(used, 1.0)) ** 0.5 * C.shrink, C.grow_max) for c, (used, room) in short.items() if used < C.fill_share * room}
+    if not grow:
+        return res
+    grown = build(mult, True, grow)
+    return grown if grown["out"]["placed"] >= res["out"]["placed"] else res
 
 
 def layout(doc, number, rng, fonts, body_pt, scale, width_px):
@@ -209,15 +258,16 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
     pw, ph = page.rect.width, page.rect.height
     g = width_px / pw
     first = R.page_blocks(page, 0.0, True)
+    elems = _letters(R.graphics(doc, number, 0.0, True, ph, pw, below=max((b["bbox"].y1 for b in first if not b["pinned"]), default=None)), first)
     spans = [s for b in first for l in b["lines"] for s in l["spans"]]
     body = Counter({k: sum(len(s["text"]) for s in spans if round(s["size"] * 2) / 2 == k) for k in {round(s["size"] * 2) / 2 for s in spans}}).most_common(1)[0][0]
     sc_font = body_pt * (width_px / C.sheet_pt_w) / body
     chars = {c for s in spans for c in s["text"] if not c.isspace()}
     need = {(s["bold"], s["italic"]) for s in spans if not s["mono"]}
     cols_px = [(c[0] * g, c[1] * g) for c in R._columns(first)]
-    elems = R.graphics(doc, number, 0.0, True, ph, pw, below=max((b["bbox"].y1 for b in first if not b["pinned"]), default=None))
     first += R.pictures(doc, number, 0.0, True, ph, pw, below=max((b["bbox"].y1 for b in first if not b["pinned"]), default=None))
-    frames, fixed = split_page(first, R._hrules(elems, g), g)
+    sections, fixed = split_page(first, R._hrules(elems, g), g)
+    frames = [r for sec in sections for r in sec]
     role_of = lambda sz: "head" if sz > body * C.head_ratio else "body"
     px_of = lambda sz: sz * sc_font * R.ratio(sz, body, scale)
     texts = [b for b in fixed if not b.get("image")]
@@ -240,16 +290,17 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
     mult = max(min(1.0, 1.0 / fit) if fit else 1.0, C.fit_floor)
     running = R.running_bands(first)
 
-    def build(mult, pages):
+    def build(mult, pages, grow=None):
         """The page set at this shrink; `pages`: whether the stream may take the following pages."""
-        px = lambda sz: px_of(sz) * mult
-        out = dict(items=[], glyphs=[], rects=[], used=[], placed=0)
+        px = lambda sz: px_of(sz) * mult * (grow or {}).get(_size_class(sz), 1.0)
+        out = dict(items=[], glyphs=[], rects=[], used=[], placed=0, fill=[])
         fixed_ps = prepare_fixed(typesetter, px)
         for p in fixed_ps:
             _set_lines(p["lines"], p["bx0"], p["W"], p["y0"] + (p["y1"] - p["y0"] - len(p["lines"]) * p["pitch"]) / 2, p, True, out, "fixed", p["pinned"])
         pics = [(b["bbox"].x0 * g, b["bbox"].y0 * g, dict(b, scale=1.0)) for b in fixed if b.get("image")]
         st, k = dict(used=1), px(body) / (body * g)
-        units = deque(_units(frames, g, k, C.gap_body * px(body)))
+        gap = C.gap_body * px(body)
+        units = [deque(_units(sec, g, k, gap)) for sec in sections]
 
         def more():
             if not pages or st["used"] >= C.max_pages or number + st["used"] >= len(doc):
@@ -258,12 +309,14 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
             st["used"] += 1
             blocks = R.page_blocks(nxt, 0.0, False, running) if R.text_page(nxt) else []
             found, _ = split_page(blocks, R._hrules(R.graphics(doc, nxt.number, 0.0, False, ph, pw, number), g), g)
-            units.extend(_units(found, g, k, C.gap_body * px(body)))
+            units[-1].extend(_units([r for sec in found for r in sec], g, k, gap))
             return True
 
         obstacles = [(p["bx0"], p["y0"], p["bx0"] + p["W"], p["y1"]) for p in fixed_ps if not p["pinned"]]
         obstacles += [(x, t, x + b["rect"].width * g, t + b["rect"].height * g) for x, t, b in pics]
-        full = _pour(frames, units, more, obstacles, typesetter, role_of, px, g, width_px, out)
+        full = True
+        for n, sec in enumerate(sections):
+            full = _pour(sec, units[n], more if n == len(sections) - 1 else (lambda: False), obstacles, typesetter, role_of, px, g, width_px, out) and full
         return dict(out=out, pics=pics, fixed_ps=fixed_ps, full=full, pages=st["used"])
 
     own = sum(len(sp["text"].strip()) for r in frames for b in r for l in b["lines"] for sp in l["spans"])
@@ -271,6 +324,8 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
     if own and dry["out"]["placed"] < own:
         mult = max(mult * (dry["out"]["placed"] / own) ** 0.5 * C.shrink, C.fit_floor)
     res = build(mult, True)
+    if not res["full"]:
+        res = _fill_frames(build, mult, res)
     out, pics, fixed_ps, full = res["out"], res["pics"], res["fixed_ps"], res["full"]
     st = dict(used=res["pages"])
     info = dict(head=typesetter.role["head"], body=typesetter.role["body"], mono=typesetter.role["mono"],
