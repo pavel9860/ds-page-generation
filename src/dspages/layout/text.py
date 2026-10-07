@@ -24,45 +24,49 @@ _REQUIRED_CODEPOINTS = tuple(ord(c) for c in "AaZz09АаЯяЁёΑαωω")
 _MIN_SCRIPT_CMAP_SIZE = 40
 
 
-_CMAP_CACHE = {}
-_CMAP_FILE = Path("~/.cache/dspages/cmaps.pkl").expanduser()
-_cmap_dirty = False
+_FILE = Path("~/.cache/dspages/fonts.pkl").expanduser()
+_DISK = {}
+_INFO = {}
 
 
-def _load_cmaps():
-    """Font cmaps cached on disk as {path: (mtime, cmap)}; reading every font's cmap takes seconds."""
-    if not _CMAP_CACHE and _CMAP_FILE.exists():
-        try:
-            with open(_CMAP_FILE, "rb") as f:
-                _CMAP_CACHE.update(pickle.load(f))
-        except Exception:
-            pass
+def _read(path):
+    try:
+        f = TTFont(path, fontNumber=0, lazy=True)
+        return frozenset(f.getBestCmap() or ()), bool(f["post"].isFixedPitch) if "post" in f else False, "fvar" in f
+    except Exception:
+        return frozenset(), False, False
 
 
-def _save_cmaps():
-    global _cmap_dirty
-    if _cmap_dirty:
-        _CMAP_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _CMAP_FILE.with_suffix(f".{os.getpid()}.tmp")
+def font_info(path: str) -> tuple:
+    """(cmap, monospaced, variable) of a font file: read once per process, kept on disk by file and modification time
+    (reading every font takes seconds)."""
+    if path not in _INFO:
+        if not _DISK and _FILE.exists():
+            try:
+                with open(_FILE, "rb") as f:
+                    _DISK.update(pickle.load(f))
+            except Exception:
+                pass
+        mtime = os.path.getmtime(path)
+        hit = _DISK.get(path)
+        if hit is None or hit[0] != mtime:
+            hit = _DISK[path] = (mtime, *_read(path))
+            _DISK[None] = True
+        _INFO[path] = hit[1:]
+    return _INFO[path]
+
+
+def save_font_info():
+    if _DISK.pop(None, False):
+        _FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _FILE.with_suffix(f".{os.getpid()}.tmp")
         with open(tmp, "wb") as f:
-            pickle.dump(_CMAP_CACHE, f)
-        os.replace(tmp, _CMAP_FILE)
-        _cmap_dirty = False
+            pickle.dump(_DISK, f)
+        os.replace(tmp, _FILE)
 
 
-def _font_cmap(path: str) -> set:
-    global _cmap_dirty
-    _load_cmaps()
-    mtime = os.path.getmtime(path)
-    hit = _CMAP_CACHE.get(path)
-    if hit is None or hit[0] != mtime:
-        try:
-            cmap = frozenset(TTFont(path, fontNumber=0, lazy=True).getBestCmap() or ())
-        except Exception:
-            cmap = frozenset()
-        hit = _CMAP_CACHE[path] = (mtime, cmap)
-        _cmap_dirty = True
-    return hit[1]
+def _font_cmap(path: str) -> frozenset:
+    return font_info(path)[0]
 
 
 def _is_general_font(path: str) -> bool:
@@ -92,7 +96,7 @@ def find_fonts(font_dirs: tuple) -> tuple:
     candidates = sorted(p for d in dirs if os.path.isdir(d) for ext in ("ttf", "ttc", "otf")
                         for p in glob.glob(f"{d}/**/*.{ext}", recursive=True))
     found = tuple(p for p in candidates if _is_general_font(p) or _is_script_font(p))
-    _save_cmaps()
+    save_font_info()
     if not found:
         raise FileNotFoundError(f"no supported fonts under {dirs}")
     return found

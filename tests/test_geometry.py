@@ -99,5 +99,5 @@ def test_crease_heights_bounded(full_small):
                            c.singles_per_group, c.k)
     assert np.abs(shallow.render(lines, 210, 297, 1.0, c.w_max_mm)).max() <= c.w_max_mm
     for level in ("light", "medium", "heavy"):
-        h = deep.render(deep.sample(rng, 210, 297, level, g.deep), 210, 297, level, g.deep)
+        h = deep.render(deep.sample(rng, 210, 297, level, g.deep), 210, 297, level, g.deep, 1.0)
         assert 0 < np.ptp(h) <= g.deep.max_depth_mm[level]

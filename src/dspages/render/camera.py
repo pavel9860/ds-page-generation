@@ -8,6 +8,7 @@ from ..config import CameraCfg
 DIRECTIONS = 64
 DIST_STEPS = 12
 DIST_GROWTH = 1.3
+SEARCH_STEP = 3                 # the pose search checks every 3rd point; the chosen pose is reported over all of them
 
 
 def vertex_normals(X, Y, Z):
@@ -74,13 +75,14 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     d0 = np.array([np.sin(tilt0) * np.cos(az0), np.sin(tilt0) * np.sin(az0), np.cos(tilt0)])
     reach = c.max_offset * float(np.ptp(P[:, :2], 0).max())
     cos_max = np.cos(np.radians(c.incidence_deg))
+    Ps, Ns = P[::SEARCH_STEP], N[::SEARCH_STEP]
     best = None
     for dist in dist0 * DIST_GROWTH ** np.arange(DIST_STEPS):
         t_d = min(tmax, np.arcsin(min(1.0, reach / dist)))      # directions spread over the tilts the offset allows
         tilts = np.concatenate([[tilt0], t_d * np.sqrt((k + 0.5) / DIRECTIONS)])
         dirs = np.stack([np.sin(tilts) * np.cos(azs), np.sin(tilts) * np.sin(azs), np.cos(tilts)], -1)
         eyes = target + dist * dirs
-        worst = np.where(dist * np.sin(tilts) <= reach * (1 + 1e-9), _worst_cos(eyes, P, N), -1.0)
+        worst = np.where(dist * np.sin(tilts) <= reach * (1 + 1e-9), _worst_cos(eyes, Ps, Ns), -1.0)
         ok = np.flatnonzero(worst >= cos_max)
         if ok.size:
             best = (dist, int(ok[np.argmax(dirs[ok] @ d0)]), eyes, worst, tilts)
@@ -89,6 +91,7 @@ def make_camera(rng, P, N, size, c: CameraCfg):
         if best is None or worst[j] > best[3][best[1]]:
             best = (dist, j, eyes, worst, tilts)
     dist, k, eyes, worst, tilts = best
+    worst = _worst_cos(eyes[k:k + 1], P, N)[0]
     ray = eyes[k] - P
     cos_k = np.einsum("nk,nk->n", ray, N) / np.linalg.norm(ray, axis=1)
     cam = dict(eye=eyes[k], R=look_at(eyes[k], target, roll), f=1.0, cx=0.0, cy=0.0)
@@ -100,6 +103,6 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     cam.update(f=float(f), cx=float(cx), cy=float(cy))
     view = dict(dist_mm=float(dist), tilt_deg=float(np.degrees(tilts[k])), azimuth_deg=float(np.degrees(azs[k]) % 360),
                 roll_deg=float(np.degrees(roll)), fill=float(fill), fov_deg=float(np.degrees(2 * np.arctan(h / 2 / f))),
-                max_incidence_deg=float(np.degrees(np.arccos(np.clip(worst[k], -1, 1)))),
+                max_incidence_deg=float(np.degrees(np.arccos(np.clip(worst, -1, 1)))),
                 min_px_per_mm=float((f * np.clip(cos_k, 0, 1) / z).min()))
     return cam, view

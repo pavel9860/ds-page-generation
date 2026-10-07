@@ -108,7 +108,6 @@ class DeepCreaseCfg:
     broad_spread: tuple = (4.0, 12.0)            # width multiplier of the crease profile
     broad_depth_frac: tuple = (0.2, 1.0)         # depth as a fraction of max_depth_mm
     kink_deg: float = 25.0
-    pitch_mm: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -174,7 +173,6 @@ class RefontCfg:
     frame_thin: float = 0.08
     edge_zone: float = 0.1
     background_share: float = 0.25
-    page_area_pt: float = 595.0 * 842.0
     trim_max: float = 0.85
     tilt: float = 0.3
     rule_thin: float = 2.5
@@ -191,37 +189,40 @@ class RefontCfg:
     max_stretch: float = 3.0
     ragged_lines: int = 5
     ragged_percentile: float = 0.9
-    overlay_share: float = 0.6
-    pour: bool = True
-    pour_min_lines: int = 2
     indent_lines: int = 4
-    min_pic_scale: float = 0.3
     start_share: float = 0.6
     aa: int = 4
     ragged_fill: float = 0.45
     run_step: int = 4
     run_zone: float = 0.14
-    gap_lines: float = 2.5
-    max_fill: int = 8
     short_line_em: float = 3.0
     cjk_share: float = 0.25
     flush_share: float = 0.6
     table_step: int = 6
-    table_rows: int = 3
     column_line: int = 6
     justify_edge: float = 0.8
     edge_slack: float = 0.06
     row_overlap: float = 0.15
     room: float = 1.5
     font_tries: int = 6
-    row_lines: int = 6
-    row_search: int = 8
     tab_em: float = 0.9
     justify_fill: float = 0.85
     edge_tol: float = 0.03
     size_step: int = 4
-    rigid_pt: int = 40
-    touch_pt: float = 1.5
+    touch_pt: float = 1.5                           # pictures this close to each other are tiles of one picture
+    tile_cover: float = 0.9                         # when together they cover this share of their bounding box
+    tab_max_em: float = 4.0                         # widest gap after a list marker that still joins the marker to its text
+    space_em: float = 0.2                           # a gap between two letters wider than this is a space
+    gap_reach: float = 3.0                          # lines (in font sizes) above and below a wide gap that tell its kind:
+    gap_cross: float = 0.5                          # this share with ink over it makes it a justified space, not a gutter
+    letter_gray: int = 128                          # drawings as letters are dark fills (a white box in a line is a field)
+    ink_level: int = 250                            # gray below which a picture's pixel shows something
+    cell_share: float = 0.25                        # a box (filled or closed drawing) up to this share of the page holds cells,
+                                                    # not flowing text
+    field_em: float = 3.0                           # a box at most this many font sizes high on a line's level is its field
+    marker_em: float = 1.5                          # a shape this small just before a line is its radio button or check box
+    balance_px: float = 2.0                         # precision of the column balance of a section
+    dot_pt: float = 3.0                             # a picture no larger is a dot (of a dotted frame): nothing cleared under it
     glyph_gap: float = 0.3
     min_noto_cmap: int = 40
     min_text_chars: int = 150
@@ -232,6 +233,7 @@ class RefontCfg:
     gap_body: float = 1.5
     text_image_share: float = 0.4
     align_inset: float = 0.1
+    right_share: float = 0.5                        # widest share of its column a right-flush one-line block covers
     leading_max: float = 1.3                        # most a short frame spreads its lines to fill itself
     grow_max: float = 2.0                           # most a size class grows to fill its frames
     fill_share: float = 0.97                        # frames filled less than this are grown
@@ -244,8 +246,6 @@ class RefontCfg:
     frame_lines: int = 6                            # lines a run of body paragraphs needs to be a text frame
     paragraph_lines: int = 3                        # and a paragraph of this many lines
     frame_slack: float = 0.3                        # share of a line a frame may be overrun by
-    shadow_share: float = 0.7                       # width of a block covered by nearer ones above a block: they carry it
-    shadow_bin: float = 8.0                         # px, the resolution of that cover
     overprint_pt: float = 16.0                      # a line is compared with the lines starting within this height of it
     over_picture_share: float = 0.5                 # text lines inside pictures: more means a scan with hidden text
     line_em: float = 1.2                            # line height of a font without metrics
@@ -255,14 +255,10 @@ class RefontCfg:
     source_gap_em: float = 0.15
     ascent_share: float = 0.8
     column_hit: float = 0.2
-    follow_overlap: float = 0.25
-    cross_share: float = 0.25
     rtl_share: float = 0.3
     same_size_pt: float = 0.3
     inline_share: float = 0.3
-    gap_overlap: float = 0.3
     row_tol_em: float = 0.35
-    fill_clearance: float = 0.6
     fixed_cover: float = 0.6
     repeat_cover: float = 0.7
     indent_min_em: float = 0.5
@@ -271,11 +267,8 @@ class RefontCfg:
     full_line: float = 0.8
     pitch_tol: float = 1.2
     min_width_em: float = 8.0
-    touch_share: float = 0.7
     duplicate_overlap: float = 0.7
-    width_match: float = 1.08
     body_band: float = 1.15
-    line_pitch: float = 1.3
     single_pitch_em: float = 2.2
     max_lead: float = 2.4
     para_bin: float = 4.0
@@ -309,6 +302,11 @@ class LayoutCfg:
         "other": ("el", "he", "ar", "fa", "hi", "bn", "th", "ka", "hy", "ta", "te", "ur", "gu", "kn", "ml", "pa",
                   "or", "si", "km", "lo", "my", "am", "as", "mni", "mr", "sa", "bo", "ckb", "ku", "ps", "ne", "mai", "sd"),
         "unknown": ("unknown", None)})
+    sources: tuple = ("books_pdf", "bureaucracy", "corpus_add/pdf", "exams", "other_docs", "scientific_paper", "certificates",
+                      "corpus_add/Images", "maps_blueprints", "filled_forms", "sheet_music", "flyers", "handwritten",
+                      "magazines")                  # folders of Paths.layouts the listing takes
+    raster_only: tuple = ("certificates", "corpus_add/Images", "maps_blueprints", "filled_forms", "sheet_music", "flyers",
+                          "handwritten", "magazines")   # folders whose PDFs are never restyled, only rasterized
     use_all: tuple = ("unknown",)                   # groups taking all their raster pages, outside script_mix
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
     grid: GridCfg = GridCfg()
@@ -347,8 +345,6 @@ class CameraCfg:
 @dataclass(frozen=True)
 class LightCfg:
     ambient: tuple = (0.05, 0.35)
-    occluder_prob: float = 0.0                      # shadows of hands, arms, phones, heads over the page (off:
-                                                    # the square and round shapes look unrealistic)
     dist_mm: tuple = (300.0, 2000.0)
     elev_deg: tuple = (20.0, 80.0)
     sharp_prob: float = 0.4                         # point light with hard cast shadows, else area light

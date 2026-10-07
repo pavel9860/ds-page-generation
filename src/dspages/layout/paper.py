@@ -13,6 +13,7 @@ from ..noise import fbm, fbm_rotated, fleck_mask, scaled, set_scale, warp
 
 YELLOW_LUMA = 0.24              # Rec. 709 luma of a yellow cast (0, 0.25, 0.8) per unit strength
 STAIN_LUMA = 0.57               # of a brown stain (0.3, 0.6, 1.0)
+BLUR_LEVELS = (0.0, 0.7, 1.4, 2.4, 3.6, 5.0)    # px, the pre-blurred levels of a variable blur
 
 
 def _u(rng, r):
@@ -29,19 +30,35 @@ def smooth_noise(rng, shape, scale_px):
     return (n - n.mean()) / (n.std() + 1e-6)
 
 
+def _grow(box, pad, shape):
+    """Box (y0, y1, x0, x1) grown by pad px on every side, within shape."""
+    y0, y1, x0, x1 = box
+    return max(y0 - pad, 0), min(y1 + pad, shape[0]), max(x0 - pad, 0), min(x1 + pad, shape[1])
+
+
+def _blur(m, box, sigma):
+    """GaussianBlur of m (zero outside box) computed around box only: the same values. -> blurred m, its box."""
+    out = np.zeros_like(m)
+    big = _grow(box, int(np.ceil(4 * sigma)) + 2, m.shape)
+    sl = np.s_[big[0]:big[1], big[2]:big[3]]
+    out[sl] = cv2.GaussianBlur(m[sl], (0, 0), sigma)
+    return out, big
+
+
 def _blob_mask(rng, shape, center, radius, harmonics=3):
-    """Soft round blob with a wobbly outline."""
+    """Soft round blob with a wobbly outline, and the box (y0, y1, x0, x1) outside which it is zero."""
     th = np.linspace(0, 2 * np.pi, 96, endpoint=False)
     r = np.ones_like(th)
     for k in range(1, harmonics + 1):
         r += rng.uniform(0.03, 0.12) / k * np.cos(k * th + rng.uniform(0, 2 * np.pi))
     pts = np.stack([center[0] + radius * r * np.cos(th), center[1] + radius * r * np.sin(th)], -1)
     m = np.zeros(shape, np.float32)
-    cv2.fillPoly(m, [np.round(pts).astype(np.int32)], 1.0)
-    return cv2.GaussianBlur(m, (0, 0), max(1.0, 0.15 * radius))
+    p = np.round(pts).astype(np.int32)
+    cv2.fillPoly(m, [p], 1.0)
+    return _blur(m, _grow((p[:, 1].min(), p[:, 1].max() + 1, p[:, 0].min(), p[:, 0].max() + 1), 1, shape), max(1.0, 0.15 * radius))
 
 
-def variable_blur(img, sigma_map, levels=(0.0, 0.7, 1.4, 2.4, 3.6, 5.0)):
+def variable_blur(img, sigma_map, levels=BLUR_LEVELS):
     """Per-pixel Gaussian blur of sigma_map (px), linear between pre-blurred levels."""
     pos = np.interp(sigma_map, levels, np.arange(len(levels))).astype(np.float32)
     if img.ndim == 3:
@@ -144,17 +161,25 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
         p = fx["stains"].params
         for _ in range(rng.integers(p["n"][0], p["n"][1] + 1)):
             r = _u(rng, p["size_mm"]) * px_per_mm / 2
-            m = _blob_mask(rng, (h, w), rng.uniform([0, 0], [w, h]), r)
-            ring = np.clip(m - cv2.GaussianBlur(m, (0, 0), 0.15 * r) * 0.8, 0, 1) if rng.random() < 0.5 else m
-            lum = lum * (1 - STAIN_LUMA * _u(rng, p["strength"]) * ring)
+            m, box = _blob_mask(rng, (h, w), rng.uniform([0, 0], [w, h]), r)
+            if rng.random() < 0.5:
+                b, box = _blur(m, box, 0.15 * r)
+                m = np.clip(m - b * 0.8, 0, 1)
+            sl = np.s_[box[0]:box[1], box[2]:box[3]]
+            lum[sl] = lum[sl] * (1 - STAIN_LUMA * _u(rng, p["strength"]) * m[sl])
     if creases is not None:
         shade, ridge, p = creases
         lum = lum * (1 + _u(rng, p["shade"]) * np.clip(shade, -1, 1)) * (1 - _u(rng, p["darken"]) * ridge)
     if "local_blur" in fx:
         p = fx["local_blur"].params
-        smap = np.zeros((h, w), np.float32)
+        smap, boxes = np.zeros((h, w), np.float32), []
         for _ in range(rng.integers(p["n"][0], p["n"][1] + 1)):
-            smap = np.maximum(smap, _u(rng, p["sigma_px"]) * _blob_mask(
-                rng, (h, w), rng.uniform([0, 0], [w, h]), _u(rng, p["size_mm"]) * px_per_mm / 2))
-        lum = variable_blur(lum, smap)
+            sigma = _u(rng, p["sigma_px"])
+            m, box = _blob_mask(rng, (h, w), rng.uniform([0, 0], [w, h]), _u(rng, p["size_mm"]) * px_per_mm / 2)
+            smap = np.maximum(smap, sigma * m)
+            boxes.append(box)
+        y0, y1, x0, x1 = (f(b[k] for b in boxes) for k, f in enumerate((min, max, min, max)))
+        big = _grow((y0, y1, x0, x1), int(np.ceil(4 * BLUR_LEVELS[-1])) + 2, (h, w))
+        part = variable_blur(lum[big[0]:big[1], big[2]:big[3]], smap[big[0]:big[1], big[2]:big[3]])
+        lum[y0:y1, x0:x1] = part[y0 - big[0]:y1 - big[0], x0 - big[2]:x1 - big[2]]
     return np.clip(lum * 255 + 0.5, 0, 255).astype(np.uint8), sorted(fx)

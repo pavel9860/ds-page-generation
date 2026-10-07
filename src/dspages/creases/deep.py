@@ -75,5 +75,5 @@ def sample(rng, W, H, level, c: DeepCreaseCfg, min_length=1.0):
     return out
 
 
-def render(creases, W, H, level, c: DeepCreaseCfg):
-    return shallow.render(creases, W, H, h=c.pitch_mm, w_max=c.max_depth_mm[level] / 2)
+def render(creases, W, H, level, c: DeepCreaseCfg, pitch):
+    return shallow.render(creases, W, H, h=pitch, w_max=c.max_depth_mm[level] / 2)

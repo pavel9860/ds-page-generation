@@ -37,9 +37,11 @@ def _swap(a, b, along_long):
 
 
 def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
-    """Height map [m] on the sheet (rows b, columns a) of the shallow creases and the deep network, its axes,
-    and the crease lines [mm]. Shallow creases keep fold_clear_mm from the fold lines (p = const)."""
+    """Height map [m] on the sheet (rows b, columns a) of the shallow creases and the deep network at the page grid's
+    pitch (a finer map is lost in the grid), its axes, and the crease lines [mm]. Shallow creases keep fold_clear_mm from
+    the fold lines (p = const)."""
     w_mm, h_mm = g.sheet_mm
+    step = min(w_mm / (g.mesh[0] - 1), h_mm / (g.mesh[1] - 1))
     lines, h, pitch = [], None, None
     if cond["shallow"]:
         c = g.shallow
@@ -49,11 +51,11 @@ def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
         lines = [cr for cr in cand if not len(folds) or np.abs(
             lm_to_p(*_swap(cr["line"][:, 0] * 1e-3, cr["line"][:, 1] * 1e-3, cond["along_long"]))[:, None]
             - folds[None, :]).min() > c.fold_clear_mm * 1e-3]
-        h, pitch = shallow.render(lines, w_mm, h_mm, c.pitch_mm, c.w_max_mm), c.pitch_mm
+        h, pitch = shallow.render(lines, w_mm, h_mm, step, c.w_max_mm), step
     if cond["deep"]:
-        net = deep.sample(rng, w_mm, h_mm, cond["deep"], g.deep, min(w_mm / (g.mesh[0] - 1), h_mm / (g.mesh[1] - 1)))
-        hd = deep.render(net, w_mm, h_mm, cond["deep"], g.deep)
-        h, pitch = (hd if h is None else h + hd), g.deep.pitch_mm
+        net = deep.sample(rng, w_mm, h_mm, cond["deep"], g.deep, step)
+        hd = deep.render(net, w_mm, h_mm, cond["deep"], g.deep, step)
+        h, pitch = (hd if h is None else h + hd), step
         lines = lines + net
     if h is None:
         return None, None, lines
@@ -116,7 +118,7 @@ def make_surface(rng, g: GeometryCfg, paper, cond):
     v = np.linspace(0.0, sh, nv)
     l_, m_ = _swap(*np.meshgrid(u, v), cond["along_long"])
     pts = np.stack([np.clip(-l_ * sn + m_ * cb + g0, 0.0, wg), np.clip(lm_to_p(l_, m_), 0.0, lp)], -1)
-    X, Y, Z = (RegularGridInterpolator((vg, up), A)(pts) for A in (xd, yd, z))
+    X, Y, Z = np.moveaxis(RegularGridInterpolator((vg, up), np.stack([xd, yd, z], -1))(pts), -1, 0)
     X, Y = _swap((X - p0) * cb - (Y - g0) * sn, (X - p0) * sn + (Y - g0) * cb, cond["along_long"])
     return dict(X=1e3 * X, Y=1e3 * (sh - Y), Z=1e3 * Z, u=1e3 * u, v=1e3 * v, scene_a=sa, scene_b=sb,
                 label=scene_label(sa), paper=pp, cond=cond, creases=lines,

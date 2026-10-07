@@ -31,27 +31,29 @@ python -m dspages.prep.layout_model
 ## Run
 
 ```bash
-python -m dspages all --preset full --out OUT --n 1000 --workers 12
+python -m dspages all --preset full --out OUT --n 1000 --workers 12 [--preview]
 ```
 
-`plan` writes `OUT/plan.jsonl` (stratified conditions); `layout`, `geometry` and `render` run each part alone;
-`render` uses saved parts of the same index when present. Per sample and part:
+`plan` writes `OUT/plan.jsonl` (stratified conditions). `all` writes the samples only: the layout and geometry of each
+are made in memory. `layout` and `geometry` save their parts on request; `render` uses saved parts of the same index when
+present. `--preview` writes `.jpg` previews to `OUT_preview/` (off by default). Per sample and part:
 
 | file | arrays |
 |---|---|
-| `layouts/<i>.npz` | `page` sheet luminance uint8, `gray` clean sheet uint8 |
-| `geometry/<i>.npz` | `X, Y, Z` page grid [mm] float32, rows down the sheet, table at z = 0 |
-| `samples/<i>.npz` | `flat` canvas, `warped` photo (luminance uint8), `uv` page coords in [0, 1] of each photo pixel (NaN off the page, float16), `map3d` X, Y, Z [mm] (float16), `mask` |
+| `samples/<i>.npz` | `flat` sheet, `warped` photo (luminance uint8, h × w), `uv` page coords in [0, 1] (float32, page grid, NaN off the page), `xyz` X, Y, Z [mm] at those coords (float32), `mask` photo pixels on the page (bool) |
+| `layouts/<i>.npz` | `page` sheet luminance uint8, `gray` clean sheet uint8 (`layout` only) |
+| `geometry/<i>.npz` | `X, Y, Z` page grid [mm] float32, rows down the sheet, table at z = 0 (`geometry` only) |
 
-Each `.npz` holds `meta` (JSON: source, scene, paper, camera, light, effects) and has a `.jpg` preview.
+Sample metadata (source page, scene, paper, camera, light, effects) goes to `OUT/meta.jsonl`; the part files hold theirs
+as `meta`. A full-preset sample is about 2.9 MB (70k samples: about 200 GB).
 
 ## Presets
 
 | | demo | full |
 |---|---|---|
 | sheet | 150 × 150 mm | A4 |
-| flat / warped | 1024 × 1024 | 1024 × 1365 (A4 fitted, padded) |
-| UV / 3D maps | 256 × 256 | 225 × 300 / 212 × 300 |
+| flat / warped | 1024 × 1024 | 1024 × 1440 |
+| UV / 3D maps (page grid) | 256 × 256 | 256 × 360 |
 | margins | 0 | 0–10 % |
 | layout effects, photo effects | off | on |
 | background | black | table texture |
@@ -73,8 +75,9 @@ python tools/analyze.py OUT             # distributions and limits -> OUT/report
 python tools/gallery.py OUT             # contact sheet -> OUT/report/gallery.jpg
 ```
 
-Data preparation: `python -m dspages.prep.manifest` (one entry
-per page).
+Data preparation: `python -m dspages.prep.files` (the listing of the source folders, `LayoutCfg.sources`), then
+`python -m dspages.prep.manifest --out <manifest>` (one entry per page). PDFs of `LayoutCfg.raster_only` folders are only
+rasterized, never restyled.
 
 ## License
 

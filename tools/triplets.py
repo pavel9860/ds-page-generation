@@ -7,7 +7,6 @@ ranges like the generation does. Writes OUT_DIR/<i>_<category>_<file>_p<page>.pn
 import argparse
 import os
 from concurrent.futures import ProcessPoolExecutor
-from multiprocessing.util import Finalize
 from pathlib import Path
 
 import numpy as np
@@ -25,8 +24,6 @@ _W = {}
 def _init(preset):
     P = get_preset(preset)
     _W.update(c=P.layout, fonts=refont.font_set(P.paths.font_dirs))
-    refont.load_glyphs()
-    Finalize(None, refont.save_glyphs, exitpriority=10)
 
 
 def _triplet(args):

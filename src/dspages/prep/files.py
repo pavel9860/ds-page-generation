@@ -2,7 +2,7 @@
 is opened again for it. Fields: path, language, topic, category (the folder), digital (PDF with text set in it, restyled),
 pages, fonts (base fonts of the middle page), body_pt (its most common font size).
 
-python -m dspages.prep.files [--workers 12]   -> paths.files; the glyph cache parts of earlier runs are merged into the one glyph file
+python -m dspages.prep.files [--workers 12]   -> paths.files
 """
 import argparse
 import glob
@@ -14,12 +14,9 @@ from concurrent.futures import ProcessPoolExecutor
 
 import pymupdf as fitz
 
-from ..config import Paths
-from ..layout.refont import merge_glyphs
+from ..config import LayoutCfg, Paths
 
 LAYOUTS = Paths().layouts
-DIGITAL = ("books_pdf", "bureaucracy", "corpus_add/pdf", "exams", "other_docs", "scientific_paper")  # restyled
-RASTER = ("certificates", "corpus_add/Images")                                                       # as images
 IMAGES = (".png", ".jpg", ".jpeg")
 
 
@@ -47,12 +44,12 @@ def describe(args):
 
 
 def main(workers):
-    files = [(p, sub.split("/")[0], digital) for subs, digital in ((DIGITAL, True), (RASTER, False)) for sub in subs
+    c = LayoutCfg()
+    files = [(p, sub.split("/")[0], sub not in c.raster_only) for sub in c.sources
              for p in sorted(glob.glob(os.path.join(LAYOUTS, sub, "**", "*"), recursive=True))
              if p.lower().endswith((".pdf",) + IMAGES)]
     with ProcessPoolExecutor(workers) as pool, open(Paths().files, "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r) + "\n" for r in pool.map(describe, files, chunksize=64))
-    merge_glyphs()
 
 
 if __name__ == "__main__":

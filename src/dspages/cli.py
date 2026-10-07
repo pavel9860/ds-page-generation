@@ -1,14 +1,14 @@
-"""python -m dspages {plan,layout,geometry,render,all} --preset NAME --out DIR [--n N] [--seed S] [--workers W]
+"""python -m dspages {plan,layout,geometry,render,all} --preset NAME --out DIR [--n N] [--seed S] [--workers W] [--preview]
 
 plan      DIR/plan.jsonl: n stratified sample specs (written by the other commands too when missing)
 layout    DIR/layouts/<i>.npz   page (sheet luminance), gray (clean sheet)
 geometry  DIR/geometry/<i>.npz  X, Y, Z [mm] page grid
-render    DIR/samples/<i>.npz   flat, warped, uv, xyz, mask (no metadata); reads layouts/ and geometry/
-          of the same index when present, else makes them in memory; DIR/meta.jsonl: one row per sample, the
-          render metadata and its layout's (source page, window, fill, fonts, effects)
-all       layout, geometry and render of each sample, all saved
-Previews (sheet, height map, flat | warped) go to DIR_preview/<part>/<i>.jpg, outside the dataset. The manifest
-and its rejected pages are copied to DIR.
+render    DIR/samples/<i>.npz   flat, warped, uv, xyz, mask (no metadata); reads layouts/ and geometry/ of the same index
+          when present, else makes them in memory; DIR/meta.jsonl: one row per sample, the render metadata and its
+          layout's (source page, window, fill, fonts, effects)
+all       the samples only: layout and geometry of each made in memory, not saved (the dataset run)
+--preview writes previews (sheet, height map, flat | warped) to DIR_preview/<part>/<i>.jpg, outside the dataset. The
+manifest and its rejected pages are copied to DIR.
 Each part of sample i draws from its own stream (seed, i, part): the parts are reproducible independently.
 """
 import argparse
@@ -16,7 +16,6 @@ import json
 import shutil
 import time
 from concurrent.futures import ProcessPoolExecutor
-from multiprocessing.util import Finalize
 from pathlib import Path
 
 import cv2
@@ -44,17 +43,15 @@ def load_plan(path):
         return [{k: _tuples(v) for k, v in json.loads(line).items()} for line in f]
 
 
-def _init(preset, out, seed, manifest=None):
+def _init(preset, out, seed, manifest=None, preview=False):
     import numba
     from threadpoolctl import threadpool_limits
     cv2.setNumThreads(1)
     numba.set_num_threads(1)
     threadpool_limits(1)
     P = get_preset(preset)
-    _W.update(P=P, out=Path(out), seed=seed, plan=load_plan(Path(out) / "plan.jsonl"),
+    _W.update(P=P, out=Path(out), seed=seed, preview=preview, plan=load_plan(Path(out) / "plan.jsonl"),
               manifest=load_manifest(manifest or P.paths.manifest), fonts=refont.font_set(P.paths.font_dirs))
-    refont.load_glyphs()
-    Finalize(None, refont.save_glyphs, exitpriority=10)
 
 
 def _rng(i, part):
@@ -70,12 +67,21 @@ def _preview(part, i):
     return _W["out"].with_name(_W["out"].name + "_preview") / _path(part, i).parent.name / f"{i:07d}.jpg"
 
 
+def _shown(part, i, what):
+    """(preview image, its path) of a part when previews are asked for, else (None, None)."""
+    if not _W["preview"]:
+        return None, None
+    img = {"layout": lambda: what, "geometry": lambda: io.height_preview(what),
+           "render": lambda: np.hstack([cv2.resize(what["flat"], what["warped"].shape[1::-1]), what["warped"]])}[part]()
+    return img, _preview(part, i)
+
+
 def _layout(i, save):
     spec = _W["plan"][i]
     L = make_layout(_rng(i, "layout"), _W["manifest"][spec["entry"]],
                     layout_preset(_W["P"], spec), _W["fonts"])
     if save:
-        io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], L["page"], _preview("layout", i))
+        io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], *_shown("layout", i, L["page"]))
     return L["page"], L["meta"]
 
 
@@ -86,25 +92,24 @@ def _geometry(i, save):
     if save:
         meta = dict(label=s["label"], cond=s["cond"], paper=s["paper"], scene_a=s["scene_a"], scene_b=s["scene_b"],
                     n_creases=len(s["creases"]), box_strain=s["box_strain"])
-        io.save(_path("geometry", i), surf, meta, io.height_preview(surf["Z"]), _preview("geometry", i))
+        io.save(_path("geometry", i), surf, meta, *_shown("geometry", i, surf["Z"]))
     return surf
 
 
-def _render(i, save_parts, dt):
+def _render(i, saved, dt):
+    """A sample: its layout and geometry read from DIR when `saved` and present, else made in memory (not saved)."""
     lp, gp = _path("layout", i), _path("geometry", i)
     t = time.time()
-    if lp.exists() and not save_parts:
+    if saved and lp.exists():
         arrays, lmeta = io.load(lp)
         page = arrays["page"]
     else:
-        page, lmeta = _layout(i, save_parts)
+        page, lmeta = _layout(i, False)
     dt["layout"], t = time.time() - t, time.time()
-    surf = io.load(gp)[0] if gp.exists() and not save_parts else _geometry(i, save_parts)
+    surf = io.load(gp)[0] if saved and gp.exists() else _geometry(i, False)
     dt["geometry"], t = time.time() - t, time.time()
     o = make_sample(_rng(i, "render"), page, surf, view_preset(_W["P"], _W["plan"][i]))
-    preview = np.hstack([cv2.resize(o["flat"], o["warped"].shape[1::-1]), o["warped"]])
-    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "uv", "xyz", "mask")}, None, preview,
-            _preview("render", i))
+    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "uv", "xyz", "mask")}, None, *_shown("render", i, o))
     dt["render"] = time.time() - t
     return dict(sample=f"{i:07d}", **o["meta"], layout=lmeta)
 
@@ -122,7 +127,7 @@ def _job(args):
         _geometry(i, True)
         dt["geometry"] = time.time() - t
     else:
-        return i, dt, _render(i, cmd == "all", dt)
+        return i, dt, _render(i, cmd == "render", dt)
     return i, dt, None
 
 
@@ -138,6 +143,7 @@ def main(argv=None):
     ap.add_argument("--count", type=int, default=None)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--manifest", default=None, help="manifest path (default: the preset's)")
+    ap.add_argument("--preview", action="store_true", help="write previews to DIR_preview")
     a = ap.parse_args(argv)
     out = Path(a.out)
     plan_path = out / "plan.jsonl"
@@ -159,7 +165,7 @@ def main(argv=None):
         if src.exists() and not (out / src.name).exists():
             shutil.copy2(src, out / src.name)
     t0, times = time.time(), {}
-    with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed, a.manifest)) as pool, \
+    with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed, a.manifest, a.preview)) as pool, \
             open(out / "meta.jsonl", "a") as meta_f:
         for k, (i, dt, row) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=1), 1):
             if row is not None:

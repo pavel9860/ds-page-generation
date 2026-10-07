@@ -15,7 +15,7 @@ def solve_sag(u, v, z0, span, paper, nodes):
     profile is held (w = 0, zero slope) over the support strip v in span and where it lies on the table."""
     m = MeshQuad.init_tensor(np.linspace(u[0], u[-1], nodes[0]),
                              np.linspace(v[0], v[-1], nodes[1])).to_meshtri(style="x")
-    ba = Basis(m, ElementVector(ElementTriP2()))
+    ba = Basis(m, ElementVector(ElementTriP2()), intorder=2)     # the integrands are at most quadratic: exact
     bw = Basis(m, ElementTriMorley(), quadrature=ba.quadrature)
     bz = Basis(m, ElementTriP1(), quadrature=ba.quadrature)
     x, y = m.p

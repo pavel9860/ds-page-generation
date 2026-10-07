@@ -119,9 +119,10 @@ def _job_pdf(args):
     latin = script(dict(language=language), c.scripts) in ("latin", "unknown")
     recs, n = [], 0
     with doc:
+        src = refont.Source(doc)
         for pi in np.random.default_rng(_seed(path)).permutation(doc.page_count)[:c.tries_per_page * cap].tolist():
             page = doc[pi]
-            if digital and refont.usable(page, latin):
+            if digital and category not in c.raster_only and refont.usable(src, pi, latin):
                 rec = dict(source_path=path, page_index=pi, language=language, category=category, kind="refont")
             else:
                 z = min(RASTER_ZOOM, c.check_px / max(page.rect.width, page.rect.height))

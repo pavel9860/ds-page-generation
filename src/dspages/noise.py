@@ -47,12 +47,13 @@ def value_noise(seed, x, y):
 
 
 @njit(cache=True, fastmath=True)
-def _fbm(seed, x, y, scale, octaves, gain):
+def _fbm(seed, x, y, scale, octaves, gain, keep):
     out = np.empty(x.size, np.float32)
     for k in range(x.size):
         acc, amp, f, tot = 0.0, 1.0, 1.0 / scale, 0.0
         for o in range(octaves):
-            acc += amp * (_value(seed + o, x[k] * f, y[k] * f) * 2 - 1)
+            if o < keep:
+                acc += amp * (_value(seed + o, x[k] * f, y[k] * f) * 2 - 1)
             tot += amp
             amp, f = amp * gain, f * 2.03
         out[k] = acc / tot
@@ -84,10 +85,13 @@ def fbm_rotated(seed, h, w, step, theta, k, scale, octaves=5, gain=0.5):
     return field if q == 1 else cv2.resize(field, (w, h), interpolation=cv2.INTER_LINEAR)
 
 
-def fbm(seed, x, y, scale, octaves=5, gain=0.5):
-    """Fractal noise in about [-1, 1], feature size `scale` (same units as x, y)."""
+def fbm(seed, x, y, scale, octaves=5, gain=0.5, limit=0.0):
+    """Fractal noise in about [-1, 1], feature size `scale` (same units as x, y); octaves of features finer than `limit`
+    (what the samples cannot resolve) are left out, their mean (0) in their place."""
     x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
-    return _fbm(int(seed), x.ravel(), y.ravel(), scaled(scale), int(octaves), float(gain)).reshape(x.shape)
+    sc = scaled(scale)
+    keep = octaves if limit <= 0 else max(1, min(octaves, int(np.floor(np.log(sc / limit) / np.log(2.03))) + 1))
+    return _fbm(int(seed), x.ravel(), y.ravel(), sc, int(octaves), float(gain), int(keep)).reshape(x.shape)
 
 
 @njit(cache=True, fastmath=True)
@@ -138,6 +142,6 @@ def worley(seed, x, y, scale):
     return tuple(r.reshape(x.shape) for r in _worley(int(seed), x.ravel(), y.ravel(), scaled(scale)))
 
 
-def warp(seed, x, y, scale, amount):
+def warp(seed, x, y, scale, amount, limit=0.0):
     """Domain warping: coordinates displaced by fractal noise."""
-    return x + amount * fbm(seed, x, y, scale, 4), y + amount * fbm(seed + 50, x, y, scale, 4)
+    return x + amount * fbm(seed, x, y, scale, 4, limit=limit), y + amount * fbm(seed + 50, x, y, scale, 4, limit=limit)
