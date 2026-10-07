@@ -98,8 +98,8 @@ def _letters(elems, blocks):
     covered, keep = defaultdict(float), []
     for e in elems:
         r = e[1]["rect"]
-        host = next((l for l in lines if r.get_area() > 0 and e[1].get("fill") is not None and r.height <= C.letter_em * l["bbox"].height
-                     and r.width <= C.letter_em * l["bbox"].height and (r & l["bbox"]).get_area() >= C.contain_share * r.get_area()), None)
+        host = next((l for l in lines if e[1].get("fill") is not None and r.height <= C.letter_em * l["bbox"].height
+                     and r.width <= C.letter_em * l["bbox"].height and R._overlaps(l["bbox"], r, C.contain_share)), None) if r.get_area() > 0 else None
         span = host and max(host["spans"], key=lambda sp: (r & sp["bbox"]).get_area())
         if span is not None and (r & span["bbox"]).get_area() > 0:
             covered[id(span)] += r.width
@@ -290,11 +290,16 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
     mult = max(min(1.0, 1.0 / fit) if fit else 1.0, C.fit_floor)
     running = R.running_bands(first)
 
+    fixed_cache, later = {}, {}
+
     def build(mult, pages, grow=None):
         """The page set at this shrink; `pages`: whether the stream may take the following pages."""
         px = lambda sz: px_of(sz) * mult * (grow or {}).get(_size_class(sz), 1.0)
         out = dict(items=[], glyphs=[], rects=[], used=[], placed=0, fill=[])
-        fixed_ps = prepare_fixed(typesetter, px)
+        key = (round(mult, 9), tuple(sorted((grow or {}).items())))
+        if key not in fixed_cache:
+            fixed_cache[key] = prepare_fixed(typesetter, px)
+        fixed_ps = fixed_cache[key]
         for p in fixed_ps:
             _set_lines(p["lines"], p["bx0"], p["W"], p["y0"] + (p["y1"] - p["y0"] - len(p["lines"]) * p["pitch"]) / 2, p, True, out, "fixed", p["pinned"])
         pics = [(b["bbox"].x0 * g, b["bbox"].y0 * g, dict(b, scale=1.0)) for b in fixed if b.get("image")]
@@ -307,9 +312,10 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
                 return False
             nxt = doc[number + st["used"]]
             st["used"] += 1
-            blocks = R.page_blocks(nxt, 0.0, False, running) if R.text_page(nxt) else []
-            found, _ = split_page(blocks, R._hrules(R.graphics(doc, nxt.number, 0.0, False, ph, pw, number), g), g)
-            units[-1].extend(_units([r for sec in found for r in sec], g, k, gap))
+            if nxt.number not in later:
+                blocks = R.page_blocks(nxt, 0.0, False, running) if R.text_page(nxt) else []
+                later[nxt.number] = split_page(blocks, R._hrules(R.graphics(doc, nxt.number, 0.0, False, ph, pw, number), g), g)[0]
+            units[-1].extend(_units([r for sec in later[nxt.number] for r in sec], g, k, gap))
             return True
 
         obstacles = [(p["bx0"], p["y0"], p["bx0"] + p["W"], p["y1"]) for p in fixed_ps if not p["pinned"]]

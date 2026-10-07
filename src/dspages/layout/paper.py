@@ -9,7 +9,7 @@ import numpy as np
 
 from ..config import LayoutCfg, ShallowCreaseCfg
 from ..creases import shallow
-from ..noise import fbm, scaled, set_scale, warp, worley
+from ..noise import fbm, fbm_rotated, fleck_mask, scaled, set_scale, warp
 
 YELLOW_LUMA = 0.24              # Rec. 709 luma of a yellow cast (0, 0.25, 0.8) per unit strength
 STAIN_LUMA = 0.57               # of a brown stain (0.3, 0.6, 1.0)
@@ -73,20 +73,17 @@ def paper_texture(rng, h, w, px_per_mm, p):
     """Zero-mean paper structure (h, w): fibres (fractal noise stretched along a random direction), formation
     clouds (fractal noise of random scale, octaves and roughness, sometimes domain-warped), sometimes recycled
     flecks (cellular noise), and pixel grain; every scale and amplitude drawn per page."""
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32) / px_per_mm
     sd = int(rng.integers(1 << 30))
     th, k = rng.uniform(0, np.pi), _logu(rng, p["fiber_stretch"])
-    a, b = xx * np.cos(th) + yy * np.sin(th), -xx * np.sin(th) + yy * np.cos(th)
-    t = _u(rng, p["fiber_amp"]) * fbm(sd, a, b * k, _u(rng, p["fiber_mm"]), int(rng.integers(2, 4)))
+    t = _u(rng, p["fiber_amp"]) * fbm_rotated(sd, h, w, 1.0 / px_per_mm, th, k, _u(rng, p["fiber_mm"]), int(rng.integers(2, 4)))
     q = CLOUD_STEP
-    cx, cy = xx[::q, ::q], yy[::q, ::q]
+    cy, cx = (v.astype(np.float32) for v in np.meshgrid(np.arange(0, h, q) / px_per_mm, np.arange(0, w, q) / px_per_mm, indexing="ij"))
     if rng.random() < 0.4:
         cx, cy = warp(sd + 7, cx, cy, _logu(rng, p["cloud_mm"]), rng.uniform(1, 10))
     cloud = fbm(sd + 20, cx, cy, _logu(rng, p["cloud_mm"]), int(rng.integers(2, 7)), rng.uniform(0.35, 0.7))
     t += _u(rng, p["cloud_amp"]) * cv2.resize(cloud, (w, h), interpolation=cv2.INTER_CUBIC)
     if rng.random() < p["fleck_prob"]:
-        d1, _, cid = worley(sd + 40, xx, yy, _logu(rng, (0.5, 4.0)))
-        t -= _u(rng, p["fleck_amp"]) * ((d1 < rng.uniform(0.04, 0.12)) & (cid < rng.uniform(0.1, 0.5)))
+        t -= _u(rng, p["fleck_amp"]) * fleck_mask(sd + 40, h, w, _logu(rng, (0.5, 4.0)) * px_per_mm, rng.uniform(0.04, 0.12), rng.uniform(0.1, 0.5))
     return t + _u(rng, p["grain_amp"]) * rng.standard_normal((h, w), dtype=np.float32)
 
 

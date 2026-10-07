@@ -46,6 +46,7 @@ def is_rtl(text):
     return bool(letters) and sum(_rtl_char(c) for c in letters) > C.rtl_share * len(letters)
 
 
+@lru_cache(maxsize=1 << 16)
 def _script(ch):
     word = unicodedata.name(ch, "").split(" ")[0].lower()
     return "cjk" if word in CJK_NAMES else word
@@ -504,6 +505,7 @@ def _clusters(text):
     return out
 
 
+@lru_cache(maxsize=1 << 16)
 def _nobreak(text):
     return any(unicodedata.name(c, "").split(" ")[0] in NO_SPACE_SCRIPTS for c in text)
 
@@ -1243,6 +1245,12 @@ def parsed(page, dy):
     return moved, ([(x, y0 + dy, y1 + dy) for x, y0, y1 in v], [(y + dy, x0, x1) for y, x0, x1 in h])
 
 
+def _overlaps(a, b, share):
+    """Whether rectangle a covers at least `share` of the area of b."""
+    w, h = min(a.x1, b.x1) - max(a.x0, b.x0), min(a.y1, b.y1) - max(a.y0, b.y0)
+    return w > 0 and h > 0 and w * h >= share * b.width * b.height
+
+
 def _absorb(blocks):
     """A one-line block that lies inside a paragraph on one of its lines is a part of that line (the fields of a spaced
     line): its spans join the line, and the block goes."""
@@ -1251,7 +1259,7 @@ def _absorb(blocks):
         if len(o["lines"]) != 1 or o.get("image"):
             continue
         for b in blocks:
-            if b is o or id(b) in gone or len(b["lines"]) < 2 or (b["bbox"] & o["bbox"]).get_area() < C.contain_share * o["bbox"].get_area():
+            if b is o or id(b) in gone or len(b["lines"]) < 2 or not _overlaps(b["bbox"], o["bbox"], C.contain_share):
                 continue
             line = next((l for l in b["lines"] if min(l["bbox"].y1, o["bbox"].y1) - max(l["bbox"].y0, o["bbox"].y0) > 0.5 * o["bbox"].height), None)
             if line:
@@ -1545,6 +1553,7 @@ def layout(doc, number, rng, fonts, body_pt, scale, width_px):
                 role_paths={f[0] for k in typesetter.role.values() for f in (typesetter.prose.get(k) or typesetter.mono[k]).values()})
 
 
+@lru_cache(maxsize=1 << 16)
 def needs_shaping(text):
     """Scripts whose letters join, reorder or stack (Hebrew to Indic, Thai, Khmer, Arabic forms) are set by the shaping engine."""
     return any(0x0590 <= ord(c) <= 0x1CFF or 0xA800 <= ord(c) <= 0xABFF or 0xFB1D <= ord(c) <= 0xFEFF or c in JOINERS for c in text)

@@ -1,9 +1,11 @@
 """Procedural noise evaluated per point (no grids, sharp at any scale): hashed value noise, fractal noise,
 cellular (Worley) noise and domain warping, compiled with numba."""
+import cv2
 import numpy as np
 from numba import njit, vectorize
 
 _SCALE = [1.0]
+C_COARSE = 4.0                                      # feature size, in pixels, from which noise is evaluated on a coarser grid
 
 
 def set_scale(k):
@@ -57,6 +59,31 @@ def _fbm(seed, x, y, scale, octaves, gain):
     return out
 
 
+@njit(cache=True, fastmath=True)
+def _fbm_rotated(seed, h, w, step, c, s, k, scale, octaves, gain):
+    out = np.empty((h, w), np.float32)
+    for j in range(h):
+        for i in range(w):
+            x, y = i * step, j * step
+            a, b = x * c + y * s, (y * c - x * s) * k
+            acc, amp, f, tot = 0.0, 1.0, 1.0 / scale, 0.0
+            for o in range(octaves):
+                acc += amp * (_value(seed + o, a * f, b * f) * 2 - 1)
+                tot += amp
+                amp, f = amp * gain, f * 2.03
+            out[j, i] = acc / tot
+    return out
+
+
+def fbm_rotated(seed, h, w, step, theta, k, scale, octaves=5, gain=0.5):
+    """Fractal noise of an (h, w) pixel grid of pitch `step`, the coordinates turned by theta and the second stretched by k:
+    fbm of the rotated coordinates without the coordinate arrays."""
+    sc = scaled(scale)
+    q = 2 if sc >= C_COARSE * step else 1                         # features of a few pixels are evaluated on every 2nd pixel
+    field = _fbm_rotated(int(seed), -(-h // q), -(-w // q), float(step) * q, np.cos(theta), np.sin(theta), float(k), sc, int(octaves), float(gain))
+    return field if q == 1 else cv2.resize(field, (w, h), interpolation=cv2.INTER_LINEAR)
+
+
 def fbm(seed, x, y, scale, octaves=5, gain=0.5):
     """Fractal noise in about [-1, 1], feature size `scale` (same units as x, y)."""
     x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
@@ -81,6 +108,27 @@ def _worley(seed, x, y, scale):
                     b = d
         d1[k], d2[k], cid[k] = a, b, c
     return d1, d2, cid
+
+
+@njit(cache=True)
+def _flecks(seed, h, w, scale, radius, cid_max):
+    mask = np.zeros((h, w), np.uint8)
+    r = radius * scale
+    for j in range(-1, int(h / scale) + 2):
+        for i in range(-1, int(w / scale) + 2):
+            if _hash(seed + 2, i, j) < cid_max:
+                cx, cy = (i + _hash(seed, i, j)) * scale, (j + _hash(seed + 1, i, j)) * scale
+                for y in range(max(int(cy - r), 0), min(int(cy + r) + 1, h)):
+                    for x in range(max(int(cx - r), 0), min(int(cx + r) + 1, w)):
+                        if (x - cx) ** 2 + (y - cy) ** 2 < r * r:
+                            mask[y, x] = 1
+    return mask
+
+
+def fleck_mask(seed, h, w, scale, radius, cid_max):
+    """Cellular flecks: a disc of `radius` (cell sizes) at the jittered point of every cell of `scale` px whose id is below
+    cid_max, painted cell by cell (what worley's d1 < radius and id < cid_max gives, without a distance per pixel)."""
+    return _flecks(int(seed), h, w, scaled(scale), float(radius), float(cid_max)).astype(bool)
 
 
 def worley(seed, x, y, scale):
