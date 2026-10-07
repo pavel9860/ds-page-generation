@@ -1,7 +1,8 @@
 """Scenes: what shapes the page profile, with parameters drawn feasible by construction.
 
 A scene holds, for one page end: clamp (edge tangent angle at s = 0, edge on the table, or None), base (s_p, H):
-a book page, the part beyond s_p on a plane at height H, or None), supports
+a book page, the part beyond s_p on a plane at height H, or None), opened (an open book: a valley fold in the middle and
+a support line at each side that stays there at end b), supports
 [(s, h)] (line supports at arc length s, height h, sorted), folds [(s, theta, k)] (theta > 0 valley, k hinge
 stiffness), flat (near-flat variant) and crumple (flat page with a deep crease network).
 Feasibility:
@@ -14,6 +15,7 @@ Feasibility:
 from dataclasses import replace
 
 import numpy as np
+from scipy.special import ndtr, ndtri
 
 from ..config import SceneCfg
 
@@ -29,23 +31,29 @@ def _spread(rng, m, length, gap):
     return gap * np.arange(1, m + 1) + np.cumsum(rng.dirichlet(np.ones(m + 1)))[:m] * (length - (m + 1) * gap)
 
 
+def _lognormal(rng, median, sigma, bounds, m):
+    """m draws of a log-normal truncated to bounds (no pile-up at the bounds)."""
+    a, b = ndtr(np.log(np.array(bounds) / median) / sigma)
+    return median * np.exp(sigma * ndtri(rng.uniform(a, b, m)))
+
+
 def _near_flat(c: SceneCfg):
     return replace(c, support_h=c.flat_support_h, clamp_deg=c.flat_clamp_deg, fold_angle_deg=c.flat_fold_deg,
                    fold_angle_deg_median=float(np.sqrt(np.prod(c.flat_fold_deg))))
 
 
-def _folds(rng, c: SceneCfg, length, budget_deg):
-    tpl = pick(rng, c.fold_templates)
+def _folds(rng, c: SceneCfg, length, budget_deg, spine=False):
+    tpl = (0.5,) if spine else pick(rng, c.fold_templates)
     if tpl is None:
         pos = _spread(rng, rng.integers(1, c.fold_max + 1), length, c.fold_min_gap)
     else:
         j = min(c.fold_jitter, 0.5 * (min(np.diff(np.r_[0.0, tpl, 1.0])) * length - c.fold_min_gap))
         pos = np.array(tpl) * length + rng.uniform(-j, j, len(tpl))
     m = len(pos)
-    ang = np.clip(c.fold_angle_deg_median * np.exp(rng.normal(0.0, c.fold_angle_sigma, m)), *c.fold_angle_deg)
+    ang = _lognormal(rng, c.fold_angle_deg_median, c.fold_angle_sigma, c.fold_angle_deg, m)
     ang *= min(1.0, budget_deg / ang.sum())
-    sign = np.where(rng.random(m) < c.fold_valley_prob, 1.0, -1.0)
-    k = np.clip(c.fold_k_median * np.exp(rng.normal(0.0, c.fold_k_sigma, m)), *c.fold_k)
+    sign = np.where(spine | (rng.random(m) < c.fold_valley_prob), 1.0, -1.0)
+    k = _lognormal(rng, c.fold_k_median, c.fold_k_sigma, c.fold_k, m)
     return [(float(p), float(t), float(kk)) for p, t, kk in zip(pos, sign * np.radians(ang), k)]
 
 
@@ -75,21 +83,21 @@ def sample_scene(rng, c: SceneCfg, length, combo=None, flat=None):
     has_clamp, n_sup, has_folds, crumple = combo or pick(rng, c.combos)
     flat = rng.random() < c.near_flat_prob if flat is None else flat
     c = _near_flat(c) if flat else c
-    book = has_clamp == "book"
-    clamp = float(np.radians(rng.uniform(*(c.book_deg if book else c.clamp_deg)))) if has_clamp else None
+    book, opened = has_clamp == "book", has_clamp == "open"
+    clamp = float(np.radians(rng.uniform(*(c.book_deg if book else c.clamp_deg)))) if has_clamp and not opened else None
     base = None
     if book:
         sp = rng.uniform(*c.book_plane) * length
         base = (float(sp), float(rng.uniform(c.book_h[0], min(c.book_h[1], c.book_reach * sp * np.sin(clamp)))))
     lo, hi = _support_bounds(c, length, clamp)
-    s = lo + _spread(rng, n_sup, hi - lo, c.support_min_gap)
-    supports = list(zip(s.tolist(), _heights(rng, c, s, clamp)))
+    s = np.array([lo, hi]) if opened else lo + _spread(rng, n_sup, hi - lo, c.support_min_gap)
+    supports = list(zip(s.tolist(), _heights(rng, c, s, clamp, [c.open_h] * 2 if opened else None)))
     budget = _fold_budget(c, supports, clamp)
     folds = []
     if has_folds and budget >= c.fold_angle_deg[0]:
-        folds = [f for f in _folds(rng, c, length, budget)
+        folds = [f for f in _folds(rng, c, length, budget, opened)
                  if all(abs(f[0] - p) >= c.fold_min_gap for p, _ in supports)]
-    return dict(clamp=clamp, supports=supports, folds=folds, flat=flat, crumple=crumple, base=base)
+    return dict(clamp=clamp, supports=supports, folds=folds, flat=flat, crumple=crumple, base=base, opened=opened)
 
 
 def _side_b(rng, c: SceneCfg, sa, length, width):
@@ -108,7 +116,8 @@ def _side_b(rng, c: SceneCfg, sa, length, width):
     lo, hi = _support_bounds(c, length, clamp)
     n = len(sa["supports"])
     pa = [p for p, _ in sa["supports"]]
-    shift = [width * min(np.tan(np.radians(c.skew_deg)), c.skew_rise / (n * (1 + c.height_jitter) * h))
+    shift = [0.0 if sa["opened"] else width * min(np.tan(np.radians(c.skew_deg)),
+                                                  c.skew_rise / (n * (1 + c.height_jitter) * h))
              for _, h in sa["supports"]]
     upper = []
     for p, d in zip(pa[::-1], shift[::-1]):
@@ -127,7 +136,7 @@ def _side_b(rng, c: SceneCfg, sa, length, width):
              for p, t, k in sa["folds"]]
     f = min(1.0, budget / max(sum(abs(t) for _, t, _ in folds), 1e-12))
     return sa, dict(clamp=clamp, supports=supports, folds=[(p, t * f, k) for p, t, k in folds],
-                    flat=sa["flat"], crumple=sa["crumple"], base=base)
+                    flat=sa["flat"], crumple=sa["crumple"], base=base, opened=sa["opened"])
 
 
 def sample_ends(rng, c: SceneCfg, length, width, two, combo=None, flat=None):
@@ -142,13 +151,13 @@ def lerp_scene(a, b, t):
     return dict(clamp=None if a["clamp"] is None else lerp(a["clamp"], b["clamp"]),
                 supports=[(lerp(s0, s1), lerp(h0, h1)) for (s0, h0), (s1, h1) in zip(a["supports"], b["supports"])],
                 folds=[(s0, lerp(t0, t1), k0) for (s0, t0, k0), (_, t1, _) in zip(a["folds"], b["folds"])],
-                flat=a["flat"], crumple=a["crumple"],
+                flat=a["flat"], crumple=a["crumple"], opened=a["opened"],
                 base=None if a["base"] is None else (a["base"][0], lerp(a["base"][1], b["base"][1])))
 
 
 def scene_label(sc):
     return "+".join(filter(None, ["flat" if sc["flat"] else "", "crumple" if sc["crumple"] else "",
-                                  "book" if sc.get("base") else "",
+                                  "book" if sc.get("base") else "", "open" if sc.get("opened") else "",
                                   "clamp" if sc["clamp"] is not None and not sc.get("base") else "",
                                   f"{len(sc['supports'])}sup" if sc["supports"] else "",
                                   f"{len(sc['folds'])}fold" if sc["folds"] else ""])) or "flat_table"

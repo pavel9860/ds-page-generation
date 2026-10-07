@@ -14,12 +14,9 @@ from dspages import io
 from viz import back_map
 
 
-def uv_image(uv):
-    ok = np.isfinite(uv[..., 0])
-    rgb = np.zeros((*uv.shape[:2], 3), np.uint8)
-    rgb[ok, 0] = (255 * uv[ok, 0]).astype(np.uint8)
-    rgb[ok, 1] = (255 * uv[ok, 1]).astype(np.uint8)
-    rgb[ok, 2] = 128
+def uv_image(grid2d):
+    rgb = np.full((*grid2d.shape[1:], 3), 128, np.uint8)
+    rgb[..., :2] = np.moveaxis(127.5 * (grid2d + 1), 0, -1).astype(np.uint8)
     return rgb
 
 
@@ -35,9 +32,9 @@ def gray3(g):
 
 def row(path, h):
     a = io.load(path)[0]
-    uv = a["uv"].astype(np.float32)
-    parts = [gray3(a["flat"]), gray3(a["warped"]), gray3(back_map(a["warped"], uv, a["flat"].shape)), uv_image(uv),
-             xyz_image(a["xyz"].astype(np.float32))]
+    g2 = a["grid2d"].astype(np.float32)
+    parts = [gray3(a["flat"]), gray3(a["warped"]), gray3(back_map(a["warped"], g2, a["flat"].shape)), uv_image(g2),
+             xyz_image(np.moveaxis(a["grid3d"], 0, -1).astype(np.float32))]
     return np.hstack([cv2.resize(p, (round(h * p.shape[1] / p.shape[0]), h), interpolation=cv2.INTER_AREA) for p in parts])
 
 

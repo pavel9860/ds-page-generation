@@ -21,21 +21,14 @@ from dspages import io  # noqa: E402
 ARROWS = 14                                         # arrows per side of the UV grid
 
 
-def back_map(warped, uv, page_hw):
-    """Flat page (page_hw) sampled from the warped image through the UV map (uv of each warped pixel, [0, 1] over
-    the page): the UV map is inverted by scattered linear interpolation. NaN where the page is not seen."""
-    from scipy.interpolate import griddata
+def back_map(warped, grid2d, page_hw):
+    """Flat page (page_hw) sampled from the warped image through grid2d (photo x, y in [-1, 1], align_corners=True,
+    of each page grid node), as grid_sample would."""
     ph, pw = page_hw
-    h, w = uv.shape[:2]
-    ok = np.isfinite(uv[..., 0])
-    ys, xs = np.nonzero(ok)
-    src = np.stack([uv[ok, 0] * (pw - 1), uv[ok, 1] * (ph - 1)], -1)
-    dst = np.stack([(xs + 0.5) * warped.shape[1] / w - 0.5, (ys + 0.5) * warped.shape[0] / h - 0.5], -1)
-    gy, gx = np.mgrid[0:ph, 0:pw]
-    m = griddata(src, dst, (gx, gy), method="linear").astype(np.float32)
-    out = cv2.remap(warped.astype(np.float32), m[..., 0], m[..., 1], cv2.INTER_LINEAR, borderValue=np.nan)
-    out[~np.isfinite(m[..., 0])] = np.nan
-    return out
+    g = cv2.resize(np.moveaxis(grid2d, 0, -1), (pw, ph), interpolation=cv2.INTER_LINEAR)
+    h, w = warped.shape
+    return cv2.remap(warped.astype(np.float32), (g[..., 0] + 1) * 0.5 * (w - 1), (g[..., 1] + 1) * 0.5 * (h - 1),
+                     cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
 
 def shaded(map3d):
@@ -47,19 +40,17 @@ def shaded(map3d):
 
 def sample_figure(path, out):
     a, meta = io.load(path)
-    flat, warped, uv, map3d = a["flat"], a["warped"], a["uv"].astype(np.float32), a["xyz"].astype(np.float32)
+    flat, warped, g2, map3d = a["flat"], a["warped"], a["grid2d"].astype(np.float32), np.moveaxis(a["grid3d"], 0, -1)
     fig, ax = plt.subplots(2, 3, figsize=(15, 13))
     ax = ax.ravel()
     ax[0].imshow(flat, cmap="gray", vmin=0, vmax=255)
     ax[0].set_title("flat")
     ax[1].imshow(warped, cmap="gray", vmin=0, vmax=255)
-    h, w = uv.shape[:2]
+    h, w = g2.shape[1:]
     ys, xs = np.mgrid[h // (2 * ARROWS):h:h // ARROWS, w // (2 * ARROWS):w:w // ARROWS]
-    u, v = uv[ys, xs, 0], uv[ys, xs, 1]
-    ok = np.isfinite(u)
-    px, py = (xs + 0.5) * warped.shape[1] / w, (ys + 0.5) * warped.shape[0] / h
     ph, pw = flat.shape
-    ax[1].quiver(px[ok], py[ok], (u[ok] * pw - px[ok]), (v[ok] * ph - py[ok]), color="#e4572e",
+    px, py = (g2[0, ys, xs] + 1) * 0.5 * (warped.shape[1] - 1), (g2[1, ys, xs] + 1) * 0.5 * (warped.shape[0] - 1)
+    ax[1].quiver(px, py, xs * (pw - 1) / (w - 1) - px, ys * (ph - 1) / (h - 1) - py, color="#e4572e",
                  angles="xy", scale_units="xy", scale=1, width=0.003)
     ax[1].set_title("warped, arrows: warped pixel -> its flat position")
     Z = map3d[..., 2]
@@ -73,9 +64,9 @@ def sample_figure(path, out):
     ax[3].set_title("profiles, mm")
     ax[4].imshow(shaded(map3d), cmap="gray", vmin=0, vmax=1)
     ax[4].set_title("shaded surface")
-    back = back_map(warped, uv, flat.shape)
+    back = back_map(warped, g2, flat.shape)
     ax[5].imshow(back, cmap="gray", vmin=0, vmax=255)
-    ax[5].set_title("warped mapped back through UV")
+    ax[5].set_title("warped mapped back through grid2d")
     for x in ax[[0, 1, 2, 4, 5]]:
         x.axis("off")
     fig.suptitle(f"{path.stem}  {meta.get('view', '')}", fontsize=8)

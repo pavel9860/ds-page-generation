@@ -1,13 +1,12 @@
 """Part 3: a photo of a layout page on a 3D page surface, with its flat image, UV map and 3D map.
 
-All at the sheet's aspect: the photo has the flat page's size, the UV and 3D maps the page grid's (mesh).
+All at the sheet's aspect: the photo has the flat page's size, the UV and 3D maps the page grid's (mesh): node (i, j)
+is the page point at evenly spaced page coordinates (rows down the sheet height), so neither map has holes.
 flat   (h, w) uint8: the layout sheet (luminance)
 warped (h, w) uint8: the photo (luminance)
-uv     (mesh h, mesh w, 2) float32: page coordinates in [0, 1] (u across the width, v down the height) of the photo,
-       NaN off the page
-map3d  (mesh h, mesh w, 3) float32: X, Y, Z [mm] of the page grid (rows down the sheet height), table z = 0
-xyz    (mesh h, mesh w, 3) float32: map3d at the page coordinates uv of each photo node (same grid as uv), NaN off
-       the page
+grid2d (2, mesh h, mesh w) float32: x, y of each page node in the photo, in [-1, 1] with align_corners=True (pixel
+       centres at -1 and 1): the grid_sample grid that flattens the photo
+grid3d (3, mesh h, mesh w) float32: X, Y, Z [mm] of each page node on the curved surface, table z = 0
 mask   (h, w) bool: photo pixels on the page
 """
 import cv2
@@ -22,15 +21,6 @@ BG_STEP = 4
 SHADOW_STEP = 2                 # shadow maps from every 2nd node: the 384 px maps cannot resolve the full grid
 MIP_LEVELS = (0.0, 0.5, 1.0, 2.0)   # px, page blurs blended by how much a photo pixel shrinks the page
 MIP_STEP = 4                    # the shrink is measured on every 4th pixel (it changes slowly)
-
-
-def _uv_map(uv, mask, size):
-    m = mask.astype(np.float32)
-    s = cv2.resize(np.nan_to_num(uv) * m[..., None], size, interpolation=cv2.INTER_AREA)
-    k = cv2.resize(m, size, interpolation=cv2.INTER_AREA)
-    out = s / np.maximum(k, 1e-6)[..., None]
-    out[k < 0.5] = np.nan
-    return out
 
 
 def _nodes(n, step):
@@ -103,11 +93,8 @@ def make_sample(rng, page, surf, P: Preset):
     else:
         img[~mask] = 0.0
     warped, effects = photo.camera_effects(rng, img.astype(np.float32), zmap, mask, c)
-    map3d = np.stack([X, Y, Z], -1).astype(np.float32)
     meta = dict(view=view, light=None if light is None else dict(sharp=light["sharp"], ambient=light["ambient"]),
                 effects=effects, page_frac=float(mask.mean()))
-    uvm = _uv_map(uv, mask, (nu, nv)).astype(np.float32)
-    xyz = cv2.remap(map3d, uvm[..., 0] * (nu - 1), uvm[..., 1] * (nv - 1), cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_REPLICATE)
-    xyz[np.isnan(uvm[..., 0])] = np.nan
-    return dict(flat=page, warped=warped, uv=uvm, map3d=map3d, xyz=xyz, mask=mask, meta=meta)
+    grid2d = ((pix - 0.5) / (np.array(px) - 1) * 2 - 1).T.reshape(2, nv, nu).astype(np.float32)
+    grid3d = np.stack([X, Y, Z]).astype(np.float32)
+    return dict(flat=page, warped=warped, grid2d=grid2d, grid3d=grid3d, mask=mask, meta=meta)

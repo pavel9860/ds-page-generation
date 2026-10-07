@@ -20,17 +20,25 @@ def _bins(lo, hi, n, log=False):
     return tuple((float(a), float(b)) for a, b in zip(e[:-1], e[1:]))
 
 
+def _bend_cdf(g):
+    """(directions [deg], CDF) of the bend direction density cos(2 dir) + bend_floor over +-bend_dir_deg."""
+    t = np.linspace(-g.bend_dir_deg, g.bend_dir_deg, 1001)
+    F = 0.5 * np.sin(np.radians(2 * t)) + g.bend_floor * np.radians(t)
+    return t, (F - F[0]) / (F[-1] - F[0])
+
+
 def factors(P: Preset):
     """name -> ((value, weight), ...) for geometry, view and layout."""
     g, s = P.geometry, P.geometry.scene
-    bend = _bins(-g.bend_dir_deg, g.bend_dir_deg, 5)
+    t, F = _bend_cdf(g)
+    bend = tuple((b, float(np.diff(np.interp(b, t, F))[0])) for b in _bins(-g.bend_dir_deg, g.bend_dir_deg, 5))
     li, m, lc = P.render.light, P.layout.margin_frac, P.layout
     return dict(
         combo=tuple((c, w) for c, w in s.combos),
         flat=((True, s.near_flat_prob), (False, 1 - s.near_flat_prob)),
         two=((True, g.two_profile_prob), (False, 1 - g.two_profile_prob)),
         along_long=((True, g.along_long_prob), (False, 1 - g.along_long_prob)),
-        bend_bin=tuple((b, 1.0) for b in bend),
+        bend_bin=bend,
         gsm=tuple((v, 1.0) for v in P.paper.gsm),
         shallow=((True, g.shallow.prob), (False, 1 - g.shallow.prob)),
         deep=g.deep.levels,
@@ -96,7 +104,9 @@ def entry_pools(P: Preset, manifest):
 def plan(P: Preset, n, seed, manifest):
     """Up to n sample specs with exact factor marginals, script groups included. Groups of use_all take all their
     pages; script_mix shares the rest of n. Pages are never repeated: a group short of pages stays under its quota,
-    its samples dropped."""
+    its samples dropped. Open books take restyled pages only, set in open_font_pt: a group short of them trades its open
+    combos for other combos of groups with restyled pages to spare. Book pages bend with the spine on
+    the long side (bend direction over the whole range)."""
     rng = np.random.default_rng(seed)
     c = P.layout
     pools = entry_pools(P, manifest)
@@ -106,19 +116,33 @@ def plan(P: Preset, n, seed, manifest):
     wsum = sum(w for _, w in share)
     mix = tuple((g, float(v)) for g, v in whole.items()) + tuple((g, rest * w / wsum) for g, w in share)
     cols = {k: _exact(rng, v, n) for k, v in (*factors(P).items(), ("script", mix))}
-    rows = {g: np.flatnonzero(np.array(cols["script"]) == g) for g, _ in mix}
+    rows = {g: np.flatnonzero(np.array(cols["script"]) == g)[:len(pools[g])] for g, _ in mix}
     entry = np.full(n, -1)
+    refont = {g: sum(manifest[e]["kind"] == "refont" for e in pools[g]) for g in rows}
+    opened = np.array([cb[0] == "open" for cb in cols["combo"]])
+    excess = [i for g, idx in rows.items() for i in idx[opened[idx]][refont[g]:]]
+    room = [i for g, idx in rows.items() for i in idx[~opened[idx]][:max(refont[g] - opened[idx].sum(), 0)]]
+    for a, b in zip(excess, rng.permutation(room)):
+        cols["combo"][a], cols["combo"][b] = cols["combo"][b], cols["combo"][a]
+    opened = np.array([cb[0] == "open" for cb in cols["combo"]])
     for g, idx in rows.items():
-        e = rng.permutation(pools[g])[:len(idx)]
-        entry[idx[:len(e)]] = e
+        perm = rng.permutation(pools[g]).astype(int)
+        o = perm[[manifest[e]["kind"] == "refont" for e in perm]][:opened[idx].sum()]
+        e = perm[~np.isin(perm, o)][:(~opened[idx]).sum()]
+        entry[idx[opened[idx]][:len(o)]] = o
+        entry[idx[~opened[idx]][:len(e)]] = e
+    t, F = _bend_cdf(P.geometry)
+    fonts, open_fonts = _bins(*c.font_pt, 4), _bins(*c.open_font_pt, 4)
     specs = []
     for i in np.flatnonzero(entry >= 0):
         s = _canonical({k: cols[k][i] for k in cols})
-        s["bend_dir"] = float(rng.uniform(*s.pop("bend_bin")))
-        if s["combo"][0] == "book":
-            sc = P.geometry.scene
-            s["bend_dir"] = float(rng.uniform(-sc.book_bend_deg, sc.book_bend_deg))
-            s["along_long"] = bool(rng.random() < sc.book_along_long_prob)
+        book = s["combo"][0] == "book"
+        b = np.interp(s.pop("bend_bin"), t, F)
+        s["bend_dir"] = float(np.interp(rng.uniform(*((0.0, 1.0) if book else b)), F, t))
+        if book:
+            s["along_long"] = False
+        if opened[i]:
+            s["font_bin"] = open_fonts[fonts.index(s["font_bin"])]
         s["entry"] = int(entry[i])
         specs.append(s)
     return specs

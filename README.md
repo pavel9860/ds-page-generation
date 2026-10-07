@@ -40,7 +40,7 @@ present. `--preview` writes `.jpg` previews to `OUT_preview/` (off by default). 
 
 | file | arrays |
 |---|---|
-| `samples/<i>.npz` | `flat` sheet, `warped` photo (luminance uint8, h × w), `uv` page coords in [0, 1] (float32, page grid, NaN off the page), `xyz` X, Y, Z [mm] at those coords (float32), `mask` photo pixels on the page (bool) |
+| `samples/<i>.npz` | `flat` sheet, `warped` photo (luminance uint8, h × w), `grid2d` (2, Hg, Wg) photo x, y of each page grid node in [-1, 1], align_corners=True (float32, the grid_sample grid; no NaNs), `grid3d` (3, Hg, Wg) X, Y, Z [mm] of each node on the surface (float32), `mask` photo pixels on the page (bool) |
 | `layouts/<i>.npz` | `page` sheet luminance uint8, `gray` clean sheet uint8 (`layout` only) |
 | `geometry/<i>.npz` | `X, Y, Z` page grid [mm] float32, rows down the sheet, table at z = 0 (`geometry` only) |
 

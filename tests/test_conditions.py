@@ -18,6 +18,7 @@ def test_plan_marginals_exact(full_small):
     w = np.array([p for _, p in f["combo"]])
     for (c, p), m in zip(f["combo"], w / w.sum()):
         assert abs(combos[c] - n * m) < 1
+    assert all(man[s["entry"]]["kind"] == "refont" for s in specs if s["combo"][0] == "open")
     for s in specs:
         assert s["combo"][3] or s["deep"] in ("", "light")
         assert not s["combo"][3] or (not s["two"] and not s["flat"] and s["deep"])
@@ -41,9 +42,13 @@ def test_pages_are_never_repeated_and_stay_in_their_script_group(full_small):
 def test_layout_bins_cover_the_config_ranges(full_small):
     specs = plan(full_small, 60, 2, fake_manifest())
     c = full_small.layout
-    for key, (lo, hi) in (("font_bin", c.font_pt), ("scale_bin", c.role_scale)):
-        got = Counter(s[key] for s in specs)
+    shift = c.open_font_pt[0] - c.font_pt[0]
+    fonts = [tuple(v - shift for v in s["font_bin"]) if s["combo"][0] == "open" else s["font_bin"] for s in specs]
+    assert all(c.open_font_pt[0] <= s["font_bin"][0] for s in specs if s["combo"][0] == "open")
+    for got, (lo, hi) in ((Counter(fonts), c.font_pt), (Counter(s["scale_bin"] for s in specs), c.role_scale)):
         assert min(a for a, _ in got) == lo and max(b for _, b in got) == hi and max(got.values()) - min(got.values()) <= 1
+
+
 def test_unknown_uses_all(full_small):
     man = fake_manifest()
     specs = plan(full_small, 300, 3, man)

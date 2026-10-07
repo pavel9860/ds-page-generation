@@ -17,10 +17,18 @@ from uv_check import TILE, WINDOW
 from viz import back_map
 
 
-def round_trip(warped, uv, page_hw):
-    """-> (RMSE 0..255, RMS tile shift px) of the warped image against itself mapped to the flat and back."""
-    ph, pw = page_hw
-    back = np.nan_to_num(back_map(warped, uv, page_hw), nan=0.0)
+def _scattered(src, dst, hw):
+    """dst values at the src points interpolated onto the pixels of an hw grid (NaN outside their hull)."""
+    from scipy.interpolate import griddata
+    gy, gx = np.mgrid[0:hw[0], 0:hw[1]]
+    return griddata(src, dst, (gx, gy), method="linear").astype(np.float32)
+
+
+def round_trip(warped, back, uv):
+    """back: the flat page mapped from warped; uv: page coordinates in [0, 1] of each warped pixel (NaN off the page).
+    -> (RMSE 0..255, RMS tile shift px) of the warped image against itself mapped to the flat and back."""
+    ph, pw = back.shape
+    back = np.nan_to_num(back, nan=0.0)
     full = cv2.resize(np.nan_to_num(uv, nan=-1.0), warped.shape[1::-1], interpolation=cv2.INTER_LINEAR)
     ok = cv2.resize(np.isfinite(uv[..., 0]).astype(np.uint8), warped.shape[1::-1], interpolation=cv2.INTER_NEAREST)
     ok = cv2.erode(ok, np.ones((5, 5), np.uint8)) > 0
@@ -39,7 +47,12 @@ def round_trip(warped, uv, page_hw):
 
 def ours(path):
     a, _ = io.load(path)
-    return round_trip(a["warped"], a["uv"].astype(np.float32), a["flat"].shape)
+    g = a["grid2d"].astype(np.float32)
+    h, w = a["warped"].shape
+    u, v = np.meshgrid(np.linspace(0, 1, g.shape[2]), np.linspace(0, 1, g.shape[1]))
+    src = np.stack([(g[0] + 1) * 0.5 * (w - 1), (g[1] + 1) * 0.5 * (h - 1)], -1).reshape(-1, 2)
+    uv = _scattered(src, np.stack([u, v], -1).reshape(-1, 2), (h, w))
+    return round_trip(a["warped"], back_map(a["warped"], g, a["flat"].shape), uv)
 
 
 def uvdoc(args):
@@ -50,7 +63,14 @@ def uvdoc(args):
     with h5py.File(root / "uvmap" / f"{m['geom_name']}.mat") as f:
         uv = np.array(f["uv"]).transpose(2, 1, 0).astype(np.float32)
     uv = cv2.resize(uv, (uv.shape[1] * 300 // uv.shape[0], 300), interpolation=cv2.INTER_NEAREST)
-    return round_trip(w, uv, w.shape)
+    ok = np.isfinite(uv[..., 0])
+    ys, xs = np.nonzero(ok)
+    src = np.stack([uv[ok, 0] * (w.shape[1] - 1), uv[ok, 1] * (w.shape[0] - 1)], -1)
+    dst = np.stack([(xs + 0.5) * w.shape[1] / uv.shape[1] - 0.5, (ys + 0.5) * w.shape[0] / uv.shape[0] - 0.5], -1)
+    m = _scattered(src, dst, w.shape)
+    back = cv2.remap(w.astype(np.float32), m[..., 0], m[..., 1], cv2.INTER_LINEAR, borderValue=np.nan)
+    back[~np.isfinite(m[..., 0])] = np.nan
+    return round_trip(w, back, uv)
 
 
 def summary(rows):

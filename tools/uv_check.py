@@ -24,7 +24,7 @@ def check(path):
     a, _ = io.load(path)
     flat = a["flat"].astype(np.float32)
     page_hw = flat.shape
-    back = back_map(a["warped"], a["uv"].astype(np.float32), page_hw)
+    back = back_map(a["warped"], a["grid2d"].astype(np.float32), page_hw)
     ok = np.isfinite(back)
     f, b = flat[ok], back[ok]
     A = np.c_[b, np.ones_like(b)]

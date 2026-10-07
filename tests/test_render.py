@@ -38,17 +38,15 @@ def test_samples_in_frame_readable_consistent(name, demo, full_small):
     P = demo if name == "demo" else full_small
     P = replace(P, geometry=replace(P.geometry, mesh=(64, 90), n_slices=3))
     for page, surf, o in _samples(P, 6):
-        mask, uv = o["mask"], o["uv"].astype(np.float32)
+        mask, g2 = o["mask"], o["grid2d"]
         h, w = mask.shape
         assert mask.any() and not (mask[0].any() or mask[-1].any() or mask[:, 0].any() or mask[:, -1].any())
-        ok = np.isfinite(uv[..., 0])
-        assert ok.any() and uv[ok].min() >= -1e-3 and uv[ok].max() <= 1 + 1e-3
-        corners = np.array([[0.02, 0.02], [0.98, 0.02], [0.02, 0.98], [0.98, 0.98]])
-        d = np.linalg.norm(uv[ok][:, None, :] - corners[None], axis=-1).min(0)
-        assert d.max() < 0.05
+        assert np.isfinite(g2).all() and np.abs(g2).max() < 1
+        x, y = np.rint((g2 + 1) * 0.5 * np.array([w - 1, h - 1])[:, None, None]).astype(int)
+        assert mask[y[1:-1, 1:-1], x[1:-1, 1:-1]].mean() > 0.99
         view = o["meta"]["view"]
         assert view["max_incidence_deg"] <= P.render.camera.incidence_deg + 1e-6
-        assert o["map3d"].shape == o["uv"].shape[:2] + (3,)
+        assert o["grid3d"].shape == (3,) + g2.shape[1:] == (3,) + surf["X"].shape
         assert o["flat"].shape == o["warped"].shape
         if name == "demo":
             assert abs(o["warped"][mask].mean() - page.mean()) < 20

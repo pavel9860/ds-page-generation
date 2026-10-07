@@ -30,21 +30,22 @@ def paper_props(p: PaperCfg, gsm):
 
 @dataclass(frozen=True)
 class SceneCfg:
-    combos: tuple = (                               # (clamp, n_supports, folds, crumple): weight; clamp "book":
+    combos: tuple = (                               # (clamp, n_supports, folds, crumple): weight; clamp "book",
+                                                    # "open":
         ((False, 0, True, False), 0.16),
         ((False, 1, False, False), 0.09), ((False, 2, False, False), 0.09), ((False, 3, False, False), 0.05),
         ((False, 1, True, False), 0.09), ((False, 2, True, False), 0.09), ((False, 3, True, False), 0.04),
         ((True, 0, False, False), 0.09), ((True, 1, False, False), 0.05), ((True, 2, False, False), 0.03),
         ((True, 0, True, False), 0.06), ((True, 1, True, False), 0.04),
         ((False, 0, False, True), 0.0463),            # crumple
-        (("book", 0, False, False), 0.3288))          # book page: 25% of all
+        (("book", 0, False, False), 0.3288),          # book page: 24% of all
+        (("open", 2, True, False), 0.1395))           # open book: 10% of all
     book_deg: tuple = (10.0, 45.0)                  # book page: spine edge angle; the rest lies on a plane of
     book_h: tuple = (0.0, 0.040)                    # height book_h (<= book_reach of the rise to it) from
     book_plane: tuple = (0.4, 0.8)                  # book_plane of the length on
     book_reach: float = 0.8
-    book_bend_deg: float = 15.0                     # book page: bend direction within +-book_bend_deg of a page axis
-    book_along_long_prob: float = 1 / 3             # profile along the long axis (bend lines across it): 1/3,
-                                                    # bend lines along the long axis (spine on the long side): 2/3
+    open_h: tuple = (0.0, 0.040)                    # open book: valley fold in the middle, a support line at each
+                                                    # side of this height, drawn apart for the two sides
     clamp_deg: tuple = (5.0, 35.0)
     clamp_free_len: float = 0.03
     support_edge: float = 0.05
@@ -119,7 +120,8 @@ class GeometryCfg:
     two_profile_prob: float = 0.5
     n_slices: int = 9
     along_long_prob: float = 0.5
-    bend_dir_deg: float = 45.0
+    bend_dir_deg: float = 45.0                      # bend direction within +-bend_dir_deg of a page axis, density
+    bend_floor: float = 0.3                         # cos(2 dir) + bend_floor; book pages: spine on the long side
     support_frac: tuple = (0.2, 1.0)
     shell_nodes: tuple = (21, 29)
     view_tries: int = 5                             # surfaces drawn until one has a possible camera view (CameraCfg)
@@ -312,6 +314,7 @@ class LayoutCfg:
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
     grid: GridCfg = GridCfg()
     font_pt: tuple = (10.0, 16.0)                   # body text of a restyled PDF page
+    open_font_pt: tuple = (12.0, 18.0)              # on an open book (restyled pages only)
     role_scale: tuple = (0.6, 1.5)                  # its other sizes (headings, notes) relative to the source ratio
     noise_scale: tuple = (0.6, 1.5)                 # factor of the paper and photo noise feature sizes, one per page
     paper_tone: tuple = (0.88, 0.97)                # paper reflectance
