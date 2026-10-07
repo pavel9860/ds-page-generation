@@ -9,14 +9,10 @@ sample at generation): source_path, page_index, language, category. Rejected pag
 python -m dspages.prep.manifest --out <paths.manifest>
 """
 import argparse
-import glob
 import json
-import math
-import os
-import re
 import time
 import zlib
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -147,80 +143,80 @@ def _job_image(args):
 
 
 # ---------------------------------------------------------------------------
-# source files
+# target selection
 # ---------------------------------------------------------------------------
 
-DIGITAL = ("books_pdf", "bureaucracy", "corpus_add/pdf", "exams", "other_docs", "scientific_paper")  # restyled
-RASTER = ("certificates", "corpus_add/Images")                                                       # as images
 BOOKS = "books_pdf"
 
 
-def _language(path):
-    """Language code of a file named <hash>_<topic>_<code>[_p<page>].<ext>."""
-    code = re.sub(r"_p\d+$", "", os.path.splitext(os.path.basename(path))[0]).rsplit("_", 1)[-1]
-    return code if re.fullmatch(r"[a-z]{2,3}", code) else "unknown"
+def _water(total, sizes):
+    """Equal shares of total between the keys of sizes, a key with less than its share giving the rest to the others."""
+    out = {}
+    for i, (k, size) in enumerate(sorted(sizes.items(), key=lambda kv: kv[1])):
+        out[k] = min(size, total // (len(sizes) - i))
+        total -= out[k]
+    return out
 
 
-def list_files(path):
-    """The source files (path, language, category, digital) of the listing file, made when missing."""
-    if not os.path.exists(path):
-        rows = [dict(path=p, language=_language(p), category=sub.split("/")[0], digital=digital and p.lower().endswith(".pdf"))
-                for subs, digital in ((DIGITAL, True), (RASTER, False)) for sub in subs
-                for p in sorted(glob.glob(os.path.join(LAYOUTS, sub, "**", "*"), recursive=True))
-                if p.lower().endswith((".pdf", ".png", ".jpg", ".jpeg"))]
-        with open(path, "w", encoding="utf-8") as f:
-            f.writelines(json.dumps(r) + "\n" for r in rows)
-    with open(path, encoding="utf-8") as f:
-        return [json.loads(line) for line in f]
+def _pages(files):
+    return sum(f["cap"] for f in files)
 
 
-# ---------------------------------------------------------------------------
-# driver
-# ---------------------------------------------------------------------------
+def _take(files, n):
+    """Files popped from the list with the pages they give, n pages together."""
+    taken = []
+    while n > 0 and files:
+        f = files.pop()
+        taken.append(dict(f, cap=min(f["cap"], n)))
+        n -= taken[-1]["cap"]
+    return taken
+
+
+def _allocate(tree, need):
+    """The files of a round with their pages: each script group's need split equally between its languages, a language's
+    between its topics, a topic's over its files."""
+    batch = []
+    for g, langs in tree.items():
+        by_lang = {l: sum(_pages(fs) for fs in topics.values()) for l, topics in langs.items()}
+        for l, n in _water(need[g], by_lang).items():
+            for t, m in _water(n, {t: _pages(fs) for t, fs in langs[l].items()}).items():
+                batch += _take(langs[l][t], m)
+    return batch
+
+
+def _tree(files, c, quota):
+    """script group -> language -> topic -> files in random order, each with the pages it may give: pages_per_pdf, a
+    book its doc_share of its group's quota, an image one."""
+    tree = {g: defaultdict(lambda: defaultdict(list)) for g, _ in c.script_mix}
+    for i in np.random.default_rng(0).permutation(len(files)):
+        f = files[i]
+        g = script(f, c.scripts)
+        cap = max(c.pages_per_pdf, round(c.doc_share * quota[g])) if f["category"] == BOOKS else c.pages_per_pdf
+        tree[g][f["language"]][f["topic"]].append(dict(f, cap=min(cap, f["pages"])))
+    return tree
+
 
 def _run(row):
     fn = _job_pdf if row["path"].lower().endswith(".pdf") else _job_image
     return fn((row["path"], row["language"], row["category"], row["digital"], row["cap"]))
 
 
-def _batch(queue, group, got, quota):
-    """The files of one round, each with the pages it may give: every language of a script group with files left asks
-    for what it lacks to an equal share of the group's quota (a language without files leaves its share to the others)."""
-    c = _LAYOUT
-    batch = []
-    for g, q in quota.items():
-        langs = [l for l in queue if group[l] == g and queue[l]]
-        for l in langs:
-            lack, used = q / len(langs) - got[l], 0
-            for f in queue[l]:
-                if lack <= 0:
-                    break
-                cap = max(c.pages_per_pdf, round(c.doc_share * q)) if f["category"] == BOOKS else c.pages_per_pdf
-                batch.append(dict(f, cap=min(cap, math.ceil(lack))))
-                lack -= batch[-1]["cap"]
-                used += 1
-            queue[l] = queue[l][used:]
-    return batch
-
-
 def main(out_path, workers, pages=None):
-    """Pages by the targets: each script group gets its share of `pages`, split equally between its languages. A
-    language's files are taken in random order, pages_per_pdf pages of each (a book: its share of the group), a round
-    after another until the shares are met. A page is taken once, restyled or not."""
+    """Pages by the targets: each script group gets its share of `pages`, split equally between its languages and each
+    language between its topics (a language or topic short of files leaves its share to the others). The listing gives
+    the files; a round after another takes pages_per_pdf of each until the quotas are met. A page is taken once,
+    restyled or not."""
     c = _LAYOUT
-    files = list_files(Paths().files)
     quota = {g: round((pages or c.manifest_pages) * w) for g, w in c.script_mix}
-    group = {f["language"]: script(f, c.scripts) for f in files}
-    queue = {l: [] for l in group}
-    for i in np.random.default_rng(0).permutation(len(files)):
-        queue[files[i]["language"]].append(files[i])
+    with open(Paths().files, encoding="utf-8") as f:
+        tree = _tree([json.loads(line) for line in f], c, quota)
     got, recs, rejected, t0 = Counter(), [], [], time.time()
     with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
-        while batch := _batch(queue, group, got, quota):
+        while batch := _allocate(tree, {g: max(q - got[g], 0) for g, q in quota.items()}):
             for rs in pool.map(_run, batch, chunksize=1):
                 for r in rs:
                     (rejected if r["kind"] == "rejected" else recs).append(r)
-                    got[r["language"]] += r["kind"] != "rejected"
+                    got[script(r, c.scripts)] += r["kind"] != "rejected"
             print(f"entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
@@ -228,7 +224,7 @@ def main(out_path, workers, pages=None):
     with open(Path(out_path).with_suffix(".rejected.jsonl"), "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r) + "\n" for r in rejected)
     print(f"TOTAL {len(recs)} entries, {len(rejected)} rejected, wall={time.time() - t0:.0f}s", flush=True)
-    print("per language:", dict(got), "quota:", quota, flush=True)
+    print("per script group:", dict(got), "quota:", quota, flush=True)
 
 
 if __name__ == "__main__":
