@@ -4,8 +4,8 @@ Unknowns y = (phi_0 .. phi_{n-1}, z_0): segment angles and the height of node 0;
     E = sum_j D_j / (2h) (dphi_j - h kbar_j)^2 + sum_j w_j z_j
 Bending stiffness D = d, except at a fold (s, theta, k): a hinge of stiffness k h and rest jump theta
 (theta > 0 valley). Gravity node weights w are trapezoidal. Obstacles: every node z_j >= 0 (table) and every
-support z(s_i) >= h_i, linear between the two nodes around s_i; with base (s_p, H) nodes at s >= s_p stay on or
-above a plane at height H instead of the table. A clamp holds z_0 = 0 and the tangent theta0
+support z(s_i) >= h_i, linear between the two nodes around s_i; with base [(s0, s1, H)] nodes at s0 <= s <= s1 stay
+on or above a plane at height H instead of the table. A clamp holds z_0 = 0 and the tangent theta0
 at s = 0 through a half-segment joint.
 Solved by SQP: each step is a convex QP (quadprog) over all obstacle inequalities, so contacts open and close
 inside the step. The gravity curvature enters the QP Hessian with its absolute value (a descent direction far
@@ -55,7 +55,7 @@ def _rest(folds, b, h, n, clamp):
     return y
 
 
-def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150, y0=None, base=None):
+def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150, y0=None, base=()):
     """folds [(s, theta, k)], supports [(s, h)], clamp: edge tangent angle or None; y0: start state (a nearby
     solution), else the rigid rest. -> s, x, z node arrays and the state y."""
     h = length / n
@@ -70,6 +70,11 @@ def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150, y0=None,
     sh = np.array([hh for _, hh in supports])
     for j, w_, hh in zip(sj, sw, sh):
         b[j + (w_ >= 0.5)] = max(b[j + (w_ >= 0.5)], hh)
+    sn = h * np.arange(n + 1)
+    floor = np.zeros(n + 1)
+    for s0, s1, H in base:
+        floor[(sn >= s0) & (sn <= s1)] = H
+    b = np.maximum(b, floor)
     y = _rest(folds, b, h, n, clamp) if y0 is None else y0.copy()
 
     free = np.arange(1 if clamp is not None else 0, n + 1)
@@ -93,7 +98,7 @@ def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150, y0=None,
     rows[nf + np.arange(len(sj)), sj] = 1 - sw
     rows[nf + np.arange(len(sj)), sj + 1] = sw
     B = rows[:, 1:][:, ::-1].cumsum(1)[:, ::-1]   # d(row) / d(sin phi_i) / h: weight of nodes beyond segment i
-    bound = np.concatenate([np.where(free * h >= base[0], base[1], 0.0) if base else np.zeros(nf), sh])
+    bound = np.concatenate([floor[free], sh])
     lam = np.zeros(m)
     Ct = np.zeros((n + 1, len(E) + m))
     Ct[:, :len(E)] = E.T

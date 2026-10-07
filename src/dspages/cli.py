@@ -3,7 +3,7 @@
 plan      DIR/plan.jsonl: n stratified sample specs (written by the other commands too when missing)
 layout    DIR/layouts/<i>.npz   page (sheet luminance), gray (clean sheet)
 geometry  DIR/geometry/<i>.npz  X, Y, Z [mm] page grid
-render    DIR/samples/<i>.npz   flat, warped, grid2d, grid3d, mask (no metadata); reads layouts/ and geometry/ of the same index
+render    DIR/samples/<i>.npz   flat, warped, albedo, grid2d, grid3d, mask (no metadata); reads layouts/ and geometry/ of the same index
           when present, else makes them in memory; DIR/meta.jsonl: one row per sample, the render metadata and its
           layout's (source page, window, fill, fonts, effects)
 all       the samples only: layout and geometry of each made in memory, not saved (the dataset run)
@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from . import io
-from .conditions import geometry_cond, layout_preset, plan, view_preset
+from .conditions import geometry_cond, plan, sample_preset
 from .config import get_preset
 from .geometry.surface import make_surface
 from .layout.generate import make_layout
@@ -79,14 +79,14 @@ def _shown(part, i, what):
 def _layout(i, save):
     spec = _W["plan"][i]
     L = make_layout(_rng(i, "layout"), _W["manifest"][spec["entry"]],
-                    layout_preset(_W["P"], spec), _W["fonts"])
+                    sample_preset(_W["P"], spec), _W["fonts"], spec["combo"][0] == "open")
     if save:
         io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], *_shown("layout", i, L["page"]))
     return L["page"], L["meta"]
 
 
 def _geometry(i, save):
-    P = _W["P"]
+    P = sample_preset(_W["P"], _W["plan"][i])
     s = make_surface(_rng(i, "geometry"), P.geometry, P.paper, geometry_cond(_W["plan"][i]), P.render.camera)
     surf = {k: s[k].astype(np.float32) for k in ("X", "Y", "Z")}
     if save:
@@ -108,8 +108,8 @@ def _render(i, saved, dt):
     dt["layout"], t = time.time() - t, time.time()
     surf = io.load(gp)[0] if saved and gp.exists() else _geometry(i, False)
     dt["geometry"], t = time.time() - t, time.time()
-    o = make_sample(_rng(i, "render"), page, surf, view_preset(_W["P"], _W["plan"][i]))
-    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "grid2d", "grid3d", "mask")}, None, *_shown("render", i, o))
+    o = make_sample(_rng(i, "render"), page, surf, sample_preset(_W["P"], _W["plan"][i]))
+    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "albedo", "grid2d", "grid3d", "mask")}, None, *_shown("render", i, o))
     dt["render"] = time.time() - t
     return dict(sample=f"{i:07d}", **o["meta"], layout=lmeta)
 

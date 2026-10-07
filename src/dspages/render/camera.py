@@ -86,7 +86,7 @@ def _nearest(dirs, target, P, N, cos_max, cap, first):
 
 def views(P, N, c: CameraCfg, offset, first=False):
     """The possible views of a page grid (P, N: (nv, nu, 3) points [mm] and unit normals): view_dirs directions spread
-    evenly over the tilts an offset of offset x the page size allows from dist_mm[0], overhead first, each with its
+    evenly over the tilts (up to max_tilt_deg) an offset of offset x the page size allows from dist_mm[0], overhead first, each with its
     distances [lo, hi] in dist_mm where every view_step-th node of the grid is seen within incidence_deg of its normal and
     the camera's horizontal offset from the page centre stays within the offset. first: only up to the first possible
     direction. -> target, dirs (m, 3), tilts, azimuths, lo, hi (lo > hi: the direction is not possible)."""
@@ -94,7 +94,7 @@ def views(P, N, c: CameraCfg, offset, first=False):
     reach = offset * float(max(np.ptp(P[..., 0]), np.ptp(P[..., 1])))
     k = np.arange(c.view_dirs)
     azs = k * np.pi * (3 - np.sqrt(5))
-    tilts = np.arcsin(min(1.0, reach / c.dist_mm[0])) * np.sqrt((k + 0.5) / c.view_dirs)
+    tilts = min(np.arcsin(min(1.0, reach / c.dist_mm[0])), np.radians(c.max_tilt_deg)) * np.sqrt((k + 0.5) / c.view_dirs)
     dirs = np.stack([np.sin(tilts) * np.cos(azs), np.sin(tilts) * np.sin(azs), np.cos(tilts)], -1)
     hi = np.minimum(c.dist_mm[1], reach / np.maximum(np.sin(tilts), 1e-9))
     s = c.view_step

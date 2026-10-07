@@ -12,8 +12,9 @@ def test_plan_marginals_exact(full_small):
     specs = plan(full_small, n, 0, man)
     assert len(specs) == n
     f = factors(full_small)
-    gsm = Counter(s["gsm"] for s in specs)
-    assert set(gsm.values()) == {n // len(f["gsm"])}
+    gsm = Counter(s["gsm"] for s in specs if s["combo"][0] != "open")
+    assert max(gsm.values()) - min(gsm.values()) <= 0.1 * n / len(f["gsm"])
+    assert all(full_small.paper.open_gsm[0] <= s["gsm"] <= full_small.paper.open_gsm[1] for s in specs if s["combo"][0] == "open")
     combos = Counter(s["combo"] for s in specs)
     w = np.array([p for _, p in f["combo"]])
     for (c, p), m in zip(f["combo"], w / w.sum()):

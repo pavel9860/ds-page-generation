@@ -16,6 +16,7 @@ class Paths:
 @dataclass(frozen=True)
 class PaperCfg:
     gsm: tuple = (50, 60, 80, 100, 120)             # paper types, g/m2, drawn uniformly
+    open_gsm: tuple = (50.0, 70.0)                  # open book pages, g/m2, uniform
     ref_gsm: float = 80.0
     ref_bending: float = 0.688e-3                   # N m, at ref_gsm; bending ~ thickness^3 ~ gsm^3
     ref_membrane: float = 4.0e5                     # N/m, at ref_gsm; membrane ~ gsm
@@ -39,13 +40,15 @@ class SceneCfg:
         ((True, 0, True, False), 0.06), ((True, 1, True, False), 0.04),
         ((False, 0, False, True), 0.0463),            # crumple
         (("book", 0, False, False), 0.3288),          # book page: 24% of all
-        (("open", 2, True, False), 0.1395))           # open book: 10% of all
+        (("open", 0, False, False), 0.1395))          # open book: 10% of all
     book_deg: tuple = (10.0, 45.0)                  # book page: spine edge angle; the rest lies on a plane of
     book_h: tuple = (0.0, 0.040)                    # height book_h (<= book_reach of the rise to it) from
     book_plane: tuple = (0.4, 0.8)                  # book_plane of the length on
     book_reach: float = 0.8
-    open_h: tuple = (0.0, 0.040)                    # open book: valley fold in the middle, a support line at each
-                                                    # side of this height, drawn apart for the two sides
+    open_deg: tuple = (10.0, 60.0)                  # open book: each half a book page from the spine (its angle there,
+    open_h: tuple = (0.0, 0.020)                    # its page block of height open_h beyond open_plane of the half),
+    open_plane: tuple = (0.3, 0.9)                  # drawn apart for the two halves; the angle at end b within
+    open_side_b_deg: float = 20.0                   # open_side_b_deg of end a's
     clamp_deg: tuple = (5.0, 35.0)
     clamp_free_len: float = 0.03
     support_edge: float = 0.05
@@ -184,7 +187,7 @@ class RefontCfg:
     edge_bin: int = 3
     edge_lines: int = 3
     split_em: float = 1.6
-    fit_floor: float = 0.4
+    fit_floor: float = 1.0                          # no shrink: the body stays at font_pt
     max_stretch: float = 3.0
     ragged_lines: int = 5
     ragged_percentile: float = 0.9
@@ -235,7 +238,7 @@ class RefontCfg:
     right_share: float = 0.5                        # widest share of its column a right-flush one-line block covers
     leading_max: float = 1.3                        # most a short frame spreads its lines to fill itself
     grow_max: float = 2.0                           # most a size class grows to fill its frames
-    fill_share: float = 0.97                        # frames filled less than this are grown
+    fill_share: float = 0.0                         # frames filled less than this are grown (0: never, the body stays at font_pt)
     letter_em: float = 1.5                          # a drawing no larger than this many line heights, inside a line, is a letter
     letter_cover: float = 0.3                       # share of a span the letter drawings cover that makes it bold
     contain_share: float = 0.5                      # share of a block inside another one that makes the other hold it
@@ -339,6 +342,7 @@ class CameraCfg:
     max_offset: float = 0.3                         # camera's horizontal offset from the page centre / page size
     side_offset: float = 0.5                        # the offset allowed when no view within max_offset sees all the page
     shift: float = 0.3                              # page centre offset, fraction of the free space
+    max_tilt_deg: float = 20.0                      # view direction to the table normal
     incidence_deg: float = 65.0                     # max view angle to the surface normal, anywhere on the page
     view_dirs: int = 256                            # view directions spread evenly over the tilts the offsets allow
     view_step: int = 4                              # the views are worked out on every 4th node of the page grid

@@ -47,10 +47,15 @@ def test_scene_feasibility(full_small):
                 if prev:
                     assert abs(h - prev[1]) <= c.reach_slope * (p - prev[0]) + 1e-12
                 prev = (p, h)
+            for hf in sc["halves"] or ():
+                assert c.open_deg[0] - 1e-6 <= np.degrees(hf["clamp"]) <= c.open_deg[1] + 1e-6
+                assert all(H <= c.book_reach * s0 * np.sin(hf["clamp"]) + 1e-12 and s1 == L / 2 for s0, s1, H in hf["base"])
             if sc["folds"]:
                 total = np.degrees((sc["clamp"] or 0) + sum(abs(t) for _, t, _ in sc["folds"]))
                 assert total <= (c.fold_total_deg_supported if sc["supports"] else c.fold_total_deg) + 1e-6
                 assert all(abs(np.degrees(t)) <= c.fold_angle_deg[1] + 1e-6 for _, t, _ in sc["folds"])
+        if sa["halves"]:
+            assert all(abs(ha["clamp"] - hb["clamp"]) <= np.radians(c.open_side_b_deg) + 1e-9 for ha, hb in zip(sa["halves"], sb["halves"]))
         for f in sa["folds"]:
             assert all(f[0] <= min(a, b) - c.fold_min_gap + 1e-12 or f[0] >= max(a, b) + c.fold_min_gap - 1e-12
                        for (a, _), (b, _) in zip(sa["supports"], sb["supports"]))

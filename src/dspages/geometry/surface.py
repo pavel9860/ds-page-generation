@@ -95,6 +95,15 @@ def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
     return 1e-3 * h, (np.arange(h.shape[0]) * pitch * 1e-3, np.arange(h.shape[1]) * pitch * 1e-3), lines
 
 
+def _open_book(length, pp, n, halves, y):
+    """An open book's profile: each half solved from the spine in the middle out (clamped there), the first one mirrored.
+    y: the halves' states (None: rest). -> s, x, z, states."""
+    (sl, xl, zl, yl), (sr, xr, zr, yr) = (solve_strip(0.5 * length, pp["q"], pp["bending"], (), (), hf["clamp"], n, y0,
+                                                      hf["base"]) for hf, y0 in zip(halves, y or (None, None)))
+    return (np.r_[0.5 * length - sl[::-1], 0.5 * length + sr[1:]], np.r_[xl[-1] - xl[::-1], xl[-1] + xr[1:]],
+            np.r_[zl[::-1], zr[1:]], (yl, yr))
+
+
 def make_surface(rng, g: GeometryCfg, paper, cond, camera=None):
     """make_page drawn again (up to view_tries) until a camera view of it is possible (camera: CameraCfg; None: once)."""
     for _ in range(g.view_tries if camera is not None else 1):
@@ -137,8 +146,11 @@ def make_page(rng, g: GeometryCfg, paper, cond):
     slices, y = [], None
     for tk in t:
         sc = lerp_scene(sa, sb, tk)
-        s, x, z, y = solve_strip(lp, pp["q"], pp["bending"], sc["folds"], sc["supports"], sc["clamp"],
-                                 g.strip_segments, y, sc["base"])
+        if sc["halves"]:
+            s, x, z, y = _open_book(lp, pp, g.strip_segments // 2, sc["halves"], y)
+        else:
+            s, x, z, y = solve_strip(lp, pp["q"], pp["bending"], sc["folds"], sc["supports"], sc["clamp"],
+                                     g.strip_segments, y, sc["base"])
         slices.append((np.interp(up, s, x), np.interp(up, s, z)))
     k = np.clip(np.searchsorted(t, vg / wg, side="right") - 1, 0, max(len(t) - 2, 0))
     wt = ((vg / wg - t[k]) / (t[min(1, len(t) - 1)] - t[0] or 1.0))[:, None]

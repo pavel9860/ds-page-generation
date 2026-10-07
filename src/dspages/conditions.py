@@ -103,7 +103,7 @@ def entry_pools(P: Preset, manifest):
 def plan(P: Preset, n, seed, manifest):
     """Up to n sample specs with exact factor marginals, script groups included. Groups of use_all take all their
     pages; script_mix shares the rest of n. Pages are never repeated: a group short of pages stays under its quota,
-    its samples dropped. Open books take restyled pages only, set in open_font_pt: a group short of them trades its open
+    its samples dropped. Open books (a landscape spread, the spine across the width) take restyled pages only, set in open_font_pt: a group short of them trades its open
     combos for other combos of groups with restyled pages to spare. Book pages bend with the spine on
     the long side (bend direction over the whole range)."""
     rng = np.random.default_rng(seed)
@@ -138,8 +138,11 @@ def plan(P: Preset, n, seed, manifest):
         book = s["combo"][0] == "book"
         b = np.interp(s.pop("bend_bin"), t, F)
         s["bend_dir"] = float(np.interp(rng.uniform(*((0.0, 1.0) if book else b)), F, t))
-        if book:
+        if book or opened[i]:
             s["along_long"] = False
+        if opened[i]:
+            s["bend_dir"] = 0.0
+            s["gsm"] = float(rng.uniform(*P.paper.open_gsm))
         if opened[i]:
             s["font_bin"] = open_fonts[fonts.index(s["font_bin"])]
         s["entry"] = int(entry[i])
@@ -151,12 +154,11 @@ def geometry_cond(spec):
     return {k: spec[k] for k in ("combo", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
 
 
-def view_preset(P: Preset, spec):
-    """The preset with the light of the spec."""
-    r = P.render
-    return replace(P, render=replace(r, light=replace(r.light, sharp_prob=float(spec["sharp"]))))
-
-
-def layout_preset(P: Preset, spec):
-    return replace(P, layout=replace(P.layout, margin_frac=spec["margin_bin"], font_pt=spec["font_bin"],
-                                     role_scale=spec["scale_bin"]))
+def sample_preset(P: Preset, spec):
+    """The preset of a sample: its light and layout bins; an open book on the sheet turned landscape (two pages)."""
+    r, c, g = P.render, P.layout, P.geometry
+    flip = (lambda t: t[::-1]) if spec["combo"][0] == "open" else (lambda t: t)
+    return replace(P, render=replace(r, light=replace(r.light, sharp_prob=float(spec["sharp"]))),
+                   layout=replace(c, margin_frac=spec["margin_bin"], font_pt=spec["font_bin"], role_scale=spec["scale_bin"],
+                                  sheet_mm=flip(c.sheet_mm), page_px=flip(c.page_px)),
+                   geometry=replace(g, sheet_mm=flip(g.sheet_mm), mesh=flip(g.mesh)))

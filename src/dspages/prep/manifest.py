@@ -3,7 +3,8 @@
 Raster fields: source_path, page_index, language, category, kind, rotate90, deskew_deg, used_h, used_w (raster
 size), window (x, y, w, h in page px: the window that passed the checks), margin, pictures, fill, picture_share.
 Restyled pages (kind "refont": pages of text set in the PDF, set again in other fonts, sizes and margins drawn per
-sample at generation): source_path, page_index, language, category. Rejected pages (and the check they failed) go to
+sample at generation, their sheet filled to min_fill, else rasterized): source_path, page_index, language, category,
+fill. Rejected pages (and the check they failed) go to
 <out>.rejected.jsonl.
 
 python -m dspages.prep.manifest --out <paths.manifest>
@@ -22,7 +23,7 @@ import pymupdf as fitz
 
 from ..conditions import script
 from ..config import Paths, get_preset
-from ..layout.content import bbox, content_mask, place_window, window_limits
+from ..layout.content import bbox, content_mask, place_window, window_limits, window_stats
 from ..layout import refont
 from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90
 from ..layout.pictures import picture_mask, pictures
@@ -107,6 +108,17 @@ def _bbox_keep(b, h, w):
             and 1 - (y1 - y0 + 1) / h <= _LAYOUT.max_blank_margin and 1 - (x1 - x0 + 1) / w <= _LAYOUT.max_blank_margin)
 
 
+def _restyled_fill(gray, box, z):
+    """Fill of the sheet a restyled page makes (layout.generate.sheet_fill): its content box (pt) width-fitted and
+    top-aligned on a window of the sheet's aspect, measured on gray (z px per pt)."""
+    pw, ph = _LAYOUT.page_px
+    w = max(box.width, box.height * pw / ph)
+    win = ((box.x0 + box.x1 - w) / 2 * z, box.y0 * z, w * z, w * ph / pw * z)
+    mask, s = content_mask(gray)
+    ink = cv2.integral(mask.astype(np.uint8)).astype(np.int64)
+    return float(window_stats(ink, np.zeros_like(ink), s, [win], _LAYOUT.fill_grid)[0][0])
+
+
 def _job_pdf(args):
     """The pages of a PDF in random order, until `cap` are accepted or the tries are used. A page of text set in the PDF
     is restyled at generation; any other (a scan, garbled text, many columns) is rasterized."""
@@ -122,12 +134,15 @@ def _job_pdf(args):
         src = refont.Source(doc)
         for pi in np.random.default_rng(_seed(path)).permutation(doc.page_count)[:c.tries_per_page * cap].tolist():
             page = doc[pi]
-            if digital and category not in c.raster_only and refont.usable(src, pi, latin):
-                rec = dict(source_path=path, page_index=pi, language=language, category=category, kind="refont")
+            z = min(RASTER_ZOOM, c.check_px / max(page.rect.width, page.rect.height))
+            pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csGRAY, alpha=False)
+            gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
+            fill = (_restyled_fill(gray, refont.content_box(page), z)
+                    if digital and category not in c.raster_only and refont.usable(src, pi, latin) else 0.0)
+            if fill >= c.min_fill:
+                rec = dict(source_path=path, page_index=pi, language=language, category=category, kind="refont",
+                           fill=round(fill, 3))
             else:
-                z = min(RASTER_ZOOM, c.check_px / max(page.rect.width, page.rect.height))
-                pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csGRAY, alpha=False)
-                gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
                 rec = _page_record(gray, path, pi, language, category, not page.get_text().strip(), RASTER_ZOOM / z)
             recs.append(rec)
             n += rec["kind"] != "rejected"
