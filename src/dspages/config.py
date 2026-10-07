@@ -300,6 +300,7 @@ class LayoutCfg:
     grid: GridCfg = GridCfg()
     font_pt: tuple = (10.0, 16.0)                   # body text of a restyled PDF page
     role_scale: tuple = (0.6, 1.5)                  # its other sizes (headings, notes) relative to the source ratio
+    noise_scale: tuple = (0.6, 1.5)                 # factor of the paper and photo noise feature sizes, one per page
     paper_tone: tuple = (0.88, 0.97)                # paper reflectance
     ink_tone: tuple = (0.04, 0.18)
     effects: dict = field(default_factory=lambda: {

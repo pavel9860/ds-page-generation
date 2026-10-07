@@ -423,7 +423,10 @@ def _font(path, px, wght):
 
 @lru_cache(maxsize=1 << 18)
 def text_width(path, px, wght, text, direction):
-    return font(path, px, wght).getlength(text, direction=direction)
+    """Width of a text: shaped as a whole for the scripts that join or reorder, else the sum of the letters' advances
+    (the cached ones, which render sets the letters by)."""
+    f = font(path, px, wght)
+    return f.getlength(text, direction=direction) if needs_shaping(text) else sum(_glyph(f, ch)[3] for ch in text)
 
 
 class Typesetter:
@@ -539,7 +542,7 @@ def tokens(b, typesetter, role_of, px_of):
 def gap_w(t):
     if not t["gap"]:
         return 0.0
-    space = C.glyph_gap * t["px"] if t["path"] is None else font(t["path"], t["px"], t["wght"]).getlength(" ")
+    space = C.glyph_gap * t["px"] if t["path"] is None else _glyph(font(t["path"], t["px"], t["wght"]), " ")[3]
     return max(space, t["tab"] * t["px"] / t["size"])
 
 

@@ -3,6 +3,17 @@ cellular (Worley) noise and domain warping, compiled with numba."""
 import numpy as np
 from numba import njit, vectorize
 
+_SCALE = [1.0]
+
+
+def set_scale(k):
+    """Factor of every feature size below: one value per page, drawn by the caller, independent of the page's geometry."""
+    _SCALE[0] = float(k)
+
+
+def scaled(size):
+    return float(size) * _SCALE[0]
+
 
 @njit(cache=True, inline="always")
 def _hash(seed, i, j):
@@ -49,7 +60,7 @@ def _fbm(seed, x, y, scale, octaves, gain):
 def fbm(seed, x, y, scale, octaves=5, gain=0.5):
     """Fractal noise in about [-1, 1], feature size `scale` (same units as x, y)."""
     x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
-    return _fbm(int(seed), x.ravel(), y.ravel(), float(scale), int(octaves), float(gain)).reshape(x.shape)
+    return _fbm(int(seed), x.ravel(), y.ravel(), scaled(scale), int(octaves), float(gain)).reshape(x.shape)
 
 
 @njit(cache=True, fastmath=True)
@@ -76,7 +87,7 @@ def worley(seed, x, y, scale):
     """Cellular noise: distances to the nearest and second nearest jittered lattice point (feature size `scale`)
     and the nearest point's cell id in [0, 1]."""
     x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
-    return tuple(r.reshape(x.shape) for r in _worley(int(seed), x.ravel(), y.ravel(), float(scale)))
+    return tuple(r.reshape(x.shape) for r in _worley(int(seed), x.ravel(), y.ravel(), scaled(scale)))
 
 
 def warp(seed, x, y, scale, amount):

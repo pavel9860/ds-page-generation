@@ -9,7 +9,7 @@ import numpy as np
 
 from ..config import LayoutCfg, ShallowCreaseCfg
 from ..creases import shallow
-from ..noise import fbm, warp, worley
+from ..noise import fbm, scaled, set_scale, warp, worley
 
 YELLOW_LUMA = 0.24              # Rec. 709 luma of a yellow cast (0, 0.25, 0.8) per unit strength
 STAIN_LUMA = 0.57               # of a brown stain (0.3, 0.6, 1.0)
@@ -22,7 +22,7 @@ def _u(rng, r):
 def smooth_noise(rng, shape, scale_px):
     """Zero-mean, unit-std Gaussian noise with correlation length ~scale_px, made on a coarse grid."""
     h, w = shape
-    s = max(1.0, scale_px / 4)
+    s = max(1.0, scaled(scale_px) / 4)
     small = rng.standard_normal((max(2, int(h / s) + 2), max(2, int(w / s) + 2)), dtype=np.float32)
     small = cv2.GaussianBlur(small, (0, 0), 2.0)
     n = cv2.resize(small, (w, h), interpolation=cv2.INTER_CUBIC)
@@ -92,6 +92,7 @@ def paper_texture(rng, h, w, px_per_mm, p):
 
 def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
     """uint8 gray page (0 ink .. 255 paper) -> uint8 luminance page and the names of the effects applied."""
+    set_scale(rng.uniform(*c.noise_scale))
     fx = {k: e for k, e in c.effects.items() if rng.random() < e.prob}
     h, w = gray.shape
     a = 1.0 - gray.astype(np.float32) / 255.0

@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from ..config import Preset
+from ..noise import set_scale
 from . import photo
 from .camera import make_camera, project, vertex_normals
 from .raster import grid_faces, rasterize
@@ -33,6 +34,7 @@ def _uv_map(uv, mask, size):
 def make_sample(rng, page, surf, P: Preset):
     """page: layout luminance sheet; surf: geometry.make_surface output. -> dict of arrays and meta."""
     c = P.render
+    set_scale(rng.uniform(*P.layout.noise_scale))
     px = page.shape[1::-1]                                   # photo (w, h) = the flat page's
     X, Y, Z = surf["X"], surf["Y"], surf["Z"]
     nv, nu = X.shape
