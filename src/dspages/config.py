@@ -120,7 +120,7 @@ class GeometryCfg:
     n_slices: int = 9
     along_long_prob: float = 0.5
     bend_dir_deg: float = 45.0                      # bend direction within +-bend_dir_deg of a page axis, density
-    bend_floor: float = 0.3                         # cos(2 dir) + bend_floor; book pages: spine on the long side
+    bend_floor: float = 0.1                         # cos(2 dir) + bend_floor; book pages: spine on the long side
     support_frac: tuple = (0.2, 1.0)
     shell_nodes: tuple = (21, 29)
     view_tries: int = 5                             # surfaces drawn until one has a possible camera view (CameraCfg)
