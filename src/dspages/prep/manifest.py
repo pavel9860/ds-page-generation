@@ -1,9 +1,9 @@
 """Source manifest: one JSON line per usable page of the layout corpora (PDF pages, images).
 
 Raster fields: source_path, page_index, language, category, kind, rotate90, deskew_deg, used_h, used_w (raster
-size), window (x, y, w, h in page px: the window that passed the checks), margin, pictures, fill, picture_share.
+size), window (x, y, w, h in page px: the window that passed the checks), margin, fill, picture_share.
 Restyled pages (kind "refont": pages of text set in the PDF, set again in other fonts, sizes and margins drawn per
-sample at generation, their sheet filled to min_fill, else rasterized): source_path, page_index, language, category,
+sample at generation, their sheet filled to min_fill with pictures up to max_image, else rasterized): source_path, page_index, language, category,
 fill. Rejected pages (and the check they failed) go to
 <out>.rejected.jsonl.
 
@@ -26,7 +26,7 @@ from ..config import Paths, get_preset
 from ..layout.content import bbox, content_mask, place_window, window_limits, window_stats
 from ..layout import refont
 from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90
-from ..layout.pictures import picture_mask, pictures
+from ..layout.pictures import picture_area
 from ..layout.sources import RASTER_ZOOM
 
 LAYOUTS = Paths().layouts
@@ -51,17 +51,18 @@ def _reject(path, pi, language, reason, **kw):
     return dict(kind="rejected", source_path=path, page_index=pi, language=language, reason=reason, **kw)
 
 
-def _page_record(gray, path, pi, language, category, scan, f=1.0):
+def _page_record(img, path, pi, language, category, scan, f=1.0):
     """Manifest record of a rasterized page (RASTER_ZOOM for PDFs), or a rejected record naming the first failed
     check: rotation (scans only), content box, size and fill of a sheet window (cropped or padded with margins),
     pictures (the detector runs only on pages that passed the rest). An accepted scan's skew angle is then
-    estimated and stored (raster_page replays rotation and deskew). gray may be a reduced render: f page px per
-    gray px; boxes and sizes are stored in page px."""
+    estimated and stored (raster_page replays rotation and deskew). img (RGB) may be a reduced render: f page px per
+    img px; sizes are stored in page px."""
     c = _LAYOUT
     pw, ph = c.page_px
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     rot = detect_rotation(gray) if scan else 0
     if rot:
-        gray = rotate90(gray, rot)
+        img, gray = rotate90(img, rot), rotate90(gray, rot)
     mask, s = content_mask(gray)
     b = bbox(mask)
     if b is None or not _bbox_keep(b, *mask.shape):
@@ -79,15 +80,15 @@ def _page_record(gray, path, pi, language, category, scan, f=1.0):
     _, fill, _, ok = window(np.zeros_like(mask), 1.0)
     if not ok:
         return _reject(path, pi, language, "fill", fill=round(fill, 3))
-    boxes = pictures(gray, c.pictures) * f if category != "sheet_music" else np.zeros((0, 4))  # staves read as pictures
-    win, fill, share, ok = window(picture_mask(boxes, mask.shape, s), c.max_image)
+    pics = picture_area(img, mask.shape, c.pictures) if category != "sheet_music" else np.zeros_like(mask)  # staves
+    win, fill, share, ok = window(pics, c.max_image)
     if not ok:
         return _reject(path, pi, language, "pictures", fill=round(fill, 3), picture_share=round(share, 3))
     angle = estimate_deskew_angle(gray) if scan else 0.0
     return dict(source_path=path, page_index=pi, language=language, category=category, kind="raster",
                 rotate90=rot, deskew_deg=round(angle, 2) if needs_deskew(angle) else 0.0, used_h=round(gray.shape[0] * f),
                 used_w=round(gray.shape[1] * f), window=[round(v, 1) for v in win], margin=round(_margin(box, win), 4),
-                pictures=np.round(boxes, 1).tolist(), fill=round(fill, 3), picture_share=round(share, 3))
+                fill=round(fill, 3), picture_share=round(share, 3))
 
 
 def _margin(box, win):
@@ -108,15 +109,28 @@ def _bbox_keep(b, h, w):
             and 1 - (y1 - y0 + 1) / h <= _LAYOUT.max_blank_margin and 1 - (x1 - x0 + 1) / w <= _LAYOUT.max_blank_margin)
 
 
-def _restyled_fill(gray, box, z):
-    """Fill of the sheet a restyled page makes (layout.generate.sheet_fill): its content box (pt) width-fitted and
-    top-aligned on a window of the sheet's aspect, measured on gray (z px per pt)."""
-    pw, ph = _LAYOUT.page_px
+def _restyled_ok(img, box, z):
+    """Whether the sheet a restyled page makes (its content box (pt) width-fitted and top-aligned on a window of the
+    sheet's aspect, measured on the RGB img at z px per pt) has the fill and picture share of a raster window;
+    -> (ok, fill). Pictures are looked for only on pages that fill."""
+    c = _LAYOUT
+    pw, ph = c.page_px
     w = max(box.width, box.height * pw / ph)
-    win = ((box.x0 + box.x1 - w) / 2 * z, box.y0 * z, w * z, w * ph / pw * z)
-    mask, s = content_mask(gray)
+    win = [((box.x0 + box.x1 - w) / 2 * z, box.y0 * z, w * z, w * ph / pw * z)]
+    mask, s = content_mask(cv2.cvtColor(img, cv2.COLOR_RGB2GRAY))
     ink = cv2.integral(mask.astype(np.uint8)).astype(np.int64)
-    return float(window_stats(ink, np.zeros_like(ink), s, [win], _LAYOUT.fill_grid)[0][0])
+    fill = float(window_stats(ink, np.zeros_like(ink), s, win, c.fill_grid)[0][0])
+    if fill < c.min_fill:
+        return False, fill
+    pics = cv2.integral(picture_area(img, mask.shape, c.pictures).astype(np.uint8)).astype(np.int64)
+    return bool(window_stats(ink, pics, s, win, c.fill_grid)[1][0] <= c.max_image), fill
+
+
+def _body_pt(src, pi, box):
+    """Body size of a restyled page on the sheet (its content box fitted, no margin)."""
+    c = _LAYOUT
+    pw, ph = c.page_px
+    return refont.body_size(refont.page_blocks(src, pi, True)) * min(pw, ph * box.width / box.height) / box.width * c.sheet_mm[0] / 25.4 * 72 / pw
 
 
 def _job_pdf(args):
@@ -135,15 +149,17 @@ def _job_pdf(args):
         for pi in np.random.default_rng(_seed(path)).permutation(doc.page_count)[:c.tries_per_page * cap].tolist():
             page = doc[pi]
             z = min(RASTER_ZOOM, c.check_px / max(page.rect.width, page.rect.height))
-            pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csGRAY, alpha=False)
-            gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
-            fill = (_restyled_fill(gray, refont.content_box(page), z)
-                    if digital and category not in c.raster_only and refont.usable(src, pi, latin) else 0.0)
-            if fill >= c.min_fill:
+            pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csRGB, alpha=False)
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+            box = refont.content_box(page)
+            body = (_body_pt(src, pi, box) if digital and category not in c.raster_only and refont.usable(src, pi, latin)
+                    else 0.0)
+            ok, fill = _restyled_ok(img, box, z) if body else (False, 0.0)
+            if ok:
                 rec = dict(source_path=path, page_index=pi, language=language, category=category, kind="refont",
-                           fill=round(fill, 3))
+                           fill=round(fill, 3), body_pt=round(body, 1))
             else:
-                rec = _page_record(gray, path, pi, language, category, not page.get_text().strip(), RASTER_ZOOM / z)
+                rec = _page_record(img, path, pi, language, category, not page.get_text().strip(), RASTER_ZOOM / z)
             recs.append(rec)
             n += rec["kind"] != "rejected"
             if n == cap:
@@ -153,10 +169,10 @@ def _job_pdf(args):
 
 def _job_image(args):
     path, language, category, _, _ = args
-    gray = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-    if gray is None:
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    if img is None:
         return [_reject(path, 0, language, "unreadable")]
-    return [_page_record(gray, path, 0, language, category, True)]
+    return [_page_record(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), path, 0, language, category, True)]
 
 
 # ---------------------------------------------------------------------------

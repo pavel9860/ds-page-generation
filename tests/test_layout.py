@@ -89,12 +89,11 @@ def test_ruled_form_is_not_a_picture(full_small):
     from pathlib import Path
 
     import pytest
-    from dspages.layout.pictures import picture_mask, pictures
+    from dspages.layout.pictures import picture_area
     if not Path(full_small.layout.pictures.model).expanduser().exists():
         pytest.skip("picture model not installed")
     page = np.full((1200, 850), 255, np.uint8)
     for y in range(100, 1100, 40):
         cv2.rectangle(page, (60, y), (790, y + 40), 0, 2)
         cv2.putText(page, "Name / Date / Signature", (80, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 0, 2)
-    boxes = pictures(page, full_small.layout.pictures)
-    assert picture_mask(boxes, page.shape, 1.0).mean() <= full_small.layout.max_image
+    assert picture_area(np.repeat(page[..., None], 3, -1), (600, 425), full_small.layout.pictures).mean() <= full_small.layout.max_image

@@ -20,7 +20,8 @@ def fake_manifest():
     langs = ["en", "eu", "cyr", "zh", "el", "unknown"]
     out = [dict(source_path=f"x{i}.png", page_index=0, kind="raster", language=langs[i % 6], category=None)
            for i in range(60)]
-    out += [dict(source_path=f"b{i % 3}.pdf", page_index=i, kind="refont", language=langs[i % 5], category="books_pdf") for i in range(60)]
+    out += [dict(source_path=f"b{i % 3}.pdf", page_index=i, kind="refont", language=langs[i % 5], category="books_pdf",
+                 body_pt=10.0 + i % 16) for i in range(60)]
     return out
 
 

@@ -151,12 +151,16 @@ class GridCfg:
 class PictureCfg:
     model: str = "~/.cache/dspages/yolov11n-doclaynet.onnx"   # python -m dspages.prep.layout_model
     weights_url: str = "https://huggingface.co/hantian/yolo-doclaynet/resolve/main/yolov11n-doclaynet.pt"  # AGPL-3.0
-    imgsz: int = 640
+    imgsz: int = 1024                               # colour input: small photos are missed at 640 or in gray
     picture_class: int = 6                          # DocLayNet "Picture"
     conf: float = 0.3
     iou: float = 0.5
     large_area: float = 0.3                         # boxes over this page share need large_conf (whole forms
     large_conf: float = 0.75                        # come out as one low-score picture)
+    fill_patch: int = 10                            # also pictures: patches (px of the 512 px content mask) mostly
+    fill_need: float = 0.6                          # (fill_need) darker than fill_paper of the way from ink (1st
+    fill_paper: float = 0.8                         # percentile) to paper (90th): artwork and dark blocks the
+                                                    # detector does not know
 
 
 @dataclass(frozen=True)
@@ -187,7 +191,6 @@ class RefontCfg:
     edge_bin: int = 3
     edge_lines: int = 3
     split_em: float = 1.6
-    fit_floor: float = 1.0                          # no shrink: the body stays at font_pt
     max_stretch: float = 3.0
     ragged_lines: int = 5
     ragged_percentile: float = 0.9
@@ -206,7 +209,6 @@ class RefontCfg:
     edge_slack: float = 0.06
     row_overlap: float = 0.15
     room: float = 1.5
-    font_tries: int = 6
     tab_em: float = 0.9
     justify_fill: float = 0.85
     edge_tol: float = 0.03
@@ -230,15 +232,11 @@ class RefontCfg:
     min_text_chars: int = 150
     max_image_share: float = 0.5
     rule_min_pt: int = 20
-    shrink: float = 0.93
     superscript_ratio: float = 0.75
     gap_body: float = 1.5
     text_image_share: float = 0.4
     align_inset: float = 0.1
     right_share: float = 0.5                        # widest share of its column a right-flush one-line block covers
-    leading_max: float = 1.3                        # most a short frame spreads its lines to fill itself
-    grow_max: float = 2.0                           # most a size class grows to fill its frames
-    fill_share: float = 0.0                         # frames filled less than this are grown (0: never, the body stays at font_pt)
     letter_em: float = 1.5                          # a drawing no larger than this many line heights, inside a line, is a letter
     letter_cover: float = 0.3                       # share of a span the letter drawings cover that makes it bold
     contain_share: float = 0.5                      # share of a block inside another one that makes the other hold it
@@ -261,7 +259,6 @@ class RefontCfg:
     same_size_pt: float = 0.3
     inline_share: float = 0.3
     row_tol_em: float = 0.35
-    fixed_cover: float = 0.6
     repeat_cover: float = 0.7
     indent_min_em: float = 0.5
     indent_max_em: float = 4.0
@@ -312,9 +309,8 @@ class LayoutCfg:
     use_all: tuple = ("unknown",)                   # groups taking all their raster pages, outside script_mix
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
     grid: GridCfg = GridCfg()
-    font_pt: tuple = (10.0, 16.0)                   # body text of a restyled PDF page
-    open_font_pt: tuple = (12.0, 18.0)              # on an open book (restyled pages only)
-    role_scale: tuple = (0.6, 1.5)                  # its other sizes (headings, notes) relative to the source ratio
+    font_pt: tuple = (10.0, 16.0)                   # body size on the sheet of the restyled pages (set at their source
+    open_font_pt: tuple = (12.0, 18.0)              # sizes, only the fonts change); on an open book
     noise_scale: tuple = (0.6, 1.5)                 # factor of the paper and photo noise feature sizes, one per page
     paper_tone: tuple = (0.88, 0.97)                # paper reflectance
     ink_tone: tuple = (0.04, 0.18)

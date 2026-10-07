@@ -67,15 +67,15 @@ def _axis(c0, cn, d, max_margin):
 
 
 def place_window(rng, box, aspect, max_margin, min_w, mask, s, pics, min_fill, grid, max_image):
-    """Window (x, y, w, h) in page px of aspect w/h for a content box (x0, y0, bw, bh) in page px, drawn among the
-    candidates (WIDTHS widths in [max(lo, min_w), hi], POSITIONS starts per cropped or margin axis) with fill >=
+    """Window (x, y, w, h) in page px of aspect w/h for a content box (x0, y0, bw, bh) in page px, never narrower than
+    the content (only its height is cropped), drawn among the candidates (WIDTHS widths in [max(lo, min_w, bw), hi], lo down to hi when the content is taller, POSITIONS starts per cropped or margin axis) with fill >=
     min_fill and picture share <= max_image (masks at scale s). The window may reach past the page: those parts
     are padded and count as empty. -> window, fill, picture share, whether it meets both limits (else the
     candidate of highest fill among the lowest picture share)."""
     x0, y0, bw, bh = box
     lo, hi = window_limits(bw, bh, aspect, max_margin)
-    a = max(lo, min_w)
-    widths = np.linspace(a, hi, WIDTHS) if a <= hi else np.array([max(hi, min_w)])
+    a, hi = max(min(lo, hi), min_w, bw), max(hi, bw)
+    widths = np.linspace(a, hi, WIDTHS) if a <= hi else np.array([a])
     ink = cv2.integral(mask.astype(np.uint8)).astype(np.int64)
     pic = cv2.integral(pics.astype(np.uint8)).astype(np.int64)
     wins = np.array([(x, y, w, w / aspect) for w in widths for x in _axis(x0, bw, w, max_margin)

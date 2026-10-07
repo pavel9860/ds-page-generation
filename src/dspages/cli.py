@@ -3,7 +3,7 @@
 plan      DIR/plan.jsonl: n stratified sample specs (written by the other commands too when missing)
 layout    DIR/layouts/<i>.npz   page (sheet luminance), gray (clean sheet)
 geometry  DIR/geometry/<i>.npz  X, Y, Z [mm] page grid
-render    DIR/samples/<i>.npz   flat, warped, albedo, grid2d, grid3d, mask (no metadata); reads layouts/ and geometry/ of the same index
+render    DIR/samples/<i>.npz   flat, warped, grid2d, grid3d, mask (no metadata); reads layouts/ and geometry/ of the same index
           when present, else makes them in memory; DIR/meta.jsonl: one row per sample, the render metadata and its
           layout's (source page, window, fill, fonts, effects)
 all       the samples only: layout and geometry of each made in memory, not saved (the dataset run)
@@ -79,7 +79,7 @@ def _shown(part, i, what):
 def _layout(i, save):
     spec = _W["plan"][i]
     L = make_layout(_rng(i, "layout"), _W["manifest"][spec["entry"]],
-                    sample_preset(_W["P"], spec), _W["fonts"], spec["combo"][0] == "open")
+                    sample_preset(_W["P"], spec), _W["fonts"], spec["combo"][0] == "open", spec.get("font_pt"))
     if save:
         io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], *_shown("layout", i, L["page"]))
     return L["page"], L["meta"]
@@ -109,7 +109,7 @@ def _render(i, saved, dt):
     surf = io.load(gp)[0] if saved and gp.exists() else _geometry(i, False)
     dt["geometry"], t = time.time() - t, time.time()
     o = make_sample(_rng(i, "render"), page, surf, sample_preset(_W["P"], _W["plan"][i]))
-    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "albedo", "grid2d", "grid3d", "mask")}, None, *_shown("render", i, o))
+    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "grid2d", "grid3d", "mask")}, None, *_shown("render", i, o))
     dt["render"] = time.time() - t
     return dict(sample=f"{i:07d}", **o["meta"], layout=lmeta)
 

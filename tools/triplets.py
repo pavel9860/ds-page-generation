@@ -1,8 +1,8 @@
-"""Triplets of restyled pages: the original PDF page | two restyles with different seeds, sizes and margins.
+"""Triplets of restyled pages: the original PDF page | two restyles with different seeds (fonts) and margins.
 
 python tools/triplets.py OUT_DIR [--manifest M] [--n 200] [--seed 0] [--workers 12] [--preset full] [--only 6,8,9]
-Pages are random "refont" entries of the manifest; the sizes and margins of a restyle are drawn from the preset's
-ranges like the generation does. Writes OUT_DIR/<i>_<category>_<file>_p<page>.png (half size).
+Pages are random "refont" entries of the manifest; the margin of a restyle is drawn from the preset's range like the
+generation does. Writes OUT_DIR/<i>_<category>_<file>_p<page>.png (half size).
 """
 import argparse
 import os
@@ -36,8 +36,7 @@ def _triplet(args):
     panels = [Image.frombytes("L", (pm.w, pm.h), pm.samples)]
     rng = np.random.default_rng([seed, i])
     for _ in range(2):
-        m, pt, scale = rng.uniform(*c.margin_frac), rng.uniform(*c.font_pt), rng.uniform(*c.role_scale)
-        gray, _ = sheet(e["source_path"], e["page_index"], int(rng.integers(1 << 31)), _W["fonts"], pt, scale, m, (pw, ph))
+        gray, _ = sheet(e["source_path"], e["page_index"], int(rng.integers(1 << 31)), _W["fonts"], rng.uniform(*c.margin_frac), (pw, ph))
         panels.append(Image.fromarray(gray))
     out_img = Image.new("L", (3 * pw + 40, max(p.height for p in panels)), 128)
     for j, p in enumerate(panels):

@@ -32,7 +32,7 @@ def factors(P: Preset):
     g, s = P.geometry, P.geometry.scene
     t, F = _bend_cdf(g)
     bend = tuple((b, float(np.diff(np.interp(b, t, F))[0])) for b in _bins(-g.bend_dir_deg, g.bend_dir_deg, 5))
-    li, m, lc = P.render.light, P.layout.margin_frac, P.layout
+    li, m = P.render.light, P.layout.margin_frac
     return dict(
         combo=tuple((c, w) for c, w in s.combos),
         two=((True, g.two_profile_prob), (False, 1 - g.two_profile_prob)),
@@ -43,9 +43,7 @@ def factors(P: Preset):
         deep=g.deep.levels,
         bend_deep=((True, g.deep.on_bends_prob), (False, 1 - g.deep.on_bends_prob)),
         sharp=((True, li.sharp_prob), (False, 1 - li.sharp_prob)),
-        margin_bin=tuple((b, 1.0) for b in _bins(*m, 3)) if m[1] > m[0] else ((m, 1.0),),
-        font_bin=tuple((b, 1.0) for b in _bins(*lc.font_pt, 4)),
-        scale_bin=tuple((b, 1.0) for b in _bins(*lc.role_scale, 3)))
+        margin_bin=tuple((b, 1.0) for b in _bins(*m, 3)) if m[1] > m[0] else ((m, 1.0),))
 
 
 def _canonical(c):
@@ -56,7 +54,7 @@ def _canonical(c):
 
 
 GROUPS = dict(geometry=("combo", "two", "along_long", "bend_bin", "gsm", "shallow", "deep", "bend_deep"),
-              view=("sharp",), layout=("margin_bin", "font_bin", "scale_bin"))
+              view=("sharp",), layout=("margin_bin",))
 
 
 def cells(P: Preset, group):
@@ -100,12 +98,19 @@ def entry_pools(P: Preset, manifest):
     return pools
 
 
+def open_scale(c):
+    """Size of an open book's page on its sheet relative to the same page on a whole sheet: half the landscape sheet."""
+    return c.sheet_mm[1] / 2 / c.sheet_mm[0]
+
+
 def plan(P: Preset, n, seed, manifest):
     """Up to n sample specs with exact factor marginals, script groups included. Groups of use_all take all their
     pages; script_mix shares the rest of n. Pages are never repeated: a group short of pages stays under its quota,
-    its samples dropped. Open books (a landscape spread, the spine across the width) take restyled pages only, set in open_font_pt: a group short of them trades its open
-    combos for other combos of groups with restyled pages to spare. Book pages bend with the spine on
-    the long side (bend direction over the whole range)."""
+    its samples dropped. Open books (a landscape spread, the spine across the width) take restyled pages only: a group
+    short of them trades its open combos for other combos of groups with restyled pages to spare. Restyled pages get a
+    body size (font_pt) spread evenly over font_pt, open books over open_font_pt, by the rank of their own (open book
+    pages on half the sheet): every page as near its source size as the even spread allows. Book pages bend with the
+    spine on the long side (bend direction over the whole range)."""
     rng = np.random.default_rng(seed)
     c = P.layout
     pools = entry_pools(P, manifest)
@@ -131,7 +136,12 @@ def plan(P: Preset, n, seed, manifest):
         entry[idx[opened[idx]][:len(o)]] = o
         entry[idx[~opened[idx]][:len(e)]] = e
     t, F = _bend_cdf(P.geometry)
-    fonts, open_fonts = _bins(*c.font_pt, 4), _bins(*c.open_font_pt, 4)
+    font = np.full(n, np.nan)
+    for sel, (lo, hi), k in ((opened, c.open_font_pt, open_scale(c)), (~opened, c.font_pt, 1.0)):
+        idx = np.flatnonzero(sel & (entry >= 0))
+        idx = idx[[manifest[entry[i]]["kind"] == "refont" for i in idx]]
+        rank = np.argsort(np.argsort([manifest[entry[i]]["body_pt"] * k + rng.random() * 1e-6 for i in idx]))
+        font[idx] = lo + (rank + rng.random(len(idx))) / max(len(idx), 1) * (hi - lo)
     specs = []
     for i in np.flatnonzero(entry >= 0):
         s = _canonical({k: cols[k][i] for k in cols})
@@ -143,9 +153,9 @@ def plan(P: Preset, n, seed, manifest):
         if opened[i]:
             s["bend_dir"] = 0.0
             s["gsm"] = float(rng.uniform(*P.paper.open_gsm))
-        if opened[i]:
-            s["font_bin"] = open_fonts[fonts.index(s["font_bin"])]
         s["entry"] = int(entry[i])
+        if np.isfinite(font[i]):
+            s["font_pt"] = float(font[i])
         specs.append(s)
     return specs
 
@@ -159,6 +169,6 @@ def sample_preset(P: Preset, spec):
     r, c, g = P.render, P.layout, P.geometry
     flip = (lambda t: t[::-1]) if spec["combo"][0] == "open" else (lambda t: t)
     return replace(P, render=replace(r, light=replace(r.light, sharp_prob=float(spec["sharp"]))),
-                   layout=replace(c, margin_frac=spec["margin_bin"], font_pt=spec["font_bin"], role_scale=spec["scale_bin"],
+                   layout=replace(c, margin_frac=spec["margin_bin"],
                                   sheet_mm=flip(c.sheet_mm), page_px=flip(c.page_px)),
                    geometry=replace(g, sheet_mm=flip(g.sheet_mm), mesh=flip(g.mesh)))

@@ -40,14 +40,17 @@ def test_pages_are_never_repeated_and_stay_in_their_script_group(full_small):
     assert len(entries) == len(set(entries))
 
 
-def test_layout_bins_cover_the_config_ranges(full_small):
-    specs = plan(full_small, 60, 2, fake_manifest())
+def test_restyled_sizes_fill_the_ranges_in_source_order(full_small):
+    man = fake_manifest()
+    specs = plan(full_small, 60, 2, man)
     c = full_small.layout
-    shift = c.open_font_pt[0] - c.font_pt[0]
-    fonts = [tuple(v - shift for v in s["font_bin"]) if s["combo"][0] == "open" else s["font_bin"] for s in specs]
-    assert all(c.open_font_pt[0] <= s["font_bin"][0] for s in specs if s["combo"][0] == "open")
-    for got, (lo, hi) in ((Counter(fonts), c.font_pt), (Counter(s["scale_bin"] for s in specs), c.role_scale)):
-        assert min(a for a, _ in got) == lo and max(b for _, b in got) == hi and max(got.values()) - min(got.values()) <= 1
+    for opened, (lo, hi) in ((True, c.open_font_pt), (False, c.font_pt)):
+        got = sorted((man[s["entry"]]["body_pt"], s["font_pt"]) for s in specs
+                     if man[s["entry"]]["kind"] == "refont" and (s["combo"][0] == "open") == opened)
+        pts = np.array([f for _, f in got])
+        assert len(pts) and lo <= pts.min() and pts.max() <= hi
+        assert all(b0 == b1 or f0 <= f1 for (b0, f0), (b1, f1) in zip(got, got[1:]))
+    assert all("font_pt" not in s for s in specs if man[s["entry"]]["kind"] != "refont")
 
 
 def test_unknown_uses_all(full_small):

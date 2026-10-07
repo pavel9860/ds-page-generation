@@ -43,10 +43,10 @@ def sheet_fill(gray, grid):
     return float(window_stats(ink, np.zeros_like(ink), s, [(0, 0, gray.shape[1], gray.shape[0])], grid)[0][0])
 
 
-def make_layout(rng, entry, P: Preset, fonts, spread=False):
+def make_layout(rng, entry, P: Preset, fonts, spread=False, font_pt=None):
     """-> dict(page: uint8 luminance sheet, gray: uint8 clean sheet before effects, meta). Raster pages (window)
     and restyled PDF pages (body size, scale, margin and seed) as the manifest checked them. spread: an open book, the
-    restyled page and its neighbour in the PDF side by side in the same fonts."""
+    restyled page and its neighbour in the PDF side by side in the same fonts; font_pt: a restyled page's body size."""
     c = P.layout
     pw, ph = c.page_px
     ppm = pw / c.sheet_mm[0]
@@ -63,16 +63,17 @@ def make_layout(rng, entry, P: Preset, fonts, spread=False):
         gray, m = _raster_sheet(entry, pw, ph, c)
         meta.update(m)
     else:
-        m, pt, scale = rng.uniform(*c.margin_frac), rng.uniform(*c.font_pt), rng.uniform(*c.role_scale)
+        m = rng.uniform(*c.margin_frac)
         n, seed = entry["page_index"], int(rng.integers(1 << 31))
         pages = [n]
         if spread:
             with pymupdf.open(entry["source_path"]) as doc:
                 pages = sorted((n, n + 1 if n + 1 < doc.page_count else max(n - 1, 0)))
-        parts = [sheet(entry["source_path"], k, seed, fonts, pt, scale, m, (pw // len(pages), ph)) for k in pages]
+        parts = [sheet(entry["source_path"], k, seed, fonts, m, (pw // len(pages), ph), font_pt and font_pt * ppm * 25.4 / 72)
+                 for k in pages]
         gray, info = np.hstack([g for g, _ in parts]), parts[0][1]
         mx, my = round(m * pw / len(pages)), round(m * ph)
-        meta.update(pages=pages, margin=float(m), font_pt=float(pt), scale=float(scale), body_pt=info["body_pt"],
+        meta.update(pages=pages, margin=float(m), body_pt=round(info["body_px"] / ppm * 72 / 25.4, 1),
                     fill=sheet_fill(gray[my:ph - my, mx:pw - mx], c.fill_grid))
     page, effects = paper.apply(rng, gray, ppm, c, P.geometry.shallow)
     meta["effects"] = effects

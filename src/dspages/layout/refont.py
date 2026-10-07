@@ -3,6 +3,7 @@ columns, alignment, bold/italic and heading/body hierarchy; rules, boxes and pic
 The text of the following pages flows in, so the page stays full. Fonts come from find_fonts, matched to the
 page's scripts by the real glyph coverage of every font file that is drawn with."""
 import bisect
+import io
 import re
 import glob
 import os
@@ -13,6 +14,7 @@ from functools import lru_cache
 
 import numpy as np
 import pymupdf
+from fontTools.ttLib import TTFont
 from numba import njit
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
@@ -88,9 +90,22 @@ def _tilted(l):
     return [dict(bbox=box, spans=[span])]
 
 
-def _span(s, text):
+def symbolic_fonts(page):
+    """Names of a page's embedded TrueType fonts mapped only by the Symbol cmap (no Unicode one): their text is the font's
+    own codes (legacy encodings), readable only in that font."""
+    out = set()
+    for xref, ext, _, base, *_ in page.get_fonts():
+        tt = TTFont(io.BytesIO(page.parent.extract_font(xref)[3])) if ext == "ttf" else None
+        if tt is not None and "cmap" in tt:
+            subs = {(t.platformID, t.platEncID) for t in tt["cmap"].tables}
+            if (3, 0) in subs and not subs & {(3, 1), (3, 10), (0, 3), (0, 4)}:
+                out.add(base.split("+")[-1])
+    return out
+
+
+def _span(s, text, symbolic):
     bold, italic = span_style(s)
-    symbol = any(k in s["font"].lower() for k in SYMBOL_FONTS)
+    symbol = s["font"] in symbolic or any(k in s["font"].lower() for k in SYMBOL_FONTS)
     glyph = pymupdf.Rect(s["bbox"]) if symbol or all(unicodedata.category(c) == "Co" for c in text.strip()) else None
     return dict(text=text, size=round(s["size"] * C.size_step) / C.size_step, gray=_gray(s["color"]), bold=bold, italic=italic,
                 mono=span_mono(s), nat=s["ascender"] - s["descender"] or C.line_em, glyph=glyph, bbox=pymupdf.Rect(s["bbox"]))
@@ -109,12 +124,12 @@ def _chars_text(s):
     return "".join(out)
 
 
-def _spans(l):
+def _spans(l, symbolic):
     spans = []
     for s in l["spans"]:
         text = _chars_text(s).replace("\x00", "").replace("\xa0", " ").translate(THAI_PUA).translate(MATH_LETTERS)
         if text.strip() and round(s["size"] * C.size_step) > 0:
-            spans.append(_span(s, text))
+            spans.append(_span(s, text, symbolic))
     return spans
 
 
@@ -203,12 +218,13 @@ def _overprint(segs):
 def extract_segments(page, textpage=None):
     """Text lines of a page, each cut into one segment per run."""
     lines = [l for b in page.get_text("rawdict", flags=TEXT_FLAGS, textpage=textpage)["blocks"] for l in b.get("lines", [])]
+    symbolic = symbolic_fonts(page)
     segs, rows = [], []
     for l in lines:
         if abs(l["dir"][1]) > C.tilt:
             segs += _tilted(l) if "".join(c["c"] for s in l["spans"] for c in s["chars"]).strip() else []
         else:
-            spans = _spans(l)
+            spans = _spans(l, symbolic)
             if spans:
                 rows.append((l["bbox"], spans))
     index = _line_index(rows)
@@ -673,7 +689,7 @@ def wrap(toks, W, indent_first, indent_rest=0.0):
         sw = gap_w(t) if cur else 0.0
         avail = W - (indent_rest if lines else indent_first)
         if curw + sw + w > avail:
-            if t["path"] is not None and (t["brk"] or w > W):
+            if t["path"] is not None and t["brk"]:
                 head, tail = _split(t, avail - curw - sw)
                 if not head and cur:
                     lines.append(cur)
@@ -774,8 +790,7 @@ def prepare(b, others, page_w, g, typesetter, role_of, px_of, cols, walls=()):
         Wa = max(min(C.room * W, cap), W)
         bx0, W = {"left": x0, "right": x1 - Wa, "center": cx - Wa / 2}[align], Wa
     lines = wrap(toks, W, ind1, ind2)
-    natural = 0.0 if multi else sum(measure(t)[1] for t in toks) + sum(gap_w(t) for t in toks[1:])
-    return dict(b=b, fit=natural / max(W, 1.0), x0=x0, x1=x1, y0=y0, y1=y1, bx0=bx0, W=W, align=align, ind=(ind1, ind2), lines=lines,
+    return dict(b=b, x0=x0, x1=x1, y0=y0, y1=y1, bx0=bx0, W=W, align=align, ind=(ind1, ind2), lines=lines,
                 pitch=line_pitch(b, bpx, asc, desc), asc=asc, desc=desc, multi=multi, pinned=b["pinned"], rtl=b["rtl"],
                 bpx=bpx, tol=C.row_tol_em * b["size"] * g, wrapped=not multi and len(lines) > 1)
 
@@ -890,12 +905,12 @@ def _covered(boxes, r):
 
 
 def pictures(src, number, ph, pw, below=None):
-    """Pictures of a page as blocks of the flow, in source points, the tiles of a picture joined; pictures that only repeat
-    the page's text are left out."""
+    """Pictures of a page as blocks of the flow, in source points, cut at the page border, the tiles of a picture joined;
+    pictures that only repeat the page's text are left out."""
     words = np.array([w[:4] for w in src.words(number)], float).reshape(-1, 4)
     out = []
-    small = [im["bbox"] for im in src.images(number) if pymupdf.Rect(im["bbox"]).get_area() <= C.fixed_cover * pw * ph]
-    for r in join_tiles(small):
+    page = pymupdf.Rect(0, 0, pw, ph)
+    for r in join_tiles(r for r in (pymupdf.Rect(im["bbox"]) & page for im in src.images(number)) if not r.is_empty):
         r = _inked(src, number, r) if max(r.width, r.height) > C.dot_pt else r
         if r is None:
             continue
@@ -1151,9 +1166,11 @@ def _horizontal(d):
     return segs
 
 
-def ratio(size, body, scale):
-    """Factor of a font size: the sizes that are not the body's (headings, notes) are scaled by `scale`."""
-    return scale if size > body * C.head_ratio or size * C.head_ratio < body else 1.0
+def body_size(blocks):
+    """The body font size of a page's blocks: the size (to 0.5 pt) of most of their characters."""
+    spans = [s for b in blocks for l in b["lines"] for s in l["spans"]]
+    return Counter({k: sum(len(s["text"]) for s in spans if round(s["size"] * 2) / 2 == k)
+                    for k in {round(s["size"] * 2) / 2 for s in spans}}).most_common(1)[0][0]
 
 
 @lru_cache(maxsize=1 << 16)
@@ -1178,14 +1195,16 @@ def _coverage(key, text, direction):
 
 def blit_text(img, items):
     """Text laid over the page from cached coverage (light text on a dark fill stays visible): letter by letter for scripts
-    without shaping, whole words (shaped as a unit) for the others."""
+    without shaping, whole words (shaped as a unit) for the others; each cut to its clip box (None: the page)."""
     covs, at = [], []
-    for x, y, f, text, gray, direction in items:
+    H, W = img.size[1], img.size[0]
+    for x, y, f, text, gray, direction, clip in items:
+        cx0, cy0, cx1, cy1 = (0, 0, W, H) if clip is None else (round(c) for c in clip)
         for ch in ([text] if needs_shaping(text) else text):
             cov, ox, oy, adv = _coverage(f.key, ch, direction if needs_shaping(text) else None)
             if cov.size:
                 covs.append(cov.ravel())
-                at.append((int(round(x)) + ox, int(round(y)) + oy, cov.shape[0], cov.shape[1], gray))
+                at.append((int(round(x)) + ox, int(round(y)) + oy, cov.shape[0], cov.shape[1], gray, cx0, cy0, cx1, cy1))
             x += adv
     if covs:
         arr = np.asarray(img).copy()
@@ -1195,13 +1214,14 @@ def blit_text(img, items):
 
 @njit(cache=True)
 def _composite(arr, cov, at):
-    """Glyph coverages (flattened one after another) laid over arr: at = (x0, y0, h, w, gray) of each."""
+    """Glyph coverages (flattened one after another) laid over arr: at = (x0, y0, h, w, gray, clip x0, y0, x1, y1) of each."""
     H, W = arr.shape
     o = 0
     for g in range(at.shape[0]):
         x0, y0, h, w, gray = at[g, 0], at[g, 1], at[g, 2], at[g, 3], at[g, 4]
-        for r in range(max(0, -y0), min(h, H - y0)):
-            for c in range(max(0, -x0), min(w, W - x0)):
+        cx0, cy0, cx1, cy1 = max(at[g, 5], 0), max(at[g, 6], 0), min(at[g, 7], W), min(at[g, 8], H)
+        for r in range(max(0, cy0 - y0), min(h, cy1 - y0)):
+            for c in range(max(0, cx0 - x0), min(w, cx1 - x0)):
                 a = np.int64(cov[o + r * w + c])
                 if a:
                     arr[y0 + r, x0 + c] = (np.int64(arr[y0 + r, x0 + c]) * (255 - a) + gray * a + 127) // 255

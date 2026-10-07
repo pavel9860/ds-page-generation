@@ -1,5 +1,5 @@
 """Per-sample visual check of a run: flat | warped with UV arrows | height map | profiles | shaded surface | back-mapped
-flat | albedo. Filtered-out manifest pages (a manifest's .rejected.jsonl) as page thumbnails, one folder per reason.
+flat. Filtered-out manifest pages (a manifest's .rejected.jsonl) as page thumbnails, one folder per reason.
 
 python tools/viz.py RUN_DIR [--manifest MANIFEST] [--workers 6]
 Writes RUN_DIR_viz/samples/<i>.jpg and, with --manifest, RUN_DIR_viz/filtered_out/<reason>/<name>_p<page>.jpg.
@@ -41,7 +41,7 @@ def shaded(map3d):
 def sample_figure(path, out):
     a, meta = io.load(path)
     flat, warped, g2, map3d = a["flat"], a["warped"], a["grid2d"].astype(np.float32), np.moveaxis(a["grid3d"], 0, -1)
-    fig, ax = plt.subplots(2, 4, figsize=(20, 13))
+    fig, ax = plt.subplots(2, 3, figsize=(15, 13))
     ax = ax.ravel()
     ax[0].imshow(flat, cmap="gray", vmin=0, vmax=255)
     ax[0].set_title("flat")
@@ -67,9 +67,7 @@ def sample_figure(path, out):
     back = back_map(warped, g2, flat.shape)
     ax[5].imshow(back, cmap="gray", vmin=0, vmax=255)
     ax[5].set_title("warped mapped back through grid2d")
-    ax[6].imshow(a["albedo"], cmap="gray", vmin=0, vmax=255)
-    ax[6].set_title("albedo")
-    for x in ax[[0, 1, 2, 4, 5, 6, 7]]:
+    for x in ax[[0, 1, 2, 4, 5]]:
         x.axis("off")
     fig.suptitle(f"{path.stem}  {meta.get('view', '')}", fontsize=8)
     fig.tight_layout()

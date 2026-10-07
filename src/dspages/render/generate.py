@@ -4,7 +4,6 @@ All at the sheet's aspect, turned portrait when it is landscape (an open book): 
 is the page point at evenly spaced page coordinates (rows down the sheet height), so neither map has holes.
 flat   (h, w) uint8: the layout sheet (luminance)
 warped (h, w) uint8: the photo (luminance)
-albedo (h, w) uint8: the page as the photo sees it without light, camera effects or background (black off the page)
 grid2d (2, mesh h, mesh w) float32: x, y of each page node in the photo, in [-1, 1] with align_corners=True (pixel
        centres at -1 and 1): the grid_sample grid that flattens the photo
 grid3d (3, mesh h, mesh w) float32: X, Y, Z [mm] of each page node on the curved surface, table z = 0
@@ -79,8 +78,7 @@ def make_sample(rng, page, surf, P: Preset):
     lin = photo.SRGB_TO_LINEAR[page]
     mx = (np.nan_to_num(uv[..., 0]) * (pw - 1)).astype(np.float32)
     my = (np.nan_to_num(uv[..., 1]) * (ph - 1)).astype(np.float32)
-    albedo = np.where(mask, _page_in_photo(lin, mx, my, mask), 0.0)
-    img = albedo * lf
+    img = _page_in_photo(lin, mx, my, mask) * lf
     if c.background == "texture" and rng.random() >= c.black_prob:
         ys, xs = np.nonzero(~mask)
         bg = np.zeros(mask.shape, np.float32)
@@ -99,8 +97,7 @@ def make_sample(rng, page, surf, P: Preset):
                 effects=effects, page_frac=float(mask.mean()))
     grid2d = ((pix - 0.5) / (np.array(px) - 1) * 2 - 1).T.reshape(2, nv, nu).astype(np.float32)
     grid3d = np.stack([X, Y, Z]).astype(np.float32)
-    albedo = (np.clip(albedo, 0, 1) ** (1 / 2.2) * 255 + 0.5).astype(np.uint8)
-    o = dict(flat=page, warped=warped, albedo=albedo, grid2d=grid2d, grid3d=grid3d, mask=mask, meta=meta)
+    o = dict(flat=page, warped=warped, grid2d=grid2d, grid3d=grid3d, mask=mask, meta=meta)
     return _portrait(o) if px[0] > px[1] else o
 
 
@@ -110,5 +107,5 @@ def _portrait(o):
     def r(a, axes=(0, 1)):
         return np.ascontiguousarray(np.rot90(a, 1, axes))
     g, (X, Y, Z) = r(o["grid2d"], (1, 2)), r(o["grid3d"], (1, 2))
-    return dict(o, flat=r(o["flat"]), warped=r(o["warped"]), albedo=r(o["albedo"]), mask=r(o["mask"]),
+    return dict(o, flat=r(o["flat"]), warped=r(o["warped"]), mask=r(o["mask"]),
                 grid2d=np.stack([g[1], -g[0]]), grid3d=np.stack([Y.max() - Y, X - X.min(), Z]))

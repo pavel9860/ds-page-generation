@@ -32,7 +32,7 @@ def page(doc, left_words, right_words, head=True):
 
 def lay_out(doc, seed, fonts):
     src = refont.Source(doc)
-    lay = template.layout(src, 0, np.random.default_rng(seed), fonts, 11.0, 1.0, 1024)
+    lay = template.layout(src, 0, np.random.default_rng(seed), fonts, 1024)
     return lay, refont.render(src, lay)
 
 
@@ -63,7 +63,7 @@ def test_no_gap_in_columns_when_next_page_has_text(fonts, seed):
     page(doc, 110, 110, head=False)
     page(doc, 110, 110, head=False)
     lay, img = lay_out(doc, seed, fonts)
-    line = lay["info"]["body_pt"] * lay["size"][0] / refont.C.sheet_pt_w * 1.3
+    line = lay["info"]["body_src_pt"] * lay["g"] * 1.3
     for c0, c1 in lay["cols"]:
         longest, last = blank_runs(img, c0, c1)
         assert longest <= 4 * line, f"column {c0:.0f}-{c1:.0f} has a {longest}px empty stretch (line {line:.0f}px)"
@@ -96,7 +96,7 @@ def test_a_long_paragraph_does_not_hold_back_its_neighbour_column(fonts, seed):
     doc = pymupdf.open()
     columns_with_a_short_first_line(doc)
     lay, img = lay_out(doc, seed, fonts)
-    line = lay["info"]["body_pt"] * lay["size"][0] / refont.C.sheet_pt_w * 1.3
+    line = lay["info"]["body_src_pt"] * lay["g"] * 1.3
     for c0, c1 in lay["cols"]:
         longest, _ = blank_runs(img, c0, c1)
         assert longest <= 4 * line, f"column {c0:.0f}-{c1:.0f} has a {longest}px empty stretch (line {line:.0f}px)"
@@ -115,12 +115,12 @@ def test_sheet_keeps_its_margin_and_is_reproducible(fonts, tmp_path):
     page(doc, 100, 90)
     path = str(tmp_path / "p.pdf")
     doc.save(path)
-    a, info = template.sheet(path, 0, 5, fonts, 12.0, 1.0, 0.1, (512, 724))
-    b, _ = template.sheet(path, 0, 5, fonts, 12.0, 1.0, 0.1, (512, 724))
+    a, info = template.sheet(path, 0, 5, fonts, 0.1, (512, 724))
+    b, _ = template.sheet(path, 0, 5, fonts, 0.1, (512, 724))
     assert a.shape == (724, 512) and (a == b).all()
     ink = a < 128
     assert not ink[:, :50].any() and not ink[:, -50:].any() and not ink[:72].any() and not ink[-72:].any() and ink.any()
-    assert 0.8 * 12.0 <= info["body_pt"] <= 12.0          # the body shrinks while the page's own text overflows its frames
+    assert info["body_px"] >= info["body_src_pt"] * (512 - 2 * 51) / 595          # the source size, scaled with the page
 
 
 def test_tiles_of_one_picture_are_joined_and_scattered_dots_are_not():
