@@ -183,32 +183,44 @@ def _run(row):
     return fn((row["path"], row["language"], row["category"], row["digital"], row["cap"]))
 
 
-def main(out_path, workers, pages=None):
-    """Pages by the targets: each script group gets its share of `pages`.
-    A group's files are taken in random order, pages_per_pdf pages of each (a book: its share of the group), a round
-    after another until the group's quota is met. A page is taken once, restyled or not."""
+def _batch(queue, group, got, quota):
+    """The files of one round, each with the pages it may give: every language of a script group with files left asks
+    for what it lacks to an equal share of the group's quota (a language without files leaves its share to the others)."""
     c = _LAYOUT
-    rng = np.random.default_rng(0)
+    batch = []
+    for g, q in quota.items():
+        langs = [l for l in queue if group[l] == g and queue[l]]
+        for l in langs:
+            lack, used = q / len(langs) - got[l], 0
+            for f in queue[l]:
+                if lack <= 0:
+                    break
+                cap = max(c.pages_per_pdf, round(c.doc_share * q)) if f["category"] == BOOKS else c.pages_per_pdf
+                batch.append(dict(f, cap=min(cap, math.ceil(lack))))
+                lack -= batch[-1]["cap"]
+                used += 1
+            queue[l] = queue[l][used:]
+    return batch
+
+
+def main(out_path, workers, pages=None):
+    """Pages by the targets: each script group gets its share of `pages`, split equally between its languages. A
+    language's files are taken in random order, pages_per_pdf pages of each (a book: its share of the group), a round
+    after another until the shares are met. A page is taken once, restyled or not."""
+    c = _LAYOUT
     files = list_files(Paths().files)
     quota = {g: round((pages or c.manifest_pages) * w) for g, w in c.script_mix}
-    queue = {g: [] for g, _ in c.script_mix}
-    for i in rng.permutation(len(files)):
-        queue.setdefault(script(files[i], c.scripts), []).append(files[i])
+    group = {f["language"]: script(f, c.scripts) for f in files}
+    queue = {l: [] for l in group}
+    for i in np.random.default_rng(0).permutation(len(files)):
+        queue[files[i]["language"]].append(files[i])
     got, recs, rejected, t0 = Counter(), [], [], time.time()
     with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
-        while True:
-            batch = []
-            for g, q in queue.items():
-                take = min(len(q), math.ceil(max(quota[g] - got[g], 0) / c.pages_per_pdf))
-                cap = max(c.pages_per_pdf, round(c.doc_share * quota[g]))
-                batch += [dict(f, cap=cap if f["category"] == BOOKS else c.pages_per_pdf) for f in q[:take]]
-                queue[g] = q[take:]
-            if not batch:
-                break
+        while batch := _batch(queue, group, got, quota):
             for rs in pool.map(_run, batch, chunksize=1):
                 for r in rs:
                     (rejected if r["kind"] == "rejected" else recs).append(r)
-                    got[script(r, c.scripts)] += r["kind"] != "rejected"
+                    got[r["language"]] += r["kind"] != "rejected"
             print(f"entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
@@ -216,7 +228,7 @@ def main(out_path, workers, pages=None):
     with open(Path(out_path).with_suffix(".rejected.jsonl"), "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r) + "\n" for r in rejected)
     print(f"TOTAL {len(recs)} entries, {len(rejected)} rejected, wall={time.time() - t0:.0f}s", flush=True)
-    print("per script group:", dict(got), "quota:", quota, flush=True)
+    print("per language:", dict(got), "quota:", quota, flush=True)
 
 
 if __name__ == "__main__":
