@@ -610,18 +610,33 @@ def visual(line):
     return [i for g, _ in groups[::-1] for i in g]
 
 
+def _unshadowed(above, x0, x1):
+    """The blocks above that are not hidden by nearer ones: a block whose width (within x0..x1) is mostly covered by blocks
+    that start below its end has others between it and the block below, which carry it."""
+    kept, top = [], {}
+    for a in sorted(above, key=lambda a: -a["oy1"]):
+        bins = range(int(max(a["x0"], x0) // C.shadow_bin), int(min(a["x1"], x1) // C.shadow_bin) + 1)
+        hidden = sum(top.get(b, float("inf")) >= a["oy1"] - a["pitch"] / 2 for b in bins if b in top)
+        if hidden < C.shadow_share * len(bins):
+            kept.append(a)
+        for b in bins:
+            top[b] = min(top.get(b, float("inf")), a["oy0"])
+    return kept
+
+
 def follow_top(x0, x1, y0, pinned, k, done, gfx, gap_cap, sc):
-    """Top of a block below the blocks that share its columns: their new bottoms plus the source gap, scaled."""
+    """Top of a block below the blocks that share its columns: their new bottoms plus the source gap, scaled. A gap of the
+    following pages is cut to gap_cap unless one graphic (a frame, a cell border) spans it from block to block."""
     if pinned:
         return y0
-    above = [a for a in done if min(a["x1"], x1) - max(a["x0"], x0) >= max(2.0, C.follow_overlap * min(a["x1"] - a["x0"], x1 - x0))
-             and a["oy0"] < y0 - 0.5 and not a["pinned"]]
+    above = _unshadowed([a for a in done if min(a["x1"], x1) - max(a["x0"], x0) >= max(2.0, C.follow_overlap * min(a["x1"] - a["x0"], x1 - x0))
+                         and a["oy0"] < y0 - 0.5 and not a["pinned"]], x0, x1)
 
     nearest = max(above, key=lambda a: a["oy1"], default=None)
 
     def follow(a):
         gap = max(y0 - a["oy1"], 0.0)
-        if k and (a is not nearest or not any(r[0] < x1 and r[2] > x0 and r[1] < y0 - 1 and r[3] > a["oy1"] + 3 for r in gfx)):
+        if k and (a is not nearest or not any(r[0] < x1 and r[2] > x0 and r[1] <= a["oy1"] + 3 and r[3] >= y0 - 1 for r in gfx)):
             gap = min(gap, gap_cap)
         return a["ny1"] + gap * sc
 
@@ -707,6 +722,13 @@ def row_groups(prepared, gfx):
     def one_line(m):
         return len(m["b"]["lines"]) == 1
 
+    def same_line(p, q):
+        return abs(p["y0"] - q["y0"]) <= max(p["tol"], q["tol"])
+
+    def same_band(p, q):
+        tol = max(p["tol"], q["tol"])
+        return p["band"] is not None and q["band"] is not None and all(abs(a - b) <= tol for a, b in zip(p["band"], q["band"]))
+
     levels = defaultdict(set)
     flat = [p for p in prepared if not p["pinned"] and not p["image"] and len(p["lines"]) <= C.row_lines]
     for i, p in enumerate(flat):
@@ -728,9 +750,9 @@ def row_groups(prepared, gfx):
         for gr in reversed(groups[-C.row_search:]):
             q = gr[0]
             if (not q["pinned"] and not q["image"] and len(q["lines"]) <= C.row_lines and q["k"] == p["k"]
-                    and abs(p["y0"] - q["y0"]) <= max(p["tol"], q["tol"])
                     and all(p["x0"] >= m["x1"] - 1 or p["x1"] <= m["x0"] + 1 for m in gr)
-                    and ((one_line(p) and all(one_line(m) for m in gr)) or ruled(gr + [p]) or all(columns_repeat(m, p) for m in gr))):
+                    and (same_band(p, q) or same_line(p, q) and ((one_line(p) and all(one_line(m) for m in gr)) or ruled(gr + [p])
+                                                                 or all(columns_repeat(m, p) for m in gr)))):
                 gr.append(p)
                 break
         else:
@@ -745,7 +767,7 @@ def overlay_top(p, done):
     return None if a is None else a["ny0"] + (p["y0"] - a["oy0"]) * a["scale"]
 
 
-def place(blocks, page_w, g, typesetter, role_of, px_of, sc, limit, cols, gfx, gap_cap, memo=None):
+def place(blocks, page_w, g, typesetter, role_of, px_of, sc, limit, cols, gfx, rules, gap_cap, memo=None):
     order = sorted(blocks, key=lambda b: (b["bbox"].y0, b["bbox"].x0))
     memo = {} if memo is None else memo
 
@@ -830,6 +852,10 @@ def place(blocks, page_w, g, typesetter, role_of, px_of, sc, limit, cols, gfx, g
                     pinned=pinned, src_lines=[(l["bbox"].y0 * g, l["bbox"].y1 * g) for l in b["lines"]], n=len(lines), pitch=pitch,
                     id=id(b), total=len(p["lines"]))
 
+    rules = sorted(rules, key=lambda r: r[2])
+    ys = [r[2] for r in rules]
+    for p in prepared:
+        p["band"] = _band(rules, ys, p)
     for members in row_groups(prepared, gfx):
         tops = [m["b"]["at"] if m["b"].get("at") is not None else overlay_top(m, done) if m["on"] is not None
                 else follow_top(m["x0"], m["x1"], m["y0"], m["pinned"], m["k"], done, gfx, gap_cap, sc) for m in members]
@@ -852,12 +878,13 @@ def place(blocks, page_w, g, typesetter, role_of, px_of, sc, limit, cols, gfx, g
 
 
 class Mapper:
-    """New y of a source y at an x range: carried by the nearest block above that shares most of the range."""
+    """New y of a source y at an x range. Inside a block it stays on the block's line; in a gap it is placed in the same
+    relation between the blocks that bound the gap in the range (above: the lowest bottom of the last row above, below:
+    the highest top of the first row below), so a rule keeps its place between the cells of the rows it separates."""
 
     def __init__(self, anchors, sc):
         self.sc = sc
-        self.anchors = sorted((a for a in anchors if not a["pinned"]), key=lambda a: (a["oy0"], a["oy1"], -a["x0"]))
-        self.oy0 = [a["oy0"] for a in self.anchors]
+        self.anchors = [a for a in anchors if not a["pinned"]]
         self.memo = {}
 
     def __call__(self, xa, xb, y):
@@ -867,18 +894,23 @@ class Mapper:
         return self.memo[key]
 
     def _map(self, xa, xb, y):
-        near = None
-        for i in range(bisect.bisect_right(self.oy0, y) - 1, -1, -1):
-            a = self.anchors[i]
-            if not (a["x0"] < xb + 1 and a["x1"] > xa - 1):
-                continue
-            if min(xb, a["x1"]) - max(xa, a["x0"]) >= 0.5 * min(xb - xa, a["x1"] - a["x0"]) - 1:
-                near = a
-                break
-            near = near or a
-        if near is None:
-            return y
-        return _inside(near, y) if y <= near["oy1"] else near["ny1"] + (y - near["oy1"]) * self.sc
+        over = [a for a in self.anchors if a["x0"] < xb + 1 and a["x1"] > xa - 1]
+        within = [a for a in over if a["oy0"] <= y <= a["oy1"]]
+        if within:
+            return _inside(max(within, key=lambda a: min(xb, a["x1"]) - max(xa, a["x0"])), y)
+        above = [a for a in over if a["oy1"] < y]
+        below = [a for a in over if a["oy0"] > y]
+        last = max((a["oy1"] for a in above), default=None)
+        first = min((a["oy0"] for a in below), default=None)
+        row_above = [a for a in above if a["oy1"] >= last - a["pitch"] / self.sc] if above else []
+        row_below = [a for a in below if a["oy0"] <= first + a["pitch"] / self.sc] if below else []
+        bottom = max((a["ny1"] for a in row_above), default=None)
+        top = min((a["ny0"] for a in row_below), default=None)
+        if bottom is None:
+            return y if top is None else top - (first - y) * self.sc
+        if top is None:
+            return bottom + (y - last) * self.sc
+        return bottom + (y - last) / (first - last) * (top - bottom)
 
 
 def map_y(anchors, sc, xa, xb, y):
@@ -983,6 +1015,21 @@ def pictures(doc, number, dy, first, ph, pw, home=None, below=None):
             continue
         out.append(dict(image=True, rect=r, number=number, bbox=r + (0, dy, 0, dy), pinned=fixed and first, k=0 if first else 1))
     return out
+
+
+def _hrules(elems, g):
+    """Horizontal rules of the graphics as (x0, x1, y) in output px: the lines that make the rows of a table."""
+    return [(x0 * g, x1 * g, (y + dy) * g) for kind, d, dy, number, fixed in elems if kind == "draw" and not fixed
+            for x0, y, x1 in _horizontal(d)]
+
+
+def _band(rules, ys, p):
+    """The rules above and below a block that run along all of its width: the row of a table it sits in, or None."""
+    def covers(r):
+        return r[0] <= p["x0"] + 2 and r[1] >= p["x1"] - 2
+    up = next((rules[k][2] for k in range(bisect.bisect_right(ys, p["y0"] + p["tol"]) - 1, -1, -1) if covers(rules[k])), None)
+    down = next((rules[k][2] for k in range(bisect.bisect_left(ys, p["y1"] - p["tol"]), len(rules)) if covers(rules[k])), None)
+    return None if up is None or down is None or down <= up else (up, down)
 
 
 def _gfx_rects(elems, g, page_area):
@@ -1289,6 +1336,7 @@ def flow(doc, number, first, typesetter, body, mult, target, sc_font, scale, col
     gap_cap = C.gap_body * body * g
     elems = list(elems0)
     gfx = _gfx_rects(elems, g, pw * g * ph * g)
+    rules = _hrules(elems, g)
     text_bottom = max((b["bbox"].y1 for b in first if not b["pinned"]), default=None)
     first = first + pictures(doc, number, 0.0, True, ph, pw, below=text_bottom)
     typesetter.dropped = 0
@@ -1304,19 +1352,21 @@ def flow(doc, number, first, typesetter, body, mult, target, sc_font, scale, col
         nxt = doc[number + st["used"]]
         probe = page_blocks(nxt, 0.0, False, running) if text_page(nxt) else []
         if probe:
-            top, bot = extent(probe, 0.0)
+            pics = pictures(doc, number + st["used"], 0.0, False, ph, pw, number)
+            top, bot = extent(probe + pics, 0.0)
             st["dy"] += st["bottom"] + body - top
-            blocks.extend(page_blocks(nxt, st["dy"], False, running) + pictures(doc, number + st["used"], st["dy"], False, ph, pw, number))
+            blocks.extend(page_blocks(nxt, st["dy"], False, running) + [dict(p, bbox=p["bbox"] + (0, st["dy"], 0, st["dy"])) for p in pics])
             st["bottom"] = bot
             st["limit"] = max(st["limit"], bot * g)
             more = graphics(doc, number + st["used"], st["dy"], False, ph, pw, number)
             elems.extend(more)
             gfx.extend(_gfx_rects(more, g, pw * g * ph * g))
+            rules.extend(_hrules(more, g))
         st["used"] += 1
         return True
 
     def run():
-        return place(blocks, pw, g, typesetter, role_of, px_of, sc, st["limit"], cols_px, gfx, gap_cap, memo)
+        return place(blocks, pw, g, typesetter, role_of, px_of, sc, st["limit"], cols_px, gfx, rules, gap_cap, memo)
 
     res = run()
     slack = 2 * px_of(body)
@@ -1552,16 +1602,17 @@ def sheet(path, number, seed, fonts, body_pt, scale, margin, size):
     return np.asarray(out), lay["info"]
 
 
-def garbled(segs):
-    """Text that did not come out as text of one script (a font without a text map): mixed scripts or private-use codes."""
+def garbled(segs, latin):
+    """Text that did not come out as text of one script (a font without a text map): mixed scripts or private-use codes.
+    Latin letters in a page of a language that is not written in Latin are such text too (a legacy font's own codes)."""
     text = "".join(s["text"] for l in segs for s in l["spans"])
     letters = [c for c in text if c.isalpha()]
     marks = [c for c in text if not c.isspace()]
     if not letters or not marks:
         return True
-    top = Counter(_script(c) for c in letters).most_common(1)[0][1]
+    name, top = Counter(_script(c) for c in letters).most_common(1)[0]
     private = sum(unicodedata.category(c) == "Co" for c in marks)
-    return top < C.script_purity * len(letters) or private > C.private_share * len(marks)
+    return (name == "latin" and not latin) or top < C.script_purity * len(letters) or private > C.private_share * len(marks)
 
 
 def over_pictures(page, segs):
@@ -1570,12 +1621,13 @@ def over_pictures(page, segs):
     return sum(any(l["bbox"] in im for im in images) for l in segs) / max(len(segs), 1)
 
 
-def usable(page):
-    """A page of text set in the PDF: a body (not only header and footer), text of one script, no more than
+def usable(page, latin=True):
+    """A page of text set in the PDF: a body (not only header and footer), text of one script (Latin only if the language
+    is written in it), no more than
     max_columns columns, no scan with a hidden text layer."""
     segs = parsed(page, 0.0)[0]
     body = [l for l in segs if l["bbox"].y1 >= C.header_pt and l["bbox"].y0 <= page.rect.height - C.footer_pt]
-    return (bool(body) and text_page(page) and not garbled(segs) and len(column_intervals(segs)) <= C.max_columns
+    return (bool(body) and text_page(page) and not garbled(segs, latin) and len(column_intervals(segs)) <= C.max_columns
             and over_pictures(page, segs) <= C.over_picture_share)
 
 
