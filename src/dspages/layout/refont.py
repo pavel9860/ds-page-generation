@@ -1419,52 +1419,58 @@ def needs_shaping(text):
 
 
 _GLYPHS = {}
+_NEW = {}
 _GLYPH_DIR = Path("~/.cache/dspages").expanduser()
-_glyph_new = 0
+_GLYPH_FILE = _GLYPH_DIR / "glyphs.pkl"
 
 
 def load_glyphs():
-    """Glyph bitmaps of earlier runs, by (font file, size, weight, letter)."""
-    for f in sorted(_GLYPH_DIR.glob("glyphs.*.pkl")):
-        try:
-            with open(f, "rb") as fh:
-                _GLYPHS.update(pickle.load(fh))
-        except Exception:
-            pass
+    """Glyph bitmaps of earlier runs (the merged file), by (font file, size, weight, letter)."""
+    if _GLYPH_FILE.exists():
+        with open(_GLYPH_FILE, "rb") as fh:
+            _GLYPHS.update(pickle.load(fh))
 
 
 def save_glyphs():
-    global _glyph_new
-    if _glyph_new:
+    """The glyphs this process made, in a file of its own; merge_glyphs joins them into the cache."""
+    if _NEW:
         _GLYPH_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = _GLYPH_DIR / f"glyphs.{os.getpid()}.tmp"
-        with open(tmp, "wb") as fh:
-            pickle.dump(_GLYPHS, fh)
-        os.replace(tmp, _GLYPH_DIR / f"glyphs.{os.getpid()}.pkl")
-        _glyph_new = 0
+        with open(_GLYPH_DIR / f"glyphs.{os.getpid()}.part", "wb") as fh:
+            pickle.dump(_NEW, fh)
+        _NEW.clear()
+
+
+def merge_glyphs():
+    """The cache file and the files of the processes joined into the one cache file."""
+    parts = sorted(_GLYPH_DIR.glob("glyphs.*.part"))
+    load_glyphs()
+    for f in parts:
+        with open(f, "rb") as fh:
+            _GLYPHS.update(pickle.load(fh))
+    with open(_GLYPH_FILE.with_suffix(".tmp"), "wb") as fh:
+        pickle.dump(_GLYPHS, fh)
+    os.replace(_GLYPH_FILE.with_suffix(".tmp"), _GLYPH_FILE)
+    for f in parts:
+        f.unlink()
+
+
+def _bitmap(f, text, **kw):
+    mask, (ox, oy) = f.getmask2(text, "L", anchor="ls", **kw)
+    w, h = mask.size
+    return (np.array(mask, dtype=np.uint8).reshape(h, w) if w and h else np.zeros((0, 0), np.uint8)), ox, oy
 
 
 def _glyph(f, ch):
-    global _glyph_new
     key = f.key + (ch,)
     if key not in _GLYPHS:
-        mask, (ox, oy) = f.getmask2(ch, "L", anchor="ls")
-        w, h = mask.size
-        cov = np.array(mask, dtype=np.uint8).reshape(h, w) if w and h else np.zeros((0, 0), np.uint8)
-        _GLYPHS[key] = (cov, ox, oy, f.getlength(ch))
-        _glyph_new += 1
+        _GLYPHS[key] = _NEW[key] = (*_bitmap(f, ch), f.getlength(ch))
     return _GLYPHS[key]
 
 
 def _word(f, text, direction):
-    global _glyph_new
     key = f.key + (text, direction)
     if key not in _GLYPHS:
-        mask, (ox, oy) = f.getmask2(text, "L", anchor="ls", direction=direction)
-        w, h = mask.size
-        cov = np.array(mask, dtype=np.uint8).reshape(h, w) if w and h else np.zeros((0, 0), np.uint8)
-        _GLYPHS[key] = (cov, ox, oy, 0.0)
-        _glyph_new += 1
+        _GLYPHS[key] = _NEW[key] = (*_bitmap(f, text, direction=direction), 0.0)
     return _GLYPHS[key]
 
 

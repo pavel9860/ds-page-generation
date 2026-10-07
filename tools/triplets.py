@@ -7,6 +7,7 @@ ranges like the generation does. Writes OUT_DIR/<i>_<category>_<file>_p<page>.pn
 import argparse
 import os
 from concurrent.futures import ProcessPoolExecutor
+from multiprocessing.util import Finalize
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,7 @@ def _init(preset):
     P = get_preset(preset)
     _W.update(c=P.layout, fonts=refont.font_set(P.paths.font_dirs))
     refont.load_glyphs()
+    Finalize(None, refont.save_glyphs, exitpriority=10)
 
 
 def _triplet(args):
@@ -44,7 +46,6 @@ def _triplet(args):
         out_img.paste(p, (j * (pw + 20), 0))
     name = f"{i:03d}_{e['category']}_{Path(e['source_path']).stem[:24]}_p{e['page_index']}.png"
     out_img.resize((out_img.width // 2, out_img.height // 2), Image.LANCZOS).save(Path(out) / name)
-    refont.save_glyphs()
     return name
 
 

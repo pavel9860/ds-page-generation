@@ -16,6 +16,7 @@ import json
 import shutil
 import time
 from concurrent.futures import ProcessPoolExecutor
+from multiprocessing.util import Finalize
 from pathlib import Path
 
 import cv2
@@ -53,6 +54,7 @@ def _init(preset, out, seed, manifest=None):
     _W.update(P=P, out=Path(out), seed=seed, plan=load_plan(Path(out) / "plan.jsonl"),
               manifest=load_manifest(manifest or P.paths.manifest), fonts=refont.font_set(P.paths.font_dirs))
     refont.load_glyphs()
+    Finalize(None, refont.save_glyphs, exitpriority=10)
 
 
 def _rng(i, part):
@@ -72,7 +74,6 @@ def _layout(i, save):
     spec = _W["plan"][i]
     L = make_layout(_rng(i, "layout"), _W["manifest"][spec["entry"]],
                     layout_preset(_W["P"], spec), _W["fonts"])
-    refont.save_glyphs()
     if save:
         io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], L["page"], _preview("layout", i))
     return L["page"], L["meta"]
