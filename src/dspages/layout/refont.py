@@ -21,6 +21,7 @@ from ..config import RefontCfg
 from .text import _font_cmap, find_fonts
 
 C = RefontCfg()
+TEXT_FLAGS = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES      # lines only: pictures come from get_image_info
 STYLE_OF = {"": 0, "regular": 0, "roman": 0, "book": 0, "bold": 1, "italic": 2, "oblique": 2, "bolditalic": 3,
             "boldoblique": 3}
 LEADING_VOWELS = "เแโไใ"
@@ -119,7 +120,7 @@ def _unique(segs):
 
 def extract_segments(page, dy):
     """Text lines of a page, each cut into one segment per run."""
-    lines = [l for b in page.get_text("dict")["blocks"] for l in b.get("lines", [])]
+    lines = [l for b in page.get_text("dict", flags=TEXT_FLAGS)["blocks"] for l in b.get("lines", [])]
     segs = []
     for l in lines:
         if abs(l["dir"][1]) > C.tilt:
@@ -1003,7 +1004,7 @@ def _text_free(doc, number):
     one.insert_pdf(doc, from_page=number, to_page=number)
     page = one[0]
     pictures_ = [pymupdf.Rect(im["bbox"]) for im in page.get_image_info()]
-    for b in page.get_text("dict")["blocks"]:
+    for b in page.get_text("dict", flags=TEXT_FLAGS)["blocks"]:
         for l in b.get("lines", []):
             for s in l["spans"]:
                 if any(pymupdf.Rect(s["bbox"]).intersects(r) for r in pictures_):

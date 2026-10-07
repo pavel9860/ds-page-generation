@@ -39,7 +39,7 @@ def describe(args):
     with fitz.open(path) as doc:
         mid = doc[doc.page_count // 2]
         sizes = Counter()
-        for s in (s for b in mid.get_text("dict")["blocks"] for l in b.get("lines", []) for s in l["spans"]):
+        for s in (s for b in mid.get_text("dict", flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)["blocks"] for l in b.get("lines", []) for s in l["spans"]):
             sizes[round(s["size"] * 2) / 2] += len(s["text"])
         return dict(row, digital=digital and bool(sizes), pages=doc.page_count,
                     fonts=sorted({f[3] for f in mid.get_fonts()}), body_pt=sizes.most_common(1)[0][0] if sizes else 0.0)
