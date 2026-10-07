@@ -1089,9 +1089,9 @@ def draw_graphics(img, elems, anchors, sc, g, cutoff, spans, roots, limit):
 
 def text_page(page):
     """False for scanned or picture pages: little text, or pictures covering most of the page."""
-    area = page.rect.get_area()
+    chars = sum(len(s["text"].strip()) for l in parsed(page, 0.0)[0] for s in l["spans"])
     image = sum((pymupdf.Rect(im["bbox"]) & page.rect).get_area() for im in page.get_image_info())
-    return len(page.get_text().strip()) >= C.min_text_chars and image <= C.max_image_share * area
+    return chars >= C.min_text_chars and image <= C.max_image_share * page.rect.get_area()
 
 
 def running_bands(blocks):
