@@ -211,3 +211,10 @@ def test_turned_page_stretches_tables_and_keeps_the_shape_of_pictures(fonts):
     assert abs(pic["rect"].width / pic["rect"].height - 2.0) < 0.02
     horizontal = [d["rect"].width for d, fixed, dy in lay["elems"] if d["rect"].height < 1]
     assert horizontal and all(abs(w - 495 * 842 / 595) < 1 for w in horizontal)
+
+
+def test_a_tounicode_map_that_only_spells_out_winansi_is_no_text_map():
+    cmap = b"begincmap\n2 beginbfrange\n<20><20><0020>\n<41><43><0041>\nendbfrange\n2 beginbfchar\n<80><20ac>\n<c7><00c7>\nendbfchar\nendcmap"
+    assert refont._winansi_only(cmap)
+    assert not refont._winansi_only(cmap.replace(b"<c7><00c7>", b"<c7><0995>"))
+    assert not refont._winansi_only(b"begincmap\nendcmap")

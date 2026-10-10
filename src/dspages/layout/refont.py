@@ -3,6 +3,7 @@ columns, alignment, bold/italic and heading/body hierarchy; rules, boxes and pic
 The text of the following pages flows in, so the page stays full. Fonts come from find_fonts, matched to the
 page's scripts by the real glyph coverage of every font file that is drawn with."""
 import bisect
+import io
 import re
 import glob
 import os
@@ -22,6 +23,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from ..config import RefontCfg
 from .text import _font_cmap, find_fonts, font_info, save_font_info
+from fontTools.ttLib import TTFont
 
 C = RefontCfg()
 TEXT_FLAGS = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES      # lines only: pictures come from get_image_info
@@ -31,6 +33,7 @@ LEADING_VOWELS = "เแโไใ"
 JOINERS = "‌‍"
 NO_SPACE_SCRIPTS = ("THAI", "LAO", "KHMER", "MYANMAR", "CJK", "HIRAGANA", "KATAKANA", "HANGUL", "IDEOGRAPHIC")
 CJK_NAMES = ("hiragana", "katakana", "hangul", "bopomofo", "ideographic")
+GSUB_ROUNDS = 8                 # passes over a font's substitutions to name the glyphs made from glyphs made from mapped ones
 SYMBOL_FONTS = ("wingding", "webding", "symbol", "dingbat", "zapf")    # fonts whose letters are pictures: set as the page's glyph
 NOTO_PREFIXES = ("notosans", "notoserif", "noto")      # longest first: NotoKufiArabic, NotoTraditionalNushu are script fonts too
 TERMINAL = tuple(".;:!?…。")
@@ -104,10 +107,29 @@ def _cmap_subtables(data):
     return set()
 
 
+def _winansi_only(cmap):
+    """Whether a ToUnicode CMap (its stream) maps every code it has to the code's own WinAnsi (cp1252) reading: the
+    encoding spelled out, nothing about the glyphs."""
+    text = cmap.decode("latin-1")
+    pairs = []
+    for block in re.findall(r"beginbfrange(.*?)endbfrange", text, re.S):
+        for a, b, u in re.findall(r"<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>", block):
+            pairs += [(k, int(u, 16) + k - int(a, 16)) for k in range(int(a, 16), int(b, 16) + 1)]
+    for block in re.findall(r"beginbfchar(.*?)endbfchar", text, re.S):
+        pairs += [(int(a, 16), int(u, 16)) for a, u in re.findall(r"<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>", block)]
+
+    def winansi(k):
+        try:
+            return ord(bytes([k]).decode("cp1252")) if k < 256 else None
+        except UnicodeDecodeError:
+            return None
+    return bool(pairs) and all(winansi(k) == u for k, u in pairs)
+
+
 def symbolic_fonts(page):
     """Names of a page's embedded simple TrueType fonts whose text cannot be trusted: mapped only by the Symbol cmap (no
-    Unicode one) and with no ToUnicode map, so their text is the font's own codes (legacy encodings), readable only in that
-    font. A name counts when every font of the page that has it is such a font. The font program is read from its stream."""
+    Unicode one) and with no ToUnicode map or one that only spells out the WinAnsi reading of the codes, so their text is
+    the font's own codes (legacy encodings), readable only in that font. A name counts when every font of the page that has it is such a font. The font program is read from its stream."""
     doc, bad, ok = page.parent, set(), set()
 
     def ref(key):
@@ -118,7 +140,8 @@ def symbolic_fonts(page):
         desc = ref(doc.xref_get_key(xref, "FontDescriptor")) if kind == "TrueType" and 0 < xref < doc.xref_length() else 0
         ff = ref(doc.xref_get_key(desc, "FontFile2")) if desc else 0
         subs = _cmap_subtables(doc.xref_stream(ff) or b"") if ff else set()
-        legacy = (3, 0) in subs and not subs & {(3, 1), (3, 10), (0, 3), (0, 4)} and doc.xref_get_key(xref, "ToUnicode")[0] == "null"
+        tu = ref(doc.xref_get_key(xref, "ToUnicode"))
+        legacy = (3, 0) in subs and not subs & {(3, 1), (3, 10), (0, 3), (0, 4)} and (not tu or _winansi_only(doc.xref_stream(tu) or b""))
         (bad if legacy else ok).add(name)
     return bad - ok
 
@@ -262,10 +285,84 @@ def _overprint(segs):
     return sorted(kept, key=lambda l: order[id(l)])
 
 
+@lru_cache(maxsize=64)
+def _font_glyph_text(data):
+    """Text of each glyph of a font program (glyph id -> text): its Unicode cmap, and through its GSUB single and ligature
+    substitutions the glyphs made from mapped ones (conjuncts, half forms); the glyphs its cmap maps directly; its glyph count."""
+    f = TTFont(io.BytesIO(data), lazy=True)
+    gid = {n: i for i, n in enumerate(f.getGlyphOrder())}
+    text = {}
+    for t in f["cmap"].tables if "cmap" in f else ():
+        if t.isUnicode():
+            for u, n in t.cmap.items():
+                text.setdefault(gid[n], chr(u))
+    direct = frozenset(text)
+    subs = []
+    for lk in f["GSUB"].table.LookupList.Lookup if "GSUB" in f and f["GSUB"].table.LookupList else ():
+        for st in lk.SubTable:
+            st = st.ExtSubTable if lk.LookupType == 7 else st
+            if getattr(st, "LookupType", lk.LookupType) == 4:
+                subs += [([first, *lg.Component], lg.LigGlyph) for first, ligs in st.ligatures.items() for lg in ligs]
+            elif getattr(st, "LookupType", lk.LookupType) == 1:
+                subs += [([a], b) for a, b in st.mapping.items()]
+    for _ in range(GSUB_ROUNDS):
+        grown = False
+        for src, dst in subs:
+            d = gid.get(dst)
+            if d is not None and d not in text and all(gid.get(g) in text for g in src):
+                text[d] = "".join(text[gid[g]] for g in src)
+                grown = True
+        if not grown:
+            break
+    return text, direct, len(gid)
+
+
+def _glyph_texts(page):
+    """(font name, origin) -> text of the glyph there, for the runs whose text map (ToUnicode) gives some glyph another
+    character than the cmap of the font program maps it to directly: the map is wrong, the glyphs say what the text is.
+    A run's program is the one of its name that has all its glyphs and agrees with most of its characters (more than
+    half, else the run is left as it is). Glyphs at one origin (a mark on its letter) give their texts in order."""
+    doc, programs = page.parent, defaultdict(list)
+    for xref, ext, kind, base, *_ in page.get_fonts():
+        if ext in ("ttf", "otf") and 0 < xref < doc.xref_length():
+            data = doc.extract_font(xref)[3]
+            if data:
+                try:
+                    programs[base.split("+")[-1]].append(_font_glyph_text(data))
+                except Exception:
+                    pass
+    out = {}
+    for tr in page.get_texttrace():
+        chars = [(chr(u), g, o) for u, g, o, _ in tr["chars"] if g > 0]
+
+        def agree(p):
+            text, direct, n = p
+            return -1 if any(g >= n for _, g, _ in chars) else sum(text.get(g) == c for c, g, _ in chars)
+        best = max(programs.get(tr["font"], ()), key=agree, default=None)
+        if best is None or 2 * agree(best) <= len(chars):
+            continue
+        text, direct, _ = best
+        if any(g in direct and text[g] != c for c, g, _ in chars):
+            for c, g, o in chars:
+                key = (tr["font"], round(o[0], 1), round(o[1], 1))
+                out[key] = out.get(key, "") + text.get(g, c)
+    return out
+
+
 def extract_segments(page, textpage=None):
     """Text lines of a page, each cut into one segment per run."""
     lines = [l for b in page.get_text("rawdict", flags=TEXT_FLAGS, textpage=textpage)["blocks"] for l in b.get("lines", [])]
     symbolic = symbolic_fonts(page)
+    fixed = _glyph_texts(page)
+    if fixed:
+        for l in lines:
+            for sp in l["spans"]:
+                seen = set()
+                for ch in sp["chars"]:
+                    key = (sp["font"], round(ch["origin"][0], 1), round(ch["origin"][1], 1))
+                    if key in fixed:
+                        ch["c"] = "" if key in seen else fixed[key]
+                        seen.add(key)
     segs, rows = [], []
     for l in lines:
         if abs(l["dir"][1]) > C.tilt:
