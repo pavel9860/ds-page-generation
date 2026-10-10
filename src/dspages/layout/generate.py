@@ -24,12 +24,12 @@ def _crop(src, x, y, w, h, pad):
     return out
 
 
-def _raster_sheet(entry, pw, ph, c):
+def _raster_sheet(entry, pw, ph, c, image=None):
     """Sheet (pw, ph) px from a raster page: the manifest's window, PDF pages rendered at the zoom that makes it the
-    sheet's size (within max_zoom), images resized."""
+    sheet's size (within max_zoom), images (image: the page already read) resized."""
     x, y, w, h = entry["window"]
     k = min(pw / w, c.max_zoom) if is_pdf(entry) else 1.0
-    src = raster_page(entry, k)
+    src = raster_page(entry, k) if image is None else image
     exact = k == pw / w                                     # rendered at the sheet's size: cut, not resized
     crop = _crop(src, round(x * k), round(y * k), *((pw, ph) if exact else (round(w * k), round(h * k))), int(np.percentile(src, 95)))
     if crop.shape != (ph, pw):
@@ -37,12 +37,10 @@ def _raster_sheet(entry, pw, ph, c):
     return crop, dict(window=(x, y, w, h), zoom=k, upscale=float(pw / round(w * k)))
 
 
-def _raster_ink(entry):
-    """Ink box of a raster page's window, shares of the window (x0, y0, x1, y1); a band of INK_BORDER along the
-    window's edges (scan borders, dark page edges) is left out."""
+def _raster_ink(entry, src, k):
+    """Ink box of a raster page's window (src: the page at k x its manifest size), shares of the window (x0, y0, x1,
+    y1); a band of INK_BORDER along the window's edges (scan borders, dark page edges) is left out."""
     x, y, w, h = entry["window"]
-    k = min(1.0, SCAN_MAX_SIDE / max(w, h)) if is_pdf(entry) else 1.0
-    src = raster_page(entry, k)
     crop = _crop(src, *(round(v * k) for v in (x, y, w, h)), int(np.percentile(src, 95)))
     mask, _ = content_mask(crop)
     by, bx = (max(1, round(INK_BORDER * n)) for n in mask.shape)
@@ -73,7 +71,9 @@ def make_layout(rng, entry, P: Preset, fonts, spread=False, font_pt=None):
                     crossings_mm=crossings((pw - 2 * mx) / ppm, (ph - 2 * my) / ppm, c.grid) + [mx / ppm, my / ppm])
     elif entry["kind"] == "raster":
         x, y, w, h = entry["window"]
-        desc.update(kind="raster", ink=_raster_ink(entry))
+        k = min(1.0, SCAN_MAX_SIDE / max(w, h)) if is_pdf(entry) else 1.0
+        src = raster_page(entry, k)
+        desc.update(kind="raster", ink=_raster_ink(entry, src, k), image=None if is_pdf(entry) else src)
         meta.update(window=(x, y, w, h), fill=entry["fill"], image_share=entry["picture_share"], margin=entry["margin"])
     else:
         m = rng.uniform(*c.margin_frac)
@@ -112,7 +112,7 @@ def draw_layout(desc, s, P: Preset):
         gray = np.full((ph, pw), 255, np.uint8)
         gray[my:ph - my, mx:pw - mx] = grid_page(pw - 2 * mx, ph - 2 * my, ppm, c.grid)
     elif desc["kind"] == "raster":
-        gray, _ = _raster_sheet(desc["entry"], pw, ph, c)
+        gray, _ = _raster_sheet(desc["entry"], pw, ph, c, desc["image"])
     else:
         gray = np.full((ph, pw), 255, np.uint8)
         hw = desc["size"][0] // len(desc["parts"])

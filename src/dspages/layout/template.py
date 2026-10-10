@@ -420,10 +420,10 @@ def layout(src, number, rng, fonts, width_px, k=1.0, turn=False):
                 size=(width_px, page_h), info=info)
 
 
-def _open(path, number, box=None):
-    """The PDF with its pages from number on cropped to box (None: the content box of page number) -> doc, box."""
+def _open(path, number):
+    """The PDF with its pages from number on cropped to the content box of page number -> doc, box."""
     doc = pymupdf.open(path)
-    box = R.content_box(doc[number]) if box is None else box
+    box = R.content_box(doc[number])
     for k in range(number, min(number + C.max_pages, len(doc))):
         cb, mb = doc[k].cropbox, doc[k].mediabox      # set_cropbox: x in PDF units, y down from the MediaBox top;
         inside = pymupdf.Rect(mb.x0, 0, mb.x1, mb.height) + (0.01, 0.01, -0.01, -0.01)   # its check is exact
@@ -450,19 +450,18 @@ def _ink_box(lay):
 def sheet_layout(path, number, seed, fonts, margin, size, body_px=None, turn=False):
     """The content of a PDF page restyled on a sheet of size (width, height) px with a blank margin (share of the sheet's
     sides) all around, its body at body_px (None: the source size) and its other sizes in the source's ratio to it: ->
-    a sheet description (draw_sheet draws it at any scale) with the layout info (body_px) and the ink box (x0, y0, x1, y1)
+    a sheet description (draw_sheet draws it at any scale; it holds the open PDF) with the layout info (body_px) and the ink box (x0, y0, x1, y1)
     px on the sheet. The same seed gives the same sheet. turn: the page turned a quarter (see turn.py): its content is
     set on the sheet turned, its text at the size the source has (less only where the fixed rows of the page leave no room)."""
     sw, sh = size
     mx, my = round(margin * sw), round(margin * sh)
     doc, box = _open(path, number)
-    with doc:
-        w = min(sw - 2 * mx, round((sh - 2 * my) * box.width / box.height))
-        src = R.Source(doc)
-        g = w / box.width
-        body = R.body_size(R.page_blocks(src, number, True))
-        k = body_px / (body * g) if body_px and body else 1.0
-        lay = layout(src, number, np.random.default_rng(seed), fonts, round(w * box.height / box.width) if turn else w, k, turn)
+    w = min(sw - 2 * mx, round((sh - 2 * my) * box.width / box.height))
+    src = R.Source(doc)
+    g = w / box.width
+    body = R.body_size(R.page_blocks(src, number, True))
+    k = body_px / (body * g) if body_px and body else 1.0
+    lay = layout(src, number, np.random.default_rng(seed), fonts, round(w * box.height / box.width) if turn else w, k, turn)
     lw, lh = lay["size"]
     x0, y0, x1, y1 = _ink_box(lay)
     if turn:
@@ -470,14 +469,13 @@ def sheet_layout(path, number, seed, fonts, margin, size, body_px=None, turn=Fal
     pos = (mx + (sw - 2 * mx - lw) // 2, my)
     ink = (x0 + pos[0], y0 + pos[1], x1 + pos[0], y1 + pos[1])
     info = dict(lay["info"], body_px=lay["info"]["body_src_pt"] * lay["g"] * lay["info"]["k"])
-    return dict(path=path, number=number, box=box, lay=lay, size=size, pos=pos, turn=turn, ink=ink), info
+    return dict(src=src, lay=lay, size=size, pos=pos, turn=turn, ink=ink), info
 
 
 def draw_sheet(desc, s=1.0):
     """uint8 sheet of a sheet_layout description drawn s times its size."""
     sw, sh = desc["size"]
-    with _open(desc["path"], desc["number"], desc["box"])[0] as doc:
-        img = R.render(R.Source(doc), desc["lay"], s)
+    img = R.render(desc["src"], desc["lay"], s)
     if desc["turn"]:
         img = img.rotate(-90, expand=True)
     out = Image.new("L", (round(sw * s), round(sh * s)), 255)
