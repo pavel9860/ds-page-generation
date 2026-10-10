@@ -140,7 +140,7 @@ def symbolic_fonts(page):
         desc = ref(doc.xref_get_key(xref, "FontDescriptor")) if kind == "TrueType" and 0 < xref < doc.xref_length() else 0
         ff = ref(doc.xref_get_key(desc, "FontFile2")) if desc else 0
         subs = _cmap_subtables(doc.xref_stream(ff) or b"") if ff else set()
-        tu = ref(doc.xref_get_key(xref, "ToUnicode"))
+        tu = ref(doc.xref_get_key(xref, "ToUnicode")) if 0 < xref < doc.xref_length() else 0
         legacy = (3, 0) in subs and not subs & {(3, 1), (3, 10), (0, 3), (0, 4)} and (not tu or _winansi_only(doc.xref_stream(tu) or b""))
         (bad if legacy else ok).add(name)
     return bad - ok

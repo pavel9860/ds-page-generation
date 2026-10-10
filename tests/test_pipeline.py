@@ -131,3 +131,11 @@ def test_a_failing_sample_is_logged_and_the_run_goes_on_and_resumes(tmp_path):
     assert all((out / "samples" / f"{s}.npz").exists() for s in done)
     cli.main(["all", "--preset", "demo", "--out", str(out), "--n", "4", "--workers", "1", "--manifest", str(man)])
     assert sum(1 for _ in open(out / "meta.jsonl")) == len(done)
+
+
+def test_a_manifest_file_that_raises_is_rejected_with_its_error(tmp_path):
+    from dspages.prep import manifest
+    p = tmp_path / "broken.pdf"
+    p.write_bytes(b"%PDF-1.4 not a pdf")
+    recs = manifest._run(dict(path=str(p), language="en", category="test", digital=True, cap=2, skip=set()))
+    assert len(recs) == 1 and recs[0]["kind"] == "rejected"

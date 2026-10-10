@@ -249,8 +249,12 @@ def _tree(files, c, quota, taken):
 
 
 def _run(row):
+    """The records of a file; a file whose reading raises is one rejected record with the error."""
     fn = _job_pdf if row["path"].lower().endswith(".pdf") else _job_image
-    return fn((row["path"], row["language"], row["category"], row["digital"], row["cap"], row["skip"]))
+    try:
+        return fn((row["path"], row["language"], row["category"], row["digital"], row["cap"], row["skip"]))
+    except Exception as e:
+        return [_reject(row["path"], 0, row["language"], "error", error=f"{type(e).__name__}: {e}")]
 
 
 def _records(batch, workers):
