@@ -30,7 +30,7 @@ def _raster_sheet(entry, pw, ph, c, image=None):
     x, y, w, h = entry["window"]
     k = min(pw / w, c.max_zoom) if is_pdf(entry) else 1.0
     src = raster_page(entry, k) if image is None else image
-    exact = k == pw / w                                     # rendered at the sheet's size: cut, not resized
+    exact = k == pw / w                                     # rendered at the sheet's size: cut to it
     crop = _crop(src, round(x * k), round(y * k), *((pw, ph) if exact else (round(w * k), round(h * k))), int(np.percentile(src, 95)))
     if crop.shape != (ph, pw):
         crop = cv2.resize(crop, (pw, ph), interpolation=cv2.INTER_AREA if crop.shape[1] >= pw else cv2.INTER_CUBIC)

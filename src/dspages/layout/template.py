@@ -432,11 +432,11 @@ def _open(path, number):
 
 
 def _ink_box(lay):
-    """(x0, y0, x1, y1) px of what a layout draws: text lines and items (font size above the baseline, 0.3 of it
+    """(x0, y0, x1, y1) px of what a layout draws: text lines and items (line_asc_em above the baseline, line_desc_em
     below), pictures, glyph runs and graphics."""
     g = lay["g"]
     boxes = [(r["x0"], r["y0"], r["x1"], r["y1"]) for r in lay["rects"]]
-    boxes += [(x, y - f.key[1], x + R.text_width(*f.key, text, direction), y + 0.3 * f.key[1])
+    boxes += [(x, y - C.line_asc_em * f.key[1], x + R.text_width(*f.key, text, direction), y + C.line_desc_em * f.key[1])
               for x, y, f, text, _, direction, _ in lay["items"] if text.strip()]
     boxes += [(x, top, x + b["rect"].width * g, top + b["rect"].height * g) for x, top, b in lay["pics"]]
     boxes += [(x, y - t["px"], x + t["px"], y) for x, y, t in lay["glyphs"]]

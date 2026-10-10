@@ -3,7 +3,7 @@
 The frame (the plan's) holds the whole page, cuts it on some sides or all four, the content in view. The flat is the page
 part in view: on a cut side it ends at the smallest page margin beyond the content left in view there, then brought to
 the sheet's aspect by trimming margins (never the content). The layout is drawn once, at the scale that makes that part
-page_px (no resampling of the flat); the photo samples the same drawing. All at the sheet's aspect, turned portrait
+page_px (the flat is a slice of it); the photo samples the same drawing. All at the sheet's aspect, turned portrait
 when it is landscape (an open book): photo and flat page_px, the UV and 3D maps the page grid's size (mesh): node
 (i, j) is the point at evenly spaced coordinates of the flat, so neither map has holes.
 flat   (h, w) uint8: the layout sheet's part in view (luminance)

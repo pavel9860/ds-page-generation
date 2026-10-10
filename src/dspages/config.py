@@ -315,7 +315,6 @@ class RefontCfg:
 class LayoutCfg:
     sheet_mm: tuple = (210.0, 297.0)
     page_px: tuple = (1024, 1440)                   # flat page and photo (width, height)
-    sheet_scale: float = 1.25                       # the sheet is laid out this much larger: a flat cut to the content stays >= 1:1
     margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
     cut_margin_frac: tuple = (0.12, 0.20)           # the margin of restyled pages whose frame cuts the page (room around the content)
     min_fill: float = 0.75                          # fraction of the content window's patches with ink
