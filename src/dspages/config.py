@@ -339,8 +339,8 @@ class LayoutCfg:
                   "or", "si", "km", "lo", "my", "am", "as", "mni", "mr", "sa", "bo", "ckb", "ku", "ps", "ne", "mai", "sd"),
         "unknown": ("unknown", None)})
     sources: tuple = ("books_pdf", "bureaucracy", "exams", "other_docs", "scientific_paper", "forms", "tables", "certificates",
-                      "filled_forms", "sheet_music", "flyers", "handwritten")   # folders of Paths.layouts the listing takes
-    raster_only: tuple = ("certificates", "filled_forms", "sheet_music", "flyers", "handwritten")   # folders whose PDFs are never restyled, only rasterized
+                      "filled_forms", "sheet_music")   # folders of Paths.layouts the listing takes
+    raster_only: tuple = ("certificates", "filled_forms", "sheet_music")   # folders whose PDFs are never restyled, only rasterized
     use_all: tuple = ("unknown",)                   # groups taking all their raster pages, outside script_mix
     rotate180_prob: float = 0.3                     # pages (any kind) turned half a circle, at the end of the layout
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
