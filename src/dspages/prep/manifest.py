@@ -35,6 +35,9 @@ LAYOUTS = Paths().layouts
 
 def _init():
     cv2.setNumThreads(1)
+    with open(Paths().jpeg_artifacts, encoding="utf-8") as f:
+        for r in map(json.loads, f):
+            _JPEG.setdefault(r["path"], set()).add(r["xref"])
 
 
 def _seed(path: str) -> int:
@@ -46,6 +49,7 @@ def _seed(path: str) -> int:
 # ---------------------------------------------------------------------------
 
 _LAYOUT = get_preset("full").layout
+_JPEG = {}                      # path -> xrefs of its images with strong JPEG artifacts (_init reads them)
 
 
 def _reject(path, pi, language, reason, **kw):
@@ -150,6 +154,9 @@ def _job_pdf(args):
         order = [pi for pi in np.random.default_rng(_seed(path)).permutation(doc.page_count).tolist() if pi not in skip]
         for pi in order[:c.tries_per_page * cap]:
             page = doc[pi]
+            if _JPEG.get(path, set()) & {im[0] for im in page.get_images()}:
+                recs.append(_reject(path, pi, language, "jpeg artifacts"))
+                continue
             z = min(RASTER_ZOOM, c.check_px / max(page.rect.width, page.rect.height))
             pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csRGB, alpha=False)
             img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
@@ -226,14 +233,15 @@ def _rank(f):
 
 def _tree(files, c, quota, taken):
     """script group -> language -> topic -> files, the first to take last: by _rank, in random order within a rank. Each
-    file has the pages it may give: pages_per_pdf, a book its doc_share of its group's quota, an image one, less those
+    file has the pages it may give: pages_per_pdf, a book its doc_share of its group's quota (at most book_pages_max), an image one, less those
     earlier manifests took from it; and the pages earlier manifests tried (skip)."""
     tree = {g: defaultdict(lambda: defaultdict(list)) for g, _ in c.script_mix}
     for i in sorted(np.random.default_rng(0).permutation(len(files)), key=lambda i: -_rank(files[i])):
         f = files[i]
         g = script(f, c.scripts)
         tried, kept = taken.get(f["path"], (set(), 0))
-        cap = (max(c.pages_per_pdf, round(c.doc_share * quota[g])) if f["category"] == BOOKS else c.pages_per_pdf) - kept
+        cap = (min(c.book_pages_max, max(c.pages_per_pdf, round(c.doc_share * quota[g]))) if f["category"] == BOOKS
+               else c.pages_per_pdf) - kept
         cap = min(cap, f["pages"] - len(tried))
         if cap > 0:
             tree[g][f["language"]][f["topic"]].append(dict(f, cap=cap, skip=tried))

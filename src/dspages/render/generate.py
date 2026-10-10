@@ -113,7 +113,7 @@ def _fit_aspect(tight, loose, content):
     o = 1 - k
     a[k], a[k + 2] = _resize_span(a[k], a[k + 2], content[k], content[k + 2], loose[k], loose[k + 2], a[o + 2] - a[o])
     a[o], a[o + 2] = _resize_span(a[o], a[o + 2], content[o], content[o + 2], loose[o], loose[o + 2], a[k + 2] - a[k])
-    return a
+    return np.clip(a, 0.0, 1.0)
 
 
 def make_sample(rng, layout, surf, P: Preset):

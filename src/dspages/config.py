@@ -9,6 +9,7 @@ class Paths:
     layouts: str = "/run/media/me/D/ML_DS/UVTM/Layouts"
     manifest: str = "/run/media/me/D/ML_DS/UVTM/Layouts/manifest_pages.jsonl"
     files: str = "/run/media/me/D/ML_DS/UVTM/Layouts/manifest_files.jsonl"   # listing of the source files
+    jpeg_artifacts: str = "/run/media/me/D/ML_DS/UVTM/Layouts/jpeg_grid_above3_at_1024x1440.jsonl"   # PDF images (path, xref) with strong JPEG artifacts
     out: str = "/run/media/me/D/ML_DS/UVTM/dspages"
     font_dirs: tuple = ("/usr/share/fonts", "/usr/local/share/fonts", "~/.fonts")
 
@@ -324,6 +325,7 @@ class LayoutCfg:
     max_zoom: float = 4.0                           # PDF re-render limit for a 1:1 window
     manifest_pages: int = 20000                     # pages the manifest collects, shared by script_mix
     pages_per_pdf: int = 10                         # pages of one PDF (books: doc_share of their group's pages)
+    book_pages_max: int = 100                       # and at most this
     tries_per_page: int = 3                         # pages checked per page taken
     doc_share: float = 0.02
     min_content_area: float = 0.01                  # content box of a raster page: share of the page, at least
@@ -336,11 +338,9 @@ class LayoutCfg:
         "other": ("el", "he", "ar", "fa", "hi", "bn", "th", "ka", "hy", "ta", "te", "ur", "gu", "kn", "ml", "pa",
                   "or", "si", "km", "lo", "my", "am", "as", "mni", "mr", "sa", "bo", "ckb", "ku", "ps", "ne", "mai", "sd"),
         "unknown": ("unknown", None)})
-    sources: tuple = ("books_pdf", "bureaucracy", "corpus_add/pdf", "exams", "other_docs", "scientific_paper", "certificates",
-                      "corpus_add/pdf", "maps_blueprints", "filled_forms", "sheet_music", "flyers", "handwritten",
-                      "magazines")                  # folders of Paths.layouts the listing takes
-    raster_only: tuple = ("certificates", "corpus_add/pdf", "maps_blueprints", "filled_forms", "sheet_music", "flyers",
-                          "handwritten", "magazines")   # folders whose PDFs are never restyled, only rasterized
+    sources: tuple = ("books_pdf", "bureaucracy", "exams", "other_docs", "scientific_paper", "forms", "tables", "certificates",
+                      "filled_forms", "sheet_music", "flyers", "handwritten")   # folders of Paths.layouts the listing takes
+    raster_only: tuple = ("certificates", "filled_forms", "sheet_music", "flyers", "handwritten")   # folders whose PDFs are never restyled, only rasterized
     use_all: tuple = ("unknown",)                   # groups taking all their raster pages, outside script_mix
     rotate180_prob: float = 0.3                     # pages (any kind) turned half a circle, at the end of the layout
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
