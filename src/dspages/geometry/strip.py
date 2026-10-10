@@ -16,7 +16,8 @@ import quadprog
 
 MAX_STEPS = 200
 MAX_DPHI = 0.2
-STEP_TOL = 1e-6                 # m: stop when no node moves more than this in a step
+STEP_TOL = 1e-5                 # m: stop when no node moves more than this in a step (a contact switching on and off
+                                # at the table can leave a cycle of about 1 um)
 REG = 1e-9
 
 

@@ -1,10 +1,11 @@
 """python -m dspages {plan,layout,geometry,render,all} --preset NAME --out DIR [--n N] [--seed S] [--workers W] [--preview]
 
 plan      DIR/plan.jsonl: n stratified sample specs (written by the other commands too when missing)
-layout    DIR/layouts/<i>.npz   page (sheet luminance), gray (clean sheet)
+layout    DIR/layouts/<i>.npz   page: the sheet luminance at half size (a preview: the render lays the page out again and
+          draws it at the scale its flat needs)
 geometry  DIR/geometry/<i>.npz  X, Y, Z [mm] page grid
-render    DIR/samples/<i>.npz   flat, warped, grid2d, grid3d, mask (no metadata); reads layouts/ and geometry/ of the same index
-          when present, else makes them in memory; DIR/meta.jsonl: one row per sample, the render metadata and its
+render    DIR/samples/<i>.npz   flat, warped, grid2d, grid3d, mask (no metadata); reads geometry/ of the same index when
+          present, else makes it in memory; the layout is always made in memory; DIR/meta.jsonl: one row per sample, the render metadata and its
           layout's (source page, window, fill, fonts, effects)
 all       the samples only: layout and geometry of each made in memory, not saved (the dataset run)
 --preview writes previews (sheet, height map, flat | warped) to DIR_preview/<part>/<i>.jpg, outside the dataset. The
@@ -25,7 +26,7 @@ from . import io
 from .conditions import geometry_cond, plan, sample_preset
 from .config import get_preset
 from .geometry.surface import make_surface
-from .layout.generate import make_layout
+from .layout.generate import draw_layout, make_layout
 from .layout.sources import load_manifest
 from .layout import refont
 from .render.generate import make_sample
@@ -72,7 +73,7 @@ def _shown(part, i, what):
     if not _W["preview"]:
         return None, None
     img = {"layout": lambda: what, "geometry": lambda: io.height_preview(what),
-           "render": lambda: np.hstack([cv2.resize(what["flat"], what["warped"].shape[1::-1]), what["warped"]])}[part]()
+           "render": lambda: cv2.resize(np.hstack([what["flat"], what["warped"]]), None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)}[part]()
     return img, _preview(part, i)
 
 
@@ -81,14 +82,15 @@ def _layout(i, save):
     L = make_layout(_rng(i, "layout"), _W["manifest"][spec["entry"]],
                     sample_preset(_W["P"], spec), _W["fonts"], spec["combo"][0] == "open", spec.get("font_pt"))
     if save:
-        io.save(_path("layout", i), dict(page=L["page"], gray=L["gray"]), L["meta"], *_shown("layout", i, L["page"]))
-    return L["page"], L["meta"]
+        page = draw_layout(L["desc"], 0.5, sample_preset(_W["P"], spec))[0]
+        io.save(_path("layout", i), dict(page=page), L["meta"], *_shown("layout", i, page))
+    return L["desc"], L["meta"]
 
 
 def _geometry(i, save):
     P = sample_preset(_W["P"], _W["plan"][i])
     s = make_surface(_rng(i, "geometry"), P.geometry, P.paper, geometry_cond(_W["plan"][i]), P.render.camera)
-    surf = {k: s[k].astype(np.float32) for k in ("X", "Y", "Z")}
+    surf = {k: s[k].astype(np.float32) for k in ("X", "Y", "Z")} | {k: s[k] for k in ("u", "v", "W", "Wu", "Wv")}
     if save:
         meta = dict(label=s["label"], cond=s["cond"], paper=s["paper"], scene_a=s["scene_a"], scene_b=s["scene_b"],
                     n_creases=len(s["creases"]), box_strain=s["box_strain"])
@@ -97,18 +99,15 @@ def _geometry(i, save):
 
 
 def _render(i, saved, dt):
-    """A sample: its layout and geometry read from DIR when `saved` and present, else made in memory (not saved)."""
-    lp, gp = _path("layout", i), _path("geometry", i)
+    """A sample: its geometry read from DIR when `saved` and present, else made in memory (not saved); its layout made
+    in memory (drawn by the render at the flat's scale)."""
+    gp = _path("geometry", i)
     t = time.time()
-    if saved and lp.exists():
-        arrays, lmeta = io.load(lp)
-        page = arrays["page"]
-    else:
-        page, lmeta = _layout(i, False)
+    desc, lmeta = _layout(i, False)
     dt["layout"], t = time.time() - t, time.time()
     surf = io.load(gp)[0] if saved and gp.exists() else _geometry(i, False)
     dt["geometry"], t = time.time() - t, time.time()
-    o = make_sample(_rng(i, "render"), page, surf, sample_preset(_W["P"], _W["plan"][i]))
+    o = make_sample(_rng(i, "render"), desc, surf, sample_preset(_W["P"], _W["plan"][i]))
     io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "grid2d", "grid3d", "mask")}, None, *_shown("render", i, o))
     dt["render"] = time.time() - t
     return dict(sample=f"{i:07d}", **o["meta"], layout=lmeta)
@@ -118,7 +117,7 @@ def _job(args):
     """-> (i, seconds per step, metadata row of a rendered sample or None)."""
     cmd, i = args
     t, dt = time.time(), {}
-    if _path("render" if cmd in ("render", "all") else cmd, i).exists():
+    if cmd in ("layout", "geometry") and _path(cmd, i).exists():
         return i, dt, None
     if cmd == "layout":
         _layout(i, True)
@@ -159,7 +158,9 @@ def main(argv=None):
     if a.cmd == "plan":
         return
     n = sum(1 for _ in open(plan_path))
-    idx = range(a.start, min(n, a.start + (a.count or n)))
+    meta = out / "meta.jsonl"
+    done = {json.loads(line)["sample"] for line in open(meta)} if meta.exists() and a.cmd in ("render", "all") else set()
+    idx = [i for i in range(a.start, min(n, a.start + (a.count or n))) if f"{i:07d}" not in done]
     man = Path(a.manifest or get_preset(a.preset).paths.manifest)
     for src in (man, man.with_suffix(".rejected.jsonl")):
         if src.exists() and not (out / src.name).exists():

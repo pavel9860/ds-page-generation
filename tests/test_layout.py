@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 
 from dspages.layout.content import content_mask, place_window, window_stats
-from dspages.layout.generate import make_layout
+from dspages.layout.generate import draw_layout, make_layout
 
 
 def test_window_stats_counts_padding_as_empty():
@@ -55,7 +55,7 @@ def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
     kinds = set()
     for k, idx in enumerate(rng.choice(len(manifest), 4, replace=False)):
         L = make_layout(np.random.default_rng(k), manifest[idx], full_small, fonts)
-        page, gray, m = L["page"], L["gray"], L["meta"]
+        (page, gray, _), m = draw_layout(L["desc"], 1.0, full_small), L["meta"]
         kinds.add(m["kind"])
         assert page.shape == (ph, pw) and gray.shape == (ph, pw)
         mx, my = round(m["margin"] * pw), round(m["margin"] * ph)
@@ -97,3 +97,15 @@ def test_ruled_form_is_not_a_picture(full_small):
         cv2.rectangle(page, (60, y), (790, y + 40), 0, 2)
         cv2.putText(page, "Name / Date / Signature", (80, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 0, 2)
     assert picture_area(np.repeat(page[..., None], 3, -1), (600, 425), full_small.layout.pictures).mean() <= full_small.layout.max_image
+
+
+def test_rotate180_turns_the_finished_layout_half_a_circle(full_small, manifest, fonts):
+    from dataclasses import replace
+    entry = manifest[0]
+    turned = replace(full_small, layout=replace(full_small.layout, rotate180_prob=1.0))
+    plain = replace(full_small, layout=replace(full_small.layout, rotate180_prob=0.0))
+    a = make_layout(np.random.default_rng(3), entry, plain, fonts)
+    b = make_layout(np.random.default_rng(3), entry, turned, fonts)
+    assert not a["meta"]["rotate180"] and b["meta"]["rotate180"]
+    (pa, ga, _), (pb, gb, _) = (draw_layout(L["desc"], 1.0, full_small) for L in (a, b))
+    assert (gb == ga[::-1, ::-1]).all() and (pb == pa[::-1, ::-1]).all()

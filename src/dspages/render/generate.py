@@ -1,20 +1,26 @@
 """Part 3: a photo of a layout page on a 3D page surface, with its flat image, UV map and 3D map.
 
-All at the sheet's aspect, turned portrait when it is landscape (an open book): the photo has the flat page's size, the UV and 3D maps the page grid's (mesh): node (i, j)
-is the page point at evenly spaced page coordinates (rows down the sheet height), so neither map has holes.
-flat   (h, w) uint8: the layout sheet (luminance)
+The frame holds the whole page, or (crop_prob) cuts it on some sides with the content in view. The flat is the page
+part in view: on a cut side it ends at the smallest page margin beyond the content left in view there, then brought to
+the sheet's aspect by trimming margins (never the content). The layout is drawn once, at the scale that makes that part
+page_px (no resampling of the flat); the photo samples the same drawing. All at the sheet's aspect, turned portrait
+when it is landscape (an open book): photo and flat page_px, the UV and 3D maps the page grid's size (mesh): node
+(i, j) is the point at evenly spaced coordinates of the flat, so neither map has holes.
+flat   (h, w) uint8: the layout sheet's part in view (luminance)
 warped (h, w) uint8: the photo (luminance)
 grid2d (2, mesh h, mesh w) float32: x, y of each page node in the photo, in [-1, 1] with align_corners=True (pixel
        centres at -1 and 1): the grid_sample grid that flattens the photo
 grid3d (3, mesh h, mesh w) float32: X, Y, Z [mm] of each page node on the curved surface, table z = 0
-mask   (h, w) bool: photo pixels on the page
+mask   (h, w) bool: photo pixels on the flat's part of the page
 """
 import cv2
 import numpy as np
 
 from ..config import Preset
+from ..layout.generate import draw_layout
 from . import photo
 from .camera import make_camera, project, vertex_normals
+from ..geometry.surface import page_points
 from .raster import grid_faces, rasterize
 
 BG_STEP = 4
@@ -50,17 +56,64 @@ def _page_in_photo(lin, mx, my, mask):
     return out
 
 
-def make_sample(rng, page, surf, P: Preset):
-    """page: layout luminance sheet; surf: geometry.make_surface output. -> dict of arrays and meta."""
+def _in_view(pix, nv, nu, px, content):
+    """-> the page part (u0, v0, u1, v1) the flat keeps: per side the page edge when the frame shows it along the
+    content's span, else the nearest-to-content extent of the in-frame nodes over that span (never inside the content);
+    and the farthest extent of the in-frame nodes over that span (where the flat may grow)."""
+    inside = ((pix >= 0) & (pix <= np.array(px))).all(1).reshape(nv, nu)
+    j0, i0 = np.floor(content[1::-1] * [nv - 1, nu - 1]).astype(int)
+    j1, i1 = np.ceil(content[:1:-1] * [nv - 1, nu - 1]).astype(int)
+    rows, cols = inside[j0:j1 + 1], inside[:, i0:i1 + 1]
+    idx_u, idx_v = np.arange(nu), np.arange(nv)[:, None]
+    first_u, last_u = np.where(rows, idx_u, nu).min(1), np.where(rows, idx_u, -1).max(1)
+    first_v, last_v = np.where(cols, idx_v, nv).min(0), np.where(cols, idx_v, -1).max(0)
+    n = np.array([nu - 1, nv - 1, nu - 1, nv - 1])
+    tight = np.array([min(first_u.max(), i0), min(first_v.max(), j0), max(last_u.min(), i1), max(last_v.min(), j1)])
+    loose = np.array([min(first_u.min(), i0), min(first_v.min(), j0), max(last_u.max(), i1), max(last_v.max(), j1)])
+    return np.clip(tight / n, 0, 1), np.clip(loose / n, 0, 1)
+
+
+def _resize_span(a0, a1, c0, c1, lo, hi, length):
+    """Span [a0, a1] brought to `length`: shrunk on its cut sides first (a0 > 0, a1 < 1), then on the others, never
+    inside the content [c0, c1]; grown up to [lo, hi] (the page in view), then to the sheet [0, 1]."""
+    d = (a1 - a0) - length
+    if d > 0:
+        for cut in (True, False):
+            room = np.array([(a0 > 0) == cut and max(c0 - a0, 0), (a1 < 1) == cut and max(a1 - c1, 0)], float)
+            take = room * min(1.0, d / room.sum()) if room.sum() > 0 else room
+            a0, a1, d = a0 + take[0], a1 - take[1], d - take.sum()
+    for b0, b1 in ((lo, hi), (0.0, 1.0)):
+        if d < 0:
+            room = np.array([max(a0 - b0, 0), max(b1 - a1, 0)])
+            give = room * min(1.0, -d / room.sum()) if room.sum() > 0 else room
+            a0, a1, d = a0 - give[0], a1 + give[1], d + give.sum()
+    return a0, a1
+
+
+def _fit_aspect(tight, loose, content):
+    """The page part tight (u0, v0, u1, v1) brought to the sheet's aspect (equal shares of both sides): the longer
+    span shrunk to the shorter (_resize_span), the shorter grown to what the content leaves of the longer."""
+    a = tight.copy()
+    k = int(a[2] - a[0] < a[3] - a[1])                       # the longer axis: 0 u, 1 v
+    o = 1 - k
+    a[k], a[k + 2] = _resize_span(a[k], a[k + 2], content[k], content[k + 2], loose[k], loose[k + 2], a[o + 2] - a[o])
+    a[o], a[o + 2] = _resize_span(a[o], a[o + 2], content[o], content[o + 2], loose[o], loose[o + 2], a[k + 2] - a[k])
+    return a
+
+
+def make_sample(rng, layout, surf, P: Preset):
+    """layout: layout.generate.make_layout's desc, drawn here once at the flat's scale; surf: geometry.make_surface
+    output. -> dict of arrays and meta."""
     c = P.render
     ns = rng.uniform(*P.layout.noise_scale)          # factor of this photo's noise feature sizes
-    px = page.shape[1::-1]                                   # photo (w, h) = the flat page's
+    px = tuple(P.layout.page_px)                             # photo and flat (w, h)
+    content = np.array(layout["ink"])
     X, Y, Z = surf["X"], surf["Y"], surf["Z"]
     nv, nu = X.shape
     Pts = np.stack([X, Y, Z], -1).reshape(-1, 3)
     N = vertex_normals(X, Y, Z).reshape(-1, 3)
     faces = grid_faces(nv, nu)
-    cam, view = make_camera(rng, Pts.reshape(nv, nu, 3), N.reshape(nv, nu, 3), px, c.camera)
+    cam, view = make_camera(rng, Pts.reshape(nv, nu, 3), N.reshape(nv, nu, 3), px, c.camera, content)
     pix, depth = project(Pts, cam)
     uu, vv = np.meshgrid(np.linspace(0, 1, nu), np.linspace(0, 1, nv))
     shading = c.effects["shading"].prob > 0 and rng.random() < c.effects["shading"].prob
@@ -73,8 +126,14 @@ def make_sample(rng, page, surf, P: Preset):
     lit = photo.shade(Pts, N, cam["eye"], light, maps) if shading else np.ones(len(Pts))
     uv, lf, zmap = rasterize(pix, depth, np.stack([uu.ravel(), vv.ravel(), lit], -1), faces, px)
     mask = np.isfinite(uv[..., 0])
-
-    ph, pw = page.shape[:2]
+    crop = _fit_aspect(*_in_view(pix, nv, nu, px, content), content)
+    scale = 1.0 / max(crop[2] - crop[0], crop[3] - crop[1])
+    page, _, paper_fx = draw_layout(layout, scale, P)
+    ph, pw = page.shape
+    x0 = int(np.clip(round(crop[0] * pw), 0, pw - px[0]))
+    y0 = int(np.clip(round(crop[1] * ph), 0, ph - px[1]))
+    flat = page[y0:y0 + px[1], x0:x0 + px[0]]
+    crop = np.array([x0 / (pw - 1), y0 / (ph - 1), (x0 + px[0] - 1) / (pw - 1), (y0 + px[1] - 1) / (ph - 1)])
     lin = photo.SRGB_TO_LINEAR[page]
     mx = (np.nan_to_num(uv[..., 0]) * (pw - 1)).astype(np.float32)
     my = (np.nan_to_num(uv[..., 1]) * (ph - 1)).astype(np.float32)
@@ -94,11 +153,24 @@ def make_sample(rng, page, surf, P: Preset):
         img[~mask] = 0.0
     warped, effects = photo.camera_effects(rng, img.astype(np.float32), zmap, mask, c)
     meta = dict(view=view, light=None if light is None else dict(sharp=light["sharp"], ambient=light["ambient"]),
-                effects=effects, page_frac=float(mask.mean()))
-    grid2d = ((pix - 0.5) / (np.array(px) - 1) * 2 - 1).T.reshape(2, nv, nu).astype(np.float32)
-    grid3d = np.stack([X, Y, Z]).astype(np.float32)
-    o = dict(flat=page, warped=warped, grid2d=grid2d, grid3d=grid3d, mask=mask, meta=meta)
+                effects=effects, paper_effects=paper_fx, page_frac=float(mask.mean()), flat_part=crop.round(4).tolist(),
+                flat_scale=round(scale, 4))
+    grid3d, cpix = _flat_nodes(surf, crop, cam)
+    grid2d = ((cpix - 0.5) / (np.array(px) - 1) * 2 - 1).T.reshape(2, nv, nu).astype(np.float32)
+    u, v = np.nan_to_num(uv[..., 0], nan=-1), np.nan_to_num(uv[..., 1], nan=-1)
+    mask = (u >= crop[0]) & (u <= crop[2]) & (v >= crop[1]) & (v <= crop[3])
+    o = dict(flat=flat, warped=warped, grid2d=grid2d, grid3d=grid3d, mask=mask, meta=meta)
     return _portrait(o) if px[0] > px[1] else o
+
+
+def _flat_nodes(surf, crop, cam):
+    """The surface at the page grid's nodes spread over the flat's page part crop (looked up once in the working grid)
+    and those nodes in the photo."""
+    nv, nu = surf["X"].shape
+    gu, gv = np.meshgrid(np.linspace(crop[0], crop[2], nu) * surf["u"][-1], np.linspace(crop[1], crop[3], nv) * surf["v"][-1])
+    grid3d = np.stack(page_points(surf, gu, gv))
+    cpix, _ = project(grid3d.reshape(3, -1).T.astype(np.float64), cam)
+    return grid3d.astype(np.float32), cpix
 
 
 def _portrait(o):

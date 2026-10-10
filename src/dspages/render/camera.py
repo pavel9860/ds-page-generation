@@ -103,8 +103,18 @@ def views(P, N, c: CameraCfg, offset, first=False):
     return target, dirs, tilts, azs, lo, hi
 
 
-def make_camera(rng, P, N, size, c: CameraCfg):
-    """P, N: (nv, nu, 3) page grid points and unit normals. -> camera dict (eye, R, f, cx, cy) and view parameters.
+def _frame_region(rng, content, c: CameraCfg):
+    """The page part (u0, v0, u1, v1) the frame is fitted to when it cuts the page: the content box with crop_margin
+    (shares of its sides, drawn per side) around it."""
+    content = np.asarray(content, float)
+    size = np.tile(content[2:] - content[:2], 2)
+    return np.clip(content + np.array([-1, -1, 1, 1]) * rng.uniform(*c.crop_margin, 4) * size, 0, 1)
+
+
+def make_camera(rng, P, N, size, c: CameraCfg, content=(0.0, 0.0, 1.0, 1.0)):
+    """P, N: (nv, nu, 3) page grid points and unit normals; content: the content box (u0, v0, u1, v1) on the page.
+    -> camera dict (eye, R, f, cx, cy) and view parameters.
+    The frame fits the page bbox at the drawn fill, or with crop_prob exactly the page part _frame_region draws.
     A view drawn among the possible ones (views, offset max_offset, else side_offset: a side view): a direction uniformly,
     then a distance log-uniformly in its range, moved out to where every node of the grid is within incidence_deg; the
     overhead view at the far end of dist_mm when none is possible (the geometry avoids it). Roll and fill are drawn; the focal length sets the fill. min_px_per_mm reports the smallest local
@@ -117,6 +127,7 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     if not ok.size:
         target, dirs, tilts, azs, lo, hi = views(P, N, c, c.side_offset)
         ok = np.flatnonzero(lo <= hi)
+    nv, nu = P.shape[:2]
     P, N = P.reshape(-1, 3).astype(np.float64), N.reshape(-1, 3).astype(np.float64)
     if ok.size:
         k = int(rng.choice(ok))
@@ -131,7 +142,15 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     cos_k = np.einsum("nk,nk->n", ray, N) / np.linalg.norm(ray, axis=1)
     cam = dict(eye=eye, R=look_at(eye, target, roll), f=1.0, cx=0.0, cy=0.0)
     xy, z = project(P, cam)
-    lo, hi = xy.min(0), xy.max(0)
+    cut = rng.random() < c.crop_prob
+    if cut:
+        region = _frame_region(rng, content, c)
+        (i0, j0), (i1, j1) = np.floor(region[:2] * [nu - 1, nv - 1]).astype(int), np.ceil(region[2:] * [nu - 1, nv - 1]).astype(int)
+        fill = 1.0
+        sub = xy.reshape(nv, nu, 2)[j0:j1 + 1, i0:i1 + 1].reshape(-1, 2)
+        lo, hi = sub.min(0), sub.max(0)
+    else:
+        lo, hi = xy.min(0), xy.max(0)
     f = fill * min(w / (hi[0] - lo[0]), h / (hi[1] - lo[1]))
     free = np.array([w, h]) - f * (hi - lo)
     cx, cy = np.array([w, h]) / 2 - f * (lo + hi) / 2 + 0.5 * c.shift * free * rng.uniform(-1, 1, 2)
@@ -139,5 +158,5 @@ def make_camera(rng, P, N, size, c: CameraCfg):
     view = dict(dist_mm=float(dist), tilt_deg=float(np.degrees(tilts[k])), azimuth_deg=float(np.degrees(azs[k]) % 360),
                 roll_deg=float(np.degrees(roll)), fill=float(fill), fov_deg=float(np.degrees(2 * np.arctan(h / 2 / f))),
                 max_incidence_deg=float(np.degrees(np.arccos(np.clip(worst, -1, 1)))),
-                min_px_per_mm=float((f * np.clip(cos_k, 0, 1) / z).min()))
+                min_px_per_mm=float((f * np.clip(cos_k, 0, 1) / z).min()), cut=bool(cut))
     return cam, view

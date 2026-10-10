@@ -3,32 +3,23 @@
 The profile is solved along direction bend_dir (to the page's u axis, or its v axis with along_long) on the
 page's rotated bounding box: p along the profile, g along its generators. Two-profile pages blend strips solved
 at n_slices positions across g. Sag (shell under gravity) acts outside the support strip. Shallow creases and a
-deep crease network are height maps in page coordinates, carried onto the box. Rows and columns of the box are
-laid out inextensibly, then the page grid (u, v) is sampled from the box and turned back to the page frame.
+deep crease network are height maps in page coordinates. The surface is worked out on a page-aligned grid (the
+mesh, work_scale times finer): each node takes the profile at its own p, and passes along the page rows and columns
+give them their lengths back; the mesh is every work_scale-th node.
 """
 from dataclasses import replace
 
 import numpy as np
 from numba import njit
-from scipy.interpolate import RegularGridInterpolator
 
 from ..config import GeometryCfg, paper_props
 from ..creases import deep, shallow
-from .sag import solve_sag
+from .sag import sag_field, solve_sag
 from .scenes import lerp_scene, sample_ends, scene_label
 from .strip import solve_strip
 from ..render.camera import vertex_normals, views
 
 ISO_PASSES = 2                  # row and column passes that give a creased sheet its lengths back (strain < 1e-4)
-
-
-def inextensible(x, z, u, v):
-    """Grid (x, z) along rows spaced u: rebuild x so each row keeps its arc lengths; y from column arc lengths."""
-    x = x[:, :1] + np.concatenate([np.zeros((len(v), 1)),
-                                   np.cumsum(np.sqrt(np.maximum(np.diff(u)[None, :] ** 2 - np.diff(z, axis=1) ** 2, 0)),
-                                             axis=1)], axis=1)
-    dl = np.diff(v)[:, None] ** 2 - np.diff(x, axis=0) ** 2 - np.diff(z, axis=0) ** 2
-    return x, np.concatenate([np.zeros((1, len(u))), np.cumsum(np.sqrt(np.maximum(dl, 0)), axis=0)], axis=0)
 
 
 @njit(cache=True)
@@ -51,6 +42,21 @@ def _resample(Q, t):
     return out
 
 
+def _lerp2(axes, values, pts):
+    """RegularGridInterpolator's linear interpolation (extrapolating) on evenly spaced axes."""
+    idx, frac = [], []
+    for k, a in enumerate(axes):
+        q = (pts[..., k] - a[0]) / (a[1] - a[0])
+        i = np.clip(np.floor(q).astype(np.int64), 0, len(a) - 2)
+        idx.append(i)
+        frac.append(q - i)
+    (i, j), (s, t) = idx, frac
+    if values.ndim > 2:
+        s, t = s[..., None], t[..., None]
+    return ((1 - s) * ((1 - t) * values[i, j] + t * values[i, j + 1])
+            + s * ((1 - t) * values[i + 1, j] + t * values[i + 1, j + 1]))
+
+
 def _spaced(P, t, axis):
     """The curves of grid P (n, m, 3) along `axis` (1: rows, 0: columns) with their points moved along them to the arc
     lengths t from the first: each keeps its shape and its material length."""
@@ -70,11 +76,11 @@ def _swap(a, b, along_long):
 
 
 def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
-    """Height map [m] on the sheet (rows b, columns a) of the shallow creases and the deep network at the page grid's
-    pitch (a finer map is lost in the grid), its axes, and the crease lines [mm]. Shallow creases keep fold_clear_mm from
-    the fold lines (p = const)."""
+    """Height map [m] on the sheet (rows b, columns a) of the shallow creases and the deep network at the working
+    grid's pitch, its axes, and the crease lines [mm]. Shallow creases keep fold_clear_mm from the fold lines (p = const)."""
     w_mm, h_mm = g.sheet_mm
-    step = min(w_mm / (g.mesh[0] - 1), h_mm / (g.mesh[1] - 1))
+    mesh_step = min(w_mm / (g.mesh[0] - 1), h_mm / (g.mesh[1] - 1))
+    step = mesh_step / g.work_scale
     lines, h, pitch = [], None, None
     if cond["shallow"]:
         c = g.shallow
@@ -86,7 +92,7 @@ def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
             - folds[None, :]).min() > c.fold_clear_mm * 1e-3]
         h, pitch = shallow.render(lines, w_mm, h_mm, step, c.w_max_mm), step
     if cond["deep"]:
-        net = deep.sample(rng, w_mm, h_mm, cond["deep"], g.deep, step)
+        net = deep.sample(rng, w_mm, h_mm, cond["deep"], g.deep, mesh_step)
         hd = deep.render(net, w_mm, h_mm, cond["deep"], g.deep, step)
         h, pitch = (hd if h is None else h + hd), step
         lines = lines + net
@@ -95,19 +101,27 @@ def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
     return 1e-3 * h, (np.arange(h.shape[0]) * pitch * 1e-3, np.arange(h.shape[1]) * pitch * 1e-3), lines
 
 
-def _open_book(length, pp, n, halves, y):
+def _open_book(solve, length, pp, n, halves, y):
     """An open book's profile: each half solved from the spine in the middle out (clamped there), the first one mirrored.
     y: the halves' states (None: rest). -> s, x, z, states."""
-    (sl, xl, zl, yl), (sr, xr, zr, yr) = (solve_strip(0.5 * length, pp["q"], pp["bending"], (), (), hf["clamp"], n, y0,
-                                                      hf["base"]) for hf, y0 in zip(halves, y or (None, None)))
+    (sl, xl, zl, yl), (sr, xr, zr, yr) = (solve(0.5 * length, pp["q"], pp["bending"], (), (), hf["clamp"], n, y0,
+                                                hf["base"]) for hf, y0 in zip(halves, y or (None, None)))
     return (np.r_[0.5 * length - sl[::-1], 0.5 * length + sr[1:]], np.r_[xl[-1] - xl[::-1], xl[-1] + xr[1:]],
             np.r_[zl[::-1], zr[1:]], (yl, yr))
+
+
+def page_points(work, u, v):
+    """X, Y, Z [mm] of the page points at sheet coordinates u (across), v (down the rows) [mm]: one bilinear lookup in
+    the page-aligned working grid W (3, len(Wv), len(Wu)) [mm] of make_page."""
+    return np.moveaxis(_lerp2((work["Wv"], work["Wu"]), np.moveaxis(work["W"], 0, -1), np.stack([v, u], -1)), -1, 0)
 
 
 def make_surface(rng, g: GeometryCfg, paper, cond, camera=None):
     """make_page drawn again (up to view_tries) until a camera view of it is possible (camera: CameraCfg; None: once)."""
     for _ in range(g.view_tries if camera is not None else 1):
+        state = rng.bit_generator.state
         s = make_page(rng, g, paper, cond)
+        s["rng_state"] = state
         if camera is None or seen(s, camera):
             break
     return s
@@ -121,10 +135,28 @@ def seen(s, camera):
     return bool((lo <= hi).any())
 
 
-def make_page(rng, g: GeometryCfg, paper, cond):
+def replay_surface(state, g: GeometryCfg, paper, cond, strips, sag):
+    """The make_surface page drawn from rng state `state` (its rng_state), its strips and sag given."""
+    rng = np.random.default_rng()
+    rng.bit_generator.state = state
+    return make_page(rng, g, paper, cond, strips, sag)
+
+
+def make_page(rng, g: GeometryCfg, paper, cond, strips=None, sag=None):
     """-> dict with the page grid X, Y, Z [mm] (rows down the sheet, columns across; face up, right-handed: Y points
-    up the sheet) and what
-    made it: scenes at both ends, paper, conditions, crease lines, max membrane strain of the laid-out box."""
+    up the sheet) and what made it: scenes at both ends, paper, conditions, crease lines, max membrane strain of the
+    laid-out box, the solved strips (s, x, z) in solve order and the sag at the shell nodes (None: no sag). strips, sag:
+    those of a page of the same rng state, not solved again."""
+    solved = [] if strips is None else list(strips)
+    replay = strips is not None
+
+    def solve(*a):
+        if replay:
+            return (*solved.pop(0), None)
+        r = solve_strip(*a)
+        solved.append(r[:3])
+        return r
+
     pp = paper_props(paper, cond["gsm"])
     sw, sh = (s * 1e-3 for s in g.sheet_mm)
     length, width = _swap(sw, sh, cond["along_long"])
@@ -143,50 +175,62 @@ def make_page(rng, g: GeometryCfg, paper, cond):
 
     sa, sb = sample_ends(rng, g.scene, lp, wg, cond["two"], cond["combo"])
     t = np.linspace(0.0, 1.0, g.n_slices if cond["two"] else 1)
-    slices, y = [], None
+    raw, y = [], None
     for tk in t:
         sc = lerp_scene(sa, sb, tk)
         if sc["halves"]:
-            s, x, z, y = _open_book(lp, pp, g.strip_segments // 2, sc["halves"], y)
+            s, x, z, y = _open_book(solve, lp, pp, g.strip_segments // 2, sc["halves"], y)
         else:
-            s, x, z, y = solve_strip(lp, pp["q"], pp["bending"], sc["folds"], sc["supports"], sc["clamp"],
+            s, x, z, y = solve(lp, pp["q"], pp["bending"], sc["folds"], sc["supports"], sc["clamp"],
                                      g.strip_segments, y, sc["base"])
-        slices.append((np.interp(up, s, x), np.interp(up, s, z)))
-    k = np.clip(np.searchsorted(t, vg / wg, side="right") - 1, 0, max(len(t) - 2, 0))
-    wt = ((vg / wg - t[k]) / (t[min(1, len(t) - 1)] - t[0] or 1.0))[:, None]
-    xs, zs = (np.array([sl[j] for sl in slices]) for j in (0, 1))
-    k1 = np.minimum(k + 1, len(t) - 1)
-    x, z = ((1 - wt) * a[k] + wt * a[k1] for a in (xs, zs))
+        raw.append((s, x, z))
+    ws = g.work_scale
+    u = np.linspace(0.0, sw, (nu - 1) * ws + 1)
+    v = np.linspace(0.0, sh, (nv - 1) * ws + 1)
+    l_, m_ = _swap(*np.meshgrid(u, v), cond["along_long"])
+    pn, qn = lm_to_p(l_, m_), -l_ * sn + m_ * cb + g0                    # page nodes on the profile and its generators
+
+    def blend(q, f):
+        """Slice values f(k) blended across the generators at q."""
+        k = np.clip(np.searchsorted(t, q / wg, side="right") - 1, 0, max(len(t) - 2, 0))
+        k1 = np.minimum(k + 1, len(t) - 1)
+        wt = (q / wg - t[k]) / (t[min(1, len(t) - 1)] - t[0] or 1.0)
+        return (1 - wt) * f(k) + wt * f(k1)
+
+    xp = [np.interp(pn, s_, x_) for s_, x_, _ in raw]
+    zp = [np.interp(pn, s_, z_) for s_, _, z_ in raw]
+    x = blend(qn, lambda k: np.choose(k, xp))
+    z = blend(qn, lambda k: np.choose(k, zp))
     span = (0.0, wg)
     if sa["supports"]:
         f = rng.uniform(*g.support_frac)
         a0 = rng.uniform(max(0.0, 0.5 - f), min(0.5, 1 - f)) * wg
         span = (a0, a0 + f * wg)
     if span[1] - span[0] < wg:
-        z = z + solve_sag(up, vg, z, span, pp, g.shell_nodes)
+        if not replay:
+            zs = np.array([np.interp(up, s_, z_) for s_, _, z_ in raw])
+            zb = blend(vg[:, None], lambda k: zs[k.ravel()])
+            sag = solve_sag(up, vg, zb, span, pp, g.shell_nodes)
+        z = z + sag_field(up, vg, g.shell_nodes, sag, pn, qn)
 
     hmap, axes, lines = _crease_heights(rng, g, cond, [f[0] for f in sa["folds"]], lm_to_p)
     z = np.maximum(z, 0.0)
-    xd, yd = inextensible(x, z, up, vg)
+    X, Y = _swap((x - p0) * cb - (qn - g0) * sn, (x - p0) * sn + (qn - g0) * cb, cond["along_long"])
+    S = np.stack([X, sh - Y, z], -1)
     if hmap is not None:
-        P, Gq = np.meshgrid(up, vg)
-        a_, b_ = _swap((P - p0) * cb - (Gq - g0) * sn, (P - p0) * sn + (Gq - g0) * cb, cond["along_long"])
-        h = RegularGridInterpolator(axes, hmap, bounds_error=False, fill_value=None)(np.stack([np.clip(b_, 0, sh), np.clip(a_, 0, sw)], -1))
-        S = np.stack([xd, yd, z], -1)
+        h = _lerp2(axes, hmap, np.stack(np.meshgrid(v, u, indexing="ij"), -1))
         n = np.cross(np.gradient(S, axis=1), np.gradient(S, axis=0))
-        S = S + h[..., None] * n / np.linalg.norm(n, axis=-1, keepdims=True)     # creases stand out along the normal
-        for _ in range(ISO_PASSES):
-            S[..., 2] = np.maximum(S[..., 2] - (S[..., 2].min() if cond["combo"][3] else 0.0), 0.0)
-            S = _spaced(_spaced(S, up, 1), vg, 0)
-        xd, yd, z = np.moveaxis(S, -1, 0)
-        z = np.maximum(z, 0.0)
-
-    u = np.linspace(0.0, sw, nu)
-    v = np.linspace(0.0, sh, nv)
-    l_, m_ = _swap(*np.meshgrid(u, v), cond["along_long"])
-    pts = np.stack([np.clip(-l_ * sn + m_ * cb + g0, 0.0, wg), np.clip(lm_to_p(l_, m_), 0.0, lp)], -1)
-    X, Y, Z = np.moveaxis(RegularGridInterpolator((vg, up), np.stack([xd, yd, z], -1))(pts), -1, 0)
-    X, Y = _swap((X - p0) * cb - (Y - g0) * sn, (X - p0) * sn + (Y - g0) * cb, cond["along_long"])
-    return dict(X=1e3 * X, Y=1e3 * (sh - Y), Z=1e3 * Z, u=1e3 * u, v=1e3 * v, scene_a=sa, scene_b=sb,
-                label=scene_label(sa), paper=pp, cond=cond, creases=lines,
-                box_strain=float(max(np.abs(a).max() for a in strains(xd, yd, z, up, vg))))
+        S = S + h[..., None] * n / np.linalg.norm(n, axis=-1, keepdims=True) * np.sign(n[..., 2:3] + 1e-12)
+    for _ in range(ISO_PASSES):
+        if cond["combo"][3]:
+            S[..., 2] -= S[..., 2].min()
+        S[..., 2] = np.maximum(S[..., 2], 0.0)
+        S = _spaced(_spaced(S, u, 1), v, 0)
+    S[..., 2] = np.maximum(S[..., 2], 0.0)
+    W = 1e3 * np.moveaxis(S, -1, 0)
+    work = dict(W=W, Wu=1e3 * u, Wv=1e3 * v)
+    X, Y, Z = W[:, ::ws, ::ws]
+    u, v = u[::ws], v[::ws]
+    return dict(X=X, Y=Y, Z=Z, u=1e3 * u, v=1e3 * v, **work, scene_a=sa, scene_b=sb,
+                label=scene_label(sa), paper=pp, cond=cond, creases=lines, strips=[] if replay else solved, sag=sag,
+                box_strain=float(max(np.abs(a).max() for a in strains(*W, work["Wu"], work["Wv"]))))

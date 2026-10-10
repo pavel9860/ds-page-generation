@@ -3,18 +3,18 @@ columns, alignment, bold/italic and heading/body hierarchy; rules, boxes and pic
 The text of the following pages flows in, so the page stays full. Fonts come from find_fonts, matched to the
 page's scripts by the real glyph coverage of every font file that is drawn with."""
 import bisect
-import io
 import re
 import glob
 import os
 import statistics
+import struct
 import unicodedata
 from collections import Counter, defaultdict
 from functools import lru_cache
 
+import cv2
 import numpy as np
 import pymupdf
-from fontTools.ttLib import TTFont
 from numba import njit
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
@@ -34,6 +34,8 @@ CJK_NAMES = ("hiragana", "katakana", "hangul", "bopomofo", "ideographic")
 SYMBOL_FONTS = ("wingding", "webding", "symbol", "dingbat", "zapf")    # fonts whose letters are pictures: set as the page's glyph
 NOTO_PREFIXES = ("notosans", "notoserif", "noto")      # longest first: NotoKufiArabic, NotoTraditionalNushu are script fonts too
 TERMINAL = tuple(".;:!?…。")
+LEADERS = set(".…_-–—=")
+ENTRY_END = re.compile(r"(\.{3,}|…{2,}|_{4,}|(\. ){4,})\s*[\divxlcIVXLC]*\s*$")
 _T = np.arange(1, C.bezier_steps + 1)[:, None] / C.bezier_steps
 BEZIER = np.hstack([(1 - _T) ** 3, 3 * (1 - _T) ** 2 * _T, 3 * (1 - _T) * _T ** 2, _T ** 3])     # cubic Bezier weights per step
 MATH_LETTERS = {cp: unicodedata.normalize("NFKC", chr(cp)) for cp in range(0x1D400, 0x1D800)
@@ -86,29 +88,74 @@ def _tilted(l):
     first = l["spans"][0]
     box = pymupdf.Rect(l["bbox"])
     span = dict(text="\ufffc", size=round(first["size"] * C.size_step) / C.size_step, gray=_gray(first["color"]), bold=False,
-                italic=False, mono=False, nat=first["ascender"] - first["descender"] or C.line_em, glyph=box, tall=True, bbox=box)
+                italic=False, mono=False, nat=_nat(first), glyph=box, tall=True, bbox=box)
     return [dict(bbox=box, spans=[span])]
 
 
+def _cmap_subtables(data):
+    """(platform, encoding) of the cmap subtables of TrueType font data, read from its table directory (empty when the
+    data holds no cmap)."""
+    n = struct.unpack_from(">H", data, 4)[0] if len(data) >= 12 else 0
+    for k in range(min(n, (len(data) - 12) // 16)):
+        tag, _, off, length = struct.unpack_from(">4sIII", data, 12 + 16 * k)
+        if tag == b"cmap" and off + 4 <= len(data):
+            m = min(struct.unpack_from(">H", data, off + 2)[0], (min(length, len(data) - off) - 4) // 8)
+            return {struct.unpack_from(">HH", data, off + 4 + 8 * j) for j in range(max(m, 0))}
+    return set()
+
+
 def symbolic_fonts(page):
-    """Names of a page's embedded TrueType fonts mapped only by the Symbol cmap (no Unicode one): their text is the font's
-    own codes (legacy encodings), readable only in that font."""
-    out = set()
-    for xref, ext, _, base, *_ in page.get_fonts():
-        tt = TTFont(io.BytesIO(page.parent.extract_font(xref)[3])) if ext == "ttf" else None
-        if tt is not None and "cmap" in tt:
-            subs = {(t.platformID, t.platEncID) for t in tt["cmap"].tables}
-            if (3, 0) in subs and not subs & {(3, 1), (3, 10), (0, 3), (0, 4)}:
-                out.add(base.split("+")[-1])
+    """Names of a page's embedded simple TrueType fonts whose text cannot be trusted: mapped only by the Symbol cmap (no
+    Unicode one) and with no ToUnicode map, so their text is the font's own codes (legacy encodings), readable only in that
+    font. A name counts when every font of the page that has it is such a font. The font program is read from its stream."""
+    doc, bad, ok = page.parent, set(), set()
+
+    def ref(key):
+        n = int(key[1].split()[0]) if key[0] == "xref" else 0
+        return n if 0 < n < doc.xref_length() else 0
+    for xref, _, kind, base, *_ in page.get_fonts():
+        name = base.split("+")[-1]
+        desc = ref(doc.xref_get_key(xref, "FontDescriptor")) if kind == "TrueType" and 0 < xref < doc.xref_length() else 0
+        ff = ref(doc.xref_get_key(desc, "FontFile2")) if desc else 0
+        subs = _cmap_subtables(doc.xref_stream(ff) or b"") if ff else set()
+        legacy = (3, 0) in subs and not subs & {(3, 1), (3, 10), (0, 3), (0, 4)} and doc.xref_get_key(xref, "ToUnicode")[0] == "null"
+        (bad if legacy else ok).add(name)
+    return bad - ok
+
+
+def _icon(c):
+    """A character that is no text: a private-use code or a control code other than white space (the glyph of an icon font)."""
+    return unicodedata.category(c) == "Co" or (unicodedata.category(c) == "Cc" and c not in "\t\n\r\x0b\x0c")
+
+
+def _ink(s):
+    """Rectangle of a rawdict span with the vertical extent its font gives it capped (some fonts claim lines three ems tall,
+    which make neighbouring lines overlap): at most line_asc_em above its baseline and line_desc_em below."""
+    x0, y0, x1, y1 = s["bbox"]
+    base = s["origin"][1]
+    return pymupdf.Rect(x0, max(y0, base - C.line_asc_em * s["size"]), x1, min(y1, base + C.line_desc_em * s["size"]))
+
+
+def _union(rects):
+    out = pymupdf.Rect()
+    for r in rects:
+        out |= r
     return out
+
+
+def _nat(s):
+    """Natural line height of a span's font in em, its ascent and descent capped as the line boxes are."""
+    return min(s["ascender"], C.line_asc_em) - max(s["descender"], -C.line_desc_em) or C.line_em
 
 
 def _span(s, text, symbolic):
     bold, italic = span_style(s)
     symbol = s["font"] in symbolic or any(k in s["font"].lower() for k in SYMBOL_FONTS)
-    glyph = pymupdf.Rect(s["bbox"]) if symbol or all(unicodedata.category(c) == "Co" for c in text.strip()) else None
+    marks = [c for c in text if _icon(c) or not c.isspace()]
+    icon = bool(marks) and all(_icon(c) for c in marks) and len(marks) <= C.icon_chars
+    glyph = pymupdf.Rect(s["bbox"]) if symbol or icon or (marks and all(_icon(c) for c in marks)) else None
     return dict(text=text, size=round(s["size"] * C.size_step) / C.size_step, gray=_gray(s["color"]), bold=bold, italic=italic,
-                mono=span_mono(s), nat=s["ascender"] - s["descender"] or C.line_em, glyph=glyph, bbox=pymupdf.Rect(s["bbox"]))
+                mono=span_mono(s), nat=_nat(s), glyph=glyph, icon=icon, bbox=_ink(s))
 
 
 def _chars_text(s):
@@ -128,7 +175,7 @@ def _spans(l, symbolic):
     spans = []
     for s in l["spans"]:
         text = _chars_text(s).replace("\x00", "").replace("\xa0", " ").translate(THAI_PUA).translate(MATH_LETTERS)
-        if text.strip() and round(s["size"] * C.size_step) > 0:
+        if (text.strip() or any(_icon(c) for c in text)) and round(s["size"] * C.size_step) > 0:
             spans.append(_span(s, text, symbolic))
     return spans
 
@@ -226,7 +273,8 @@ def extract_segments(page, textpage=None):
         else:
             spans = _spans(l, symbolic)
             if spans:
-                rows.append((l["bbox"], spans))
+                ink = _union(_ink(sp) for sp in l["spans"])
+                rows.append(((l["bbox"][0], ink.y0, l["bbox"][2], ink.y1), spans))
     index = _line_index(rows)
     for box, spans in rows:
         segs += _runs(dict(bbox=box), spans, index)
@@ -383,6 +431,7 @@ def paragraphs(segs, rules=((), ()), shapes=()):
         sz = _rsize(r)
         k = round(r["bbox"].x0 / C.para_bin)
         W = max(colw[(round(sz), j)] for j in (k - 1, k, k + 1))
+        passed = []
         for b in reversed(blocks[-C.lookback:]):
             last = b["lines"][-1]["bbox"]
             pitch = r["bbox"].y0 - last.y0
@@ -400,16 +449,20 @@ def paragraphs(segs, rules=((), ()), shapes=()):
                         and abs(last.x1 - r["bbox"].x1) < C.edge_match_em * sz + 3)
             step_rtl = (len(b["lines"]) <= C.indent_lines and all(l["bbox"].x1 < r["bbox"].x1 - 0.5 * sz for l in b["lines"])
                         and abs(last.x0 - r["bbox"].x0) < C.edge_match_em * sz + 3)
+            entry = ENTRY_END.search(_text(b["lines"][-1])) is not None      # a contents entry or form field: complete
+            goes_on = open_end and last.width > C.full_line * b["W"] and _text(r).lstrip()[:1].islower()
             if (abs(_rsize(b["lines"][-1]) - sz) < C.same_size_pt and (edge or first_ltr or first_rtl or step_ltr or step_rtl) and b["col"] == r["col"]
                     and not ruled and not indented and not r.get("marked") and not r.get("tabbed") and not b["lines"][-1].get("tabbed")
                     and r["spans"][0]["glyph"] is None and not (ITEM.match(_text(r)) and (not open_end or last.width < C.full_line * b["W"]))
-                    and C.indent_min_em * sz < pitch < ref * C.pitch_tol and b["W"] > C.min_width_em * sz
+                    and C.indent_min_em * sz < pitch < (C.open_pitch_em * sz if goes_on else ref * C.pitch_tol) and b["W"] > C.min_width_em * sz
+                    and not any(o["bbox"].x1 > r["bbox"].x0 and o["bbox"].x0 < r["bbox"].x1 for o in passed) and not entry
                     and (last.width > C.full_line * b["W"] or (last.width > C.ragged_fill * b["W"] and not _text(b["lines"][-1]).rstrip().endswith(TERMINAL)))):
                 if len(b["lines"]) == 1:
                     b["pitch"] = pitch
                 b["lines"].append(r)
                 b["bbox"] |= r["bbox"]
                 break
+            passed.append(b)
         else:
             blocks.append(dict(bbox=pymupdf.Rect(r["bbox"]), lines=[r], W=W, pitch=0, col=r["col"]))
     for b in blocks:
@@ -613,9 +666,14 @@ def _pieces(word):
     return out + [cur]
 
 
+def _leader(text):
+    """A run of one dot, dash or underscore (the filler of a contents line or a form field): it can be as long as the room."""
+    return len(text) >= C.leader_min and len(set(text)) == 1 and text[0] in LEADERS
+
+
 def _glyph_token(s, px, space, tab):
     return dict(text="", glyph=(s["number"], s["glyph"]), size=s["size"], px=px, gray=s["gray"], gap=space, tab=tab, brk=False,
-                rtl=False, path=None, wght=None, tall=s.get("tall", False))
+                rtl=False, path=None, wght=None, tall=s.get("tall", False), icon=s.get("icon", False), leader=False)
 
 
 def _word_tokens(s, typesetter, role, px, space, tab):
@@ -626,7 +684,7 @@ def _word_tokens(s, typesetter, role, px, space, tab):
         for piece in _pieces(w) if w else ():
             for path, wght, text in typesetter.resolve(role, piece, s["bold"], s["italic"]):
                 toks.append(dict(text=text, path=path, wght=wght, px=px, gray=s["gray"], gap=space, tab=tab, size=s["size"],
-                                 brk=_nobreak(text), rtl=any(_rtl_char(c) for c in text if c.isalpha())))
+                                 brk=_nobreak(text), rtl=any(_rtl_char(c) for c in text if c.isalpha()), leader=_leader(text)))
                 space, tab = False, 0.0
     return toks, space, tab
 
@@ -776,7 +834,7 @@ def prepare(b, others, page_w, g, typesetter, role_of, px_of, cols, walls=()):
         align = b["align"]
         ind1, ind2 = indents(b, g, bpx)
     else:
-        align = ("right" if b["rtl"] else "left") if b["lines"][0].get("marked") else single_align(x0, x1, c0, c1, b["rtl"])
+        align = ("right" if b["rtl"] else "left") if b["lines"][0].get("marked") else b.get("src_align") or single_align(x0, x1, c0, c1, b["rtl"])
         beside = (np.minimum(others[:, 3], bb.y1) - np.maximum(others[:, 1], bb.y0)
                   > C.row_overlap * np.minimum(others[:, 3] - others[:, 1], bb.height))
         row = (others[beside][:, [0, 2]] * g).tolist()
@@ -789,6 +847,8 @@ def prepare(b, others, page_w, g, typesetter, role_of, px_of, cols, walls=()):
                "center": 2 * min(cx - max(e0, left), min(e1, right) - cx)}[align]
         Wa = max(min(C.room * W, cap), W)
         bx0, W = {"left": x0, "right": x1 - Wa, "center": cx - Wa / 2}[align], Wa
+        if b.get("flush"):
+            align = "justify"
     lines = wrap(toks, W, ind1, ind2)
     return dict(b=b, x0=x0, x1=x1, y0=y0, y1=y1, bx0=bx0, W=W, align=align, ind=(ind1, ind2), lines=lines,
                 pitch=line_pitch(b, bpx, asc, desc), asc=asc, desc=desc, multi=multi, pinned=b["pinned"], rtl=b["rtl"],
@@ -825,16 +885,30 @@ def _paths(d):
     return paths
 
 
-def _fill(img, pts, gray, alpha):
-    """Antialiased polygon: each shape blends by its own coverage, so adjoining rows of one table leave their thin seam."""
-    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+def _fill(img, paths, gray, alpha, even_odd=False):
+    """Antialiased polygons filled as one shape: a subpath that runs the other way round than the first (nonzero rule), or
+    lies inside another (even-odd rule), is a hole; each shape blends by its own coverage, so adjoining rows of one table
+    leave their thin seam."""
+    xs, ys = [p[0] for pts in paths for p in pts], [p[1] for pts in paths for p in pts]
     x0, y0 = max(int(min(xs)) - 1, 0), max(int(min(ys)) - 1, 0)
     x1, y1 = min(int(max(xs)) + 2, img.width), min(int(max(ys)) + 2, img.height)
     if x1 <= x0 or y1 <= y0:
         return
-    big = Image.new("L", ((x1 - x0) * C.aa, (y1 - y0) * C.aa), 0)
-    ImageDraw.Draw(big).polygon([((x - x0) * C.aa, (y - y0) * C.aa) for x, y in pts], fill=int(255 * alpha))
-    img.paste(gray, (x0, y0), big.resize((x1 - x0, y1 - y0), Image.BOX))
+    sign = lambda pts: np.sign(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])))
+    first = sign(paths[0])
+    big = np.zeros(((y1 - y0) * C.aa, (x1 - x0) * C.aa), np.uint8)
+    for pts in paths:
+        one = Image.new("L", big.shape[::-1], 0)
+        ImageDraw.Draw(one).polygon([((x - x0) * C.aa, (y - y0) * C.aa) for x, y in pts], fill=255)
+        one = np.asarray(one)
+        if even_odd:
+            big ^= one
+        elif len(paths) > 1 and sign(pts) == -first != 0:
+            big[one > 0] = 0
+        else:
+            big |= one
+    mask = Image.fromarray((big * (alpha)).astype(np.uint8)).resize((x1 - x0, y1 - y0), Image.BOX)
+    img.paste(gray, (x0, y0), mask)
 
 
 def page_frame(r, ph, pw):
@@ -917,7 +991,7 @@ def pictures(src, number, ph, pw, below=None):
         fixed = r.y1 < C.header_pt or r.y0 > ph - C.footer_pt or (below is not None and r.y0 >= below)
         if _covered(words, r) >= C.text_image_share * r.get_area():
             continue
-        out.append(dict(image=True, rect=r, number=number, bbox=pymupdf.Rect(r), pinned=fixed))
+        out.append(dict(image=True, rect=r, clip=r, number=number, bbox=pymupdf.Rect(r), pinned=fixed))
     return out
 
 
@@ -970,7 +1044,7 @@ def _text_free(doc, number):
     """The display list of the page without the text on its pictures and the lines that touch them (dots aside: nothing
     lies under them): what its pictures are taken from."""
     one = pymupdf.open()
-    one.insert_pdf(doc, from_page=number, to_page=number)
+    one.insert_pdf(doc, from_page=number, to_page=number, links=0, annots=0, widgets=0)
     page = one[0]
     pics = [r for r in join_tiles(im["bbox"] for im in page.get_image_info()) if max(r.width, r.height) > C.dot_pt]
     spans = np.array([s["bbox"] for b in page.get_text("dict", flags=TEXT_FLAGS)["blocks"] for l in b.get("lines", [])
@@ -994,10 +1068,22 @@ def draw_graphics(img, drawings, g):
         fill, stroke = d.get("fill"), d.get("color")
         alpha = 1.0 if d.get("fill_opacity") is None else d["fill_opacity"]
         width = max(1, round((d.get("width") or 1.0) * g))
-        for path in _paths(d):
-            pts = [(x * g, y * g - dy) for x, y in path]
-            if fill is not None and alpha > C.min_alpha and len(pts) > 2:
-                _fill(img, pts, _gray_f(fill), alpha)
+        paths = [[(x * g, y * g - dy) for x, y in path] for path in _paths(d)]
+        flat = [p for path in paths for p in path]
+        if flat:
+            lo, hi = (min(p[0] for p in flat), min(p[1] for p in flat)), (max(p[0] for p in flat), max(p[1] for p in flat))
+            shift = [0.0, 0.0]
+            for k, size in enumerate((img.width, img.height)):
+                if hi[k] < 1 and hi[k] > -C.edge_snap_px:
+                    shift[k] = 1 - hi[k]
+                elif lo[k] > size - 1 and lo[k] < size + C.edge_snap_px:
+                    shift[k] = size - 1 - lo[k]
+            paths = [[(x + shift[0], y + shift[1]) for x, y in path] for path in paths]
+        if fill is not None and alpha > C.min_alpha:
+            shapes = [pts for pts in paths if len(pts) > 2]
+            if shapes:
+                _fill(img, shapes, _gray_f(fill), alpha, bool(d.get("even_odd")))
+        for pts in paths:
             if stroke is not None and len(pts) > 1:
                 ImageDraw.Draw(img).line(pts + ([pts[0]] if d.get("closePath") else []), fill=_gray_f(stroke), width=width)
 
@@ -1167,10 +1253,11 @@ def _horizontal(d):
 
 
 def body_size(blocks):
-    """The body font size of a page's blocks: the size (to 0.5 pt) of most of their characters."""
+    """The body font size of a page's blocks: the size (to 0.5 pt) of most of their characters (0: no text)."""
     spans = [s for b in blocks for l in b["lines"] for s in l["spans"]]
-    return Counter({k: sum(len(s["text"]) for s in spans if round(s["size"] * 2) / 2 == k)
-                    for k in {round(s["size"] * 2) / 2 for s in spans}}).most_common(1)[0][0]
+    sizes = Counter({k: sum(len(s["text"]) for s in spans if round(s["size"] * 2) / 2 == k)
+                     for k in {round(s["size"] * 2) / 2 for s in spans}})
+    return sizes.most_common(1)[0][0] if sizes else 0.0
 
 
 @lru_cache(maxsize=1 << 16)
@@ -1193,19 +1280,22 @@ def _coverage(key, text, direction):
     return cov, ox, oy, 0.0 if direction else _advance(key, text)
 
 
-def blit_text(img, items):
+def blit_text(img, items, s=1.0):
     """Text laid over the page from cached coverage (light text on a dark fill stays visible): letter by letter for scripts
-    without shaping, whole words (shaped as a unit) for the others; each cut to its clip box (None: the page)."""
+    without shaping, whole words (shaped as a unit) for the others; each cut to its clip box (None: the page). s: the
+    page drawn s times larger, letters at s times their size where the layout's advances put them."""
     covs, at = [], []
     H, W = img.size[1], img.size[0]
     for x, y, f, text, gray, direction, clip in items:
-        cx0, cy0, cx1, cy1 = (0, 0, W, H) if clip is None else (round(c) for c in clip)
+        cx0, cy0, cx1, cy1 = (0, 0, W, H) if clip is None else (round(c * s) for c in clip)
+        key = f.key if s == 1.0 else (f.key[0], f.key[1] * s, f.key[2])
         for ch in ([text] if needs_shaping(text) else text):
-            cov, ox, oy, adv = _coverage(f.key, ch, direction if needs_shaping(text) else None)
+            d = direction if needs_shaping(text) else None
+            cov, ox, oy, _ = _coverage(key, ch, d)
             if cov.size:
                 covs.append(cov.ravel())
-                at.append((int(round(x)) + ox, int(round(y)) + oy, cov.shape[0], cov.shape[1], gray, cx0, cy0, cx1, cy1))
-            x += adv
+                at.append((int(round(x * s)) + ox, int(round(y * s)) + oy, cov.shape[0], cov.shape[1], gray, cx0, cy0, cx1, cy1))
+            x += 0.0 if d else _advance(f.key, ch)
     if covs:
         arr = np.asarray(img).copy()
         _composite(arr, np.concatenate(covs), np.array(at, np.int64))
@@ -1228,33 +1318,52 @@ def _composite(arr, cov, at):
         o += h * w
 
 
-def render(src, lay):
-    img = Image.new("L", lay["size"], 255)
-    g = lay["g"]
+def render(src, lay, s=1.0):
+    """The layout drawn s times its size (the same layout, every length scaled)."""
+    img = Image.new("L", tuple(round(v * s) for v in lay["size"]), 255)
+    g = lay["g"] * s
 
     def paste_pictures(pinned):
         for x, top, b in lay["pics"]:
             if b["pinned"] == pinned:
-                pm = src.clean(b["number"]).get_pixmap(matrix=pymupdf.Matrix(g, g), clip=b["rect"], colorspace=pymupdf.csGRAY, alpha=False)
-                img.paste(Image.frombytes("L", (pm.w, pm.h), pm.samples), (round(x), round(top)))
+                pm = src.clean(b["number"]).get_pixmap(matrix=pymupdf.Matrix(g, g), clip=b["clip"], colorspace=pymupdf.csGRAY, alpha=False)
+                pic = Image.frombytes("L", (pm.w, pm.h), pm.samples)
+                if b["clip"] != b["rect"]:
+                    pic = pic.resize((round(b["rect"].width * g), round(b["rect"].height * g)), Image.LANCZOS)
+                img.paste(pic, (round(x * s), round(top * s)))
 
-    draw_graphics(img, [(d, dy) for d, fixed, dy in lay["elems"] if not fixed], g)
+    draw_graphics(img, [(d, dy * s) for d, fixed, dy in lay["elems"] if not fixed], g)
+    draw_graphics(img, [(d, dy * s) for d, fixed, dy in lay["elems"] if fixed], g)
     paste_pictures(False)
-    draw_graphics(img, [(d, dy) for d, fixed, dy in lay["elems"] if fixed], g)
     paste_pictures(True)
-    blit_text(img, lay["items"])
+    blit_text(img, lay["items"], s)
     for x, y, t in lay["glyphs"]:
+        x, y = x * s, y * s
         number, rect = t["glyph"]
-        k = t["px"] / t["size"]
+        k = t["px"] * s / t["size"]
         pm = src[number].get_pixmap(matrix=pymupdf.Matrix(k, k), clip=rect, colorspace=pymupdf.csGRAY)
-        img.paste(Image.frombytes("L", (pm.w, pm.h), pm.samples), (round(x), round(y - C.ascent_share * pm.h)))
+        run = np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.stride)[:, :pm.w]
+        edge = np.concatenate([run[0], run[-1], run[:, 0], run[:, -1]])
+        ink = np.abs(run.astype(int) - int(np.median(edge))) > C.glyph_ink
+        if t.get("icon"):
+            _, label = cv2.connectedComponents(cv2.dilate(ink.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=2))
+            mid = label[pm.h // 3: pm.h - pm.h // 3, pm.w // 3: pm.w - pm.w // 3]
+            ink &= np.isin(label, np.unique(mid[mid > 0]))     # the icon, not the letters of the lines its box reaches into
+        mask = Image.fromarray((ink * 255).astype(np.uint8))
+        img.paste(Image.fromarray(run), (round(x), round(y - C.ascent_share * pm.h)), mask)
     return img
+
+
+def _stroked(d):
+    """Rectangle of a drawing with half its stroke width around it (the line is part of what the page shows)."""
+    half = (d.get("width") or 1.0) / 2 if d.get("color") is not None else 0.0
+    return d["rect"] + (-half, -half, half, half)
 
 
 def content_box(page):
     """Rectangle of what the page shows: text lines, pictures and graphics (a background fill over the page does not count)."""
     boxes = [l["bbox"] for l in extract_segments(page)] + [pymupdf.Rect(i["bbox"]) for i in page.get_image_info()]
-    boxes += [d["rect"] for d in page.get_drawings() if d["rect"].get_area() < C.background_share * page.rect.get_area()]
+    boxes += [_stroked(d) for d in page.get_drawings() if d.get("fill") is None or d["rect"].get_area() < C.background_share * page.rect.get_area()]
     box = pymupdf.Rect()
     for b in boxes:
         box |= b

@@ -15,6 +15,7 @@ import time
 import zlib
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import cv2
@@ -134,9 +135,9 @@ def _body_pt(src, pi, box):
 
 
 def _job_pdf(args):
-    """The pages of a PDF in random order, until `cap` are accepted or the tries are used. A page of text set in the PDF
-    is restyled at generation; any other (a scan, garbled text, many columns) is rasterized."""
-    path, language, category, digital, cap = args
+    """The pages of a PDF in random order (those of `skip` left out), until `cap` are accepted or the tries are used. A
+    page of text set in the PDF is restyled at generation; any other (a scan, garbled text, many columns) is rasterized."""
+    path, language, category, digital, cap, skip = args
     c = _LAYOUT
     try:
         doc = fitz.open(path)
@@ -146,7 +147,8 @@ def _job_pdf(args):
     recs, n = [], 0
     with doc:
         src = refont.Source(doc)
-        for pi in np.random.default_rng(_seed(path)).permutation(doc.page_count)[:c.tries_per_page * cap].tolist():
+        order = [pi for pi in np.random.default_rng(_seed(path)).permutation(doc.page_count).tolist() if pi not in skip]
+        for pi in order[:c.tries_per_page * cap]:
             page = doc[pi]
             z = min(RASTER_ZOOM, c.check_px / max(page.rect.width, page.rect.height))
             pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csRGB, alpha=False)
@@ -168,7 +170,7 @@ def _job_pdf(args):
 
 
 def _job_image(args):
-    path, language, category, _, _ = args
+    path, language, category, *_ = args
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
         return [_reject(path, 0, language, "unreadable")]
@@ -222,40 +224,73 @@ def _rank(f):
     return 0 if f["digital"] else 1 if f["path"].lower().endswith(".pdf") else 2
 
 
-def _tree(files, c, quota):
+def _tree(files, c, quota, taken):
     """script group -> language -> topic -> files, the first to take last: by _rank, in random order within a rank. Each
-    file has the pages it may give: pages_per_pdf, a book its doc_share of its group's quota, an image one."""
+    file has the pages it may give: pages_per_pdf, a book its doc_share of its group's quota, an image one, less those
+    earlier manifests took from it; and the pages earlier manifests tried (skip)."""
     tree = {g: defaultdict(lambda: defaultdict(list)) for g, _ in c.script_mix}
     for i in sorted(np.random.default_rng(0).permutation(len(files)), key=lambda i: -_rank(files[i])):
         f = files[i]
         g = script(f, c.scripts)
-        cap = max(c.pages_per_pdf, round(c.doc_share * quota[g])) if f["category"] == BOOKS else c.pages_per_pdf
-        tree[g][f["language"]][f["topic"]].append(dict(f, cap=min(cap, f["pages"])))
+        tried, kept = taken.get(f["path"], (set(), 0))
+        cap = (max(c.pages_per_pdf, round(c.doc_share * quota[g])) if f["category"] == BOOKS else c.pages_per_pdf) - kept
+        cap = min(cap, f["pages"] - len(tried))
+        if cap > 0:
+            tree[g][f["language"]][f["topic"]].append(dict(f, cap=cap, skip=tried))
     return tree
 
 
 def _run(row):
     fn = _job_pdf if row["path"].lower().endswith(".pdf") else _job_image
-    return fn((row["path"], row["language"], row["category"], row["digital"], row["cap"]))
+    return fn((row["path"], row["language"], row["category"], row["digital"], row["cap"], row["skip"]))
 
 
-def main(out_path, workers, pages=None):
+def _records(batch, workers):
+    """Records of the files of a batch. When a file kills its worker (a crash inside MuPDF), the files that were running
+    (the pool hands them out in order, workers + 1 at a time: the first unfinished ones) are run one at a time (the one
+    that crashes again is recorded as rejected, "crashed") and the rest go on in a new pool."""
+    out, todo = {}, list(range(len(batch)))
+    while todo:
+        running = []
+        with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
+            futures = {k: pool.submit(_run, batch[k]) for k in todo}
+            try:
+                for k, f in futures.items():
+                    out[k] = f.result()
+            except BrokenProcessPool:
+                running = [k for k in todo if k not in out][:workers + 1]
+        for k in running:
+            try:
+                with ProcessPoolExecutor(max_workers=1, initializer=_init) as one:
+                    out[k] = one.submit(_run, batch[k]).result()
+            except BrokenProcessPool:
+                out[k] = [_reject(batch[k]["path"], 0, batch[k]["language"], "crashed")]
+        todo = [k for k in todo if k not in out]
+    return [r for k in range(len(batch)) for r in out[k]]
+
+
+def main(out_path, workers, pages=None, exclude=()):
     """Pages by the targets: each script group gets its share of `pages`, split equally between its languages and each
     language between its topics (a language or topic short of files leaves its share to the others). The listing gives
     the files; a round after another takes pages_per_pdf of each until the quotas are met. A page is taken once,
-    restyled or not."""
+    restyled or not, also across the manifests of `exclude` (their pages and rejected pages are not tried again)."""
     c = _LAYOUT
     quota = {g: round((pages or c.manifest_pages) * w) for g, w in c.script_mix}
+    taken = defaultdict(lambda: [set(), 0])
+    for m in exclude:
+        for p, kept in ((Path(m), 1), (Path(m).with_suffix(".rejected.jsonl"), 0)):
+            with open(p, encoding="utf-8") as f:
+                for r in map(json.loads, f):
+                    taken[r["source_path"]][0].add(r["page_index"])
+                    taken[r["source_path"]][1] += kept
     with open(Paths().files, encoding="utf-8") as f:
-        tree = _tree([json.loads(line) for line in f], c, quota)
+        tree = _tree([json.loads(line) for line in f], c, quota, taken)
     got, recs, rejected, t0 = Counter(), [], [], time.time()
-    with ProcessPoolExecutor(max_workers=workers, initializer=_init) as pool:
-        while batch := _allocate(tree, {g: max(q - got[g], 0) for g, q in quota.items()}):
-            for rs in pool.map(_run, batch, chunksize=1):
-                for r in rs:
-                    (rejected if r["kind"] == "rejected" else recs).append(r)
-                    got[script(r, c.scripts)] += r["kind"] != "rejected"
-            print(f"entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)
+    while batch := _allocate(tree, {g: max(q - got[g], 0) for g, q in quota.items()}):
+        for r in _records(batch, workers):
+            (rejected if r["kind"] == "rejected" else recs).append(r)
+            got[script(r, c.scripts)] += r["kind"] != "rejected"
+        print(f"entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r) + "\n" for r in recs)
@@ -270,5 +305,6 @@ if __name__ == "__main__":
     ap.add_argument("--out", required=True)
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--pages", type=int, default=None, help="pages to collect (default: the config's manifest_pages)")
+    ap.add_argument("--exclude", nargs="*", default=(), help="earlier manifests whose pages are not taken again")
     args = ap.parse_args()
-    main(args.out, args.workers, args.pages)
+    main(args.out, args.workers, args.pages, args.exclude)

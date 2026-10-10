@@ -166,3 +166,48 @@ def test_a_label_with_a_field_on_its_line_is_not_flowing_text():
         p.draw_rect(pymupdf.Rect(250, 88 + 20 * k, 500, 102 + 20 * k))
     blocks = refont.page_blocks(refont.Source(doc), 0, True)
     assert all(l.get("tabbed") for b in blocks for l in b["lines"])
+
+
+def test_a_line_does_not_join_a_paragraph_over_a_block_between_them():
+    doc = pymupdf.open()
+    p = doc.new_page(width=595, height=842)
+    line = text(11, 1)
+    p.insert_text((50, 100), line, fontsize=11, fontname="helv")
+    p.insert_text((50, 114), "small note", fontsize=6, fontname="helv")
+    p.insert_text((50, 128), line, fontsize=11, fontname="helv")
+    blocks = refont.page_blocks(refont.Source(doc), 0, True)
+    assert sorted(len(b["lines"]) for b in blocks) == [1, 1, 1]
+
+
+def test_a_quarter_turned_page_has_the_turned_shape_and_its_text_fits(fonts):
+    doc = pymupdf.open()
+    page(doc, 100, 90)
+    src = refont.Source(doc)
+    lay = template.layout(src, 0, np.random.default_rng(1), fonts, 1024, 1.0, True)
+    w, h = lay["size"]
+    assert abs(w / h - 842 / 595) < 0.01
+    body = [r for r in lay["rects"] if not r["pinned"] and r["y1"] - r["y0"] >= 4]
+    assert all(r["x0"] >= -1 and r["x1"] <= w + 1 and r["y1"] <= h + 1 for r in lay["rects"])
+    for i, a in enumerate(body):
+        for b in body[i + 1:]:
+            overlap = (min(a["x1"], b["x1"]) - max(a["x0"], b["x0"])) * (min(a["y1"], b["y1"]) - max(a["y0"], b["y0"]))
+            assert not (min(a["x1"], b["x1"]) > max(a["x0"], b["x0"]) and min(a["y1"], b["y1"]) > max(a["y0"], b["y0"]) and overlap > 0.2 * min(
+                (a["x1"] - a["x0"]) * (a["y1"] - a["y0"]), (b["x1"] - b["x0"]) * (b["y1"] - b["y0"])))
+
+
+def test_turned_page_stretches_tables_and_keeps_the_shape_of_pictures(fonts):
+    doc = pymupdf.open()
+    p = doc.new_page(width=595, height=842)
+    p.insert_textbox(pymupdf.Rect(50, 60, 545, 200), text(80, 1), fontsize=11, fontname="helv", align=3)
+    pix = pymupdf.Pixmap(pymupdf.csGRAY, pymupdf.IRect(0, 0, 120, 60), False)
+    pix.set_rect(pix.irect, (80,))
+    p.insert_image(pymupdf.Rect(60, 300, 240, 390), pixmap=pix)
+    for y in (450, 480, 510):
+        p.draw_line((50, y), (545, y))
+    p.draw_line((50, 450), (50, 510))
+    p.draw_line((545, 450), (545, 510))
+    lay = template.layout(refont.Source(doc), 0, np.random.default_rng(1), fonts, 1190, 1.0, True)
+    (x, t, pic), = lay["pics"]
+    assert abs(pic["rect"].width / pic["rect"].height - 2.0) < 0.02
+    horizontal = [d["rect"].width for d, fixed, dy in lay["elems"] if d["rect"].height < 1]
+    assert horizontal and all(abs(w - 495 * 842 / 595) < 1 for w in horizontal)

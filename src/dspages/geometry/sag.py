@@ -10,11 +10,20 @@ def _outer_sym(a, b):
     return 0.5 * (np.einsum("i...,j...->ij...", a, b) + np.einsum("i...,j...->ij...", b, a))
 
 
+def _mesh(u, v, nodes):
+    return MeshQuad.init_tensor(np.linspace(u[0], u[-1], nodes[0]), np.linspace(v[0], v[-1], nodes[1])).to_meshtri(style="x")
+
+
+def sag_field(u, v, nodes, w, U, V):
+    """The sag at the points (U, V) of the shell over the grid (u, v), from its shell node values w (solve_sag)."""
+    return LinearNDInterpolator(_mesh(u, v, nodes).p.T, w)(np.clip(U, u[0], u[-1]), np.clip(V, v[0], v[-1]))
+
+
 def solve_sag(u, v, z0, span, paper, nodes):
-    """Sag w(u, v): Marguerre shallow shell about z0 under gravity, paper = config.paper_props. The solved
-    profile is held (w = 0, zero slope) over the support strip v in span and where it lies on the table."""
-    m = MeshQuad.init_tensor(np.linspace(u[0], u[-1], nodes[0]),
-                             np.linspace(v[0], v[-1], nodes[1])).to_meshtri(style="x")
+    """Sag at the shell nodes (sag_field gives it on the grid): Marguerre shallow shell about z0 under gravity,
+    paper = config.paper_props. The solved profile is held (w = 0, zero slope) over the support strip v in span and
+    where it lies on the table."""
+    m = _mesh(u, v, nodes)
     ba = Basis(m, ElementVector(ElementTriP2()), intorder=2)     # the integrands are at most quadratic: exact
     bw = Basis(m, ElementTriMorley(), quadrature=ba.quadrature)
     bz = Basis(m, ElementTriP1(), quadrature=ba.quadrature)
@@ -60,6 +69,4 @@ def solve_sag(u, v, z0, span, paper, nodes):
     Ks = K.multiply(s[:, None]).multiply(s[None, :]).tocsr()
     Kc, fc, x, free = condense(Ks, f * s, D=np.unique(np.concatenate(fixed)))
     x[free] = pypardiso.spsolve(Kc.tocsr(), fc)
-    sol = s * x
-    U, V = np.meshgrid(u, v)
-    return LinearNDInterpolator(m.p.T, sol[:bw.N][bw.nodal_dofs[0]])(U, V)
+    return (s * x)[:bw.N][bw.nodal_dofs[0]]

@@ -6,6 +6,7 @@ import pytest
 from conftest import fake_manifest
 from dspages.conditions import plan
 from dspages.geometry.surface import make_surface
+from dspages.layout.generate import draw_layout, make_layout
 from dspages.render.generate import make_sample
 from dspages.render.raster import grid_faces, rasterize
 
@@ -24,13 +25,13 @@ def test_raster_plane_is_linear():
 
 
 def _samples(P, n):
-    pw, ph = P.layout.page_px
-    yy, xx = np.mgrid[0:ph, 0:pw]
-    page = np.where((xx // 6 + yy // 6) % 2 == 0, 30, 230).astype(np.uint8)
-    for k, spec in enumerate(plan(P, n, 1, fake_manifest())):
+    P = replace(P, layout=replace(P.layout, grid_prob=1.0))
+    man = fake_manifest()
+    for k, spec in enumerate(plan(P, n, 1, man)):
         cond = {key: spec[key] for key in ("combo", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
         surf = make_surface(np.random.default_rng(k), P.geometry, P.paper, cond)
-        yield page, surf, make_sample(np.random.default_rng(k), page, surf, P)
+        desc = make_layout(np.random.default_rng(k), man[spec["entry"]], P, None)["desc"]
+        yield draw_layout(desc, 1.0, P)[0], surf, make_sample(np.random.default_rng(k), desc, surf, P)
 
 
 @pytest.mark.parametrize("name", ["demo", "full"])
@@ -40,11 +41,14 @@ def test_samples_in_frame_readable_consistent(name, demo, full_small):
     for page, surf, o in _samples(P, 6):
         mask, g2 = o["mask"], o["grid2d"]
         h, w = mask.shape
-        assert mask.any() and not (mask[0].any() or mask[-1].any() or mask[:, 0].any() or mask[:, -1].any())
-        assert np.isfinite(g2).all() and np.abs(g2).max() < 1
+        view = o["meta"]["view"]
+        assert mask.any()
+        if not view["cut"]:
+            assert not (mask[0].any() or mask[-1].any() or mask[:, 0].any() or mask[:, -1].any())
+        assert np.isfinite(g2).all() and np.abs(g2).max() < 1 + 2 / (min(h, w) - 1)
+        g2 = np.clip(g2, -1, 1)
         x, y = np.rint((g2 + 1) * 0.5 * np.array([w - 1, h - 1])[:, None, None]).astype(int)
         assert mask[y[1:-1, 1:-1], x[1:-1, 1:-1]].mean() > 0.99
-        view = o["meta"]["view"]
         assert view["max_incidence_deg"] <= P.render.camera.incidence_deg + 1e-6
         assert o["grid3d"].shape == (3,) + g2.shape[1:] == (3,) + surf["X"].shape
         assert o["flat"].shape == o["warped"].shape

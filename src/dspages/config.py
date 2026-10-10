@@ -14,6 +14,20 @@ class Paths:
 
 
 @dataclass(frozen=True)
+class SortCfg:
+    input_dir: str = "/run/media/me/D/ML_DS/UVTM/Layouts/corpus_add/pdf"
+    extensions: tuple = (".jpg", ".jpeg", ".png", ".pdf")
+    max_pdf_pages: int = 40
+    keys: tuple = (                                 # (key, name, folder of Paths.layouts)
+        ("w", "filled forms", "filled_forms"), ("f", "forms", "forms"), ("m", "magazines", "magazines"),
+        ("t", "tables", "tables"), ("s", "scientific papers", "scientific_paper"), ("e", "exams", "exams"),
+        ("h", "handwritten", "handwritten"), ("d", "delete (trash)", "trash"), ("b", "bureaucracy", "bureaucracy"),
+        ("c", "certificates", "bureaucracy"), ("o", "books", "books_pdf"), ("l", "flyers", "flyers"),
+        ("r", "receipts", "receipts"), ("p", "maps and blueprints", "maps_blueprints"),
+    )
+
+
+@dataclass(frozen=True)
 class PaperCfg:
     gsm: tuple = (50, 60, 80, 100, 120)             # paper types, g/m2, drawn uniformly
     open_gsm: tuple = (50.0, 70.0)                  # open book pages, g/m2, uniform
@@ -115,6 +129,7 @@ class GeometryCfg:
     sheet_mm: tuple = (210.0, 297.0)                # (width, height)
     mesh: tuple = (256, 360)                        # page grid nodes (u across, v down): layout page_px / 4; the
                                                     # 3D and UV maps are this grid
+    work_scale: int = 1                             # the surface is worked out on a grid this much finer than mesh
     strip_segments: int = 150
     two_profile_prob: float = 0.5
     n_slices: int = 9
@@ -191,7 +206,7 @@ class RefontCfg:
     edge_bin: int = 3
     edge_lines: int = 3
     split_em: float = 1.6
-    max_stretch: float = 3.0
+    max_stretch: float = 2.0
     ragged_lines: int = 5
     ragged_percentile: float = 0.9
     indent_lines: int = 4
@@ -214,6 +229,15 @@ class RefontCfg:
     edge_tol: float = 0.03
     size_step: int = 4
     touch_pt: float = 1.5                           # pictures this close to each other are tiles of one picture
+    figure_reach_pt: float = 8.0                    # rules this near a figure, mostly inside its reach, belong to it (the axes of a plot)
+    figure_share: float = 0.9                       # the share of such a rule (its length) that lies in the reach
+    turn_floor: float = 0.7                         # the fixed rows (and their text) of a turned page shrink to at most this scale, then its figures do
+    frame_give: float = 0.85                        # a frame of a turned page may take this share of the height that keeps its text before the fixed rows shrink
+    figure_floor: float = 0.5                       # the figures of a turned page shrink to at most this scale to leave room for the text
+    turn_gap_min: float = 0.3                       # the frames and gaps of a turned page are compressed to at least this scale before its fixed rows are
+    turn_gap_max: float = 1.5                       # and stretched to at most this
+    container_cover: float = 0.2                    # a group of curves that text covers this share of is a box that holds text (a callout), not a figure
+    figure_rounds: int = 3                          # times the reach is grown with what joined
     tile_cover: float = 0.9                         # when together they cover this share of their bounding box
     tab_max_em: float = 4.0                         # widest gap after a list marker that still joins the marker to its text
     space_em: float = 0.2                           # a gap between two letters wider than this is a space
@@ -246,6 +270,10 @@ class RefontCfg:
     frame_lines: int = 6                            # lines a run of body paragraphs needs to be a text frame
     paragraph_lines: int = 3                        # and a paragraph of this many lines
     frame_slack: float = 0.3                        # share of a line a frame may be overrun by
+    descent_room: float = 1.0                       # a box's text may reach this share of its descent below it (the letters' tails are not cut)
+    core_share: float = 0.75                        # a later line of a box of which the baseline, and this share of its ascent above it, do not fit the box is dropped
+    line_asc_em: float = 1.0                        # a line reaches at most this far above its baseline (the claim of its font is capped)
+    line_desc_em: float = 0.3                       # and this far below
     overprint_pt: float = 16.0                      # a line is compared with the lines starting within this height of it
     over_picture_share: float = 0.5                 # text lines inside pictures: more means a scan with hidden text
     line_em: float = 1.2                            # line height of a font without metrics
@@ -263,6 +291,12 @@ class RefontCfg:
     indent_min_em: float = 0.5
     indent_max_em: float = 4.0
     edge_match_em: float = 0.6
+    icon_chars: int = 3                             # a source glyph run of at most this many icon characters is one icon: only its own ink is kept
+    glyph_ink: int = 16                             # a source glyph run is laid over the sheet where it differs this much from its own background
+    edge_snap_px: float = 8.0                       # a drawing just outside the sheet (a frame line at the content box's edge) is drawn at the edge
+    flush_words: int = 5                            # a one-line block of a turned page is justified from this many words
+    open_pitch_em: float = 3.4                      # lines of a sentence that goes on may be this far apart (wide line spacing)
+    leader_min: int = 4                             # a run of this many equal dots, dashes or underscores is a filler that grows with its box
     full_line: float = 0.8
     pitch_tol: float = 1.2
     min_width_em: float = 8.0
@@ -281,6 +315,7 @@ class RefontCfg:
 class LayoutCfg:
     sheet_mm: tuple = (210.0, 297.0)
     page_px: tuple = (1024, 1440)                   # flat page and photo (width, height)
+    sheet_scale: float = 1.25                       # the sheet is laid out this much larger: a flat cut to the content stays >= 1:1
     margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
     min_fill: float = 0.75                          # fraction of the content window's patches with ink
     fill_grid: int = 16
@@ -294,7 +329,7 @@ class LayoutCfg:
     min_content_area: float = 0.01                  # content box of a raster page: share of the page, at least
     max_blank_margin: float = 0.50                  # and blank margin share, at most
     check_px: int = 800                             # longest side of the render the raster checks run on
-    script_mix: tuple = (("latin", 0.5), ("unknown", 0.1), ("cyrillic", 0.15), ("cjk", 0.1), ("other", 0.15))
+    script_mix: tuple = (("latin", 0.4), ("unknown", 0.12), ("cyrillic", 0.18), ("cjk", 0.12), ("other", 0.18))
     scripts: dict = field(default_factory=lambda: {
         "cyrillic": ("cyr", "bg", "ru", "uk", "sr", "mk", "be", "kk", "ky", "tg", "mn", "kz", "tj"),
         "cjk": ("zh", "ja", "ko"),
@@ -302,11 +337,12 @@ class LayoutCfg:
                   "or", "si", "km", "lo", "my", "am", "as", "mni", "mr", "sa", "bo", "ckb", "ku", "ps", "ne", "mai", "sd"),
         "unknown": ("unknown", None)})
     sources: tuple = ("books_pdf", "bureaucracy", "corpus_add/pdf", "exams", "other_docs", "scientific_paper", "certificates",
-                      "corpus_add/Images", "maps_blueprints", "filled_forms", "sheet_music", "flyers", "handwritten",
+                      "corpus_add/pdf", "maps_blueprints", "filled_forms", "sheet_music", "flyers", "handwritten",
                       "magazines")                  # folders of Paths.layouts the listing takes
-    raster_only: tuple = ("certificates", "corpus_add/Images", "maps_blueprints", "filled_forms", "sheet_music", "flyers",
+    raster_only: tuple = ("certificates", "corpus_add/pdf", "maps_blueprints", "filled_forms", "sheet_music", "flyers",
                           "handwritten", "magazines")   # folders whose PDFs are never restyled, only rasterized
     use_all: tuple = ("unknown",)                   # groups taking all their raster pages, outside script_mix
+    rotate180_prob: float = 0.3                     # pages (any kind) turned half a circle, at the end of the layout
     grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
     grid: GridCfg = GridCfg()
     font_pt: tuple = (10.0, 16.0)                   # body size on the sheet of the restyled pages (set at their source
@@ -342,6 +378,8 @@ class CameraCfg:
     incidence_deg: float = 65.0                     # max view angle to the surface normal, anywhere on the page
     view_dirs: int = 256                            # view directions spread evenly over the tilts the offsets allow
     view_step: int = 4                              # the views are worked out on every 4th node of the page grid
+    crop_prob: float = 0.3                          # the frame cuts the page, the content stays in view
+    crop_margin: tuple = (0.0, 0.05)                # page in view beyond the content per side, share of the content box's side
 
 
 @dataclass(frozen=True)
