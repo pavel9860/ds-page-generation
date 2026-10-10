@@ -106,14 +106,20 @@ def views(P, N, c: CameraCfg, offset, first=False):
 def _frame_region(rng, content, c: CameraCfg):
     """The page part (u0, v0, u1, v1) the frame is fitted to when it cuts the page and its cut sides: all four for the
     frame "inside", else a nonempty set drawn (each half the time); a cut side crop_margin (share of the content box's
-    side, drawn per side) beyond the content, the others at the page edge."""
+    side, drawn per side) beyond the content, the others at the page edge; its shorter span grown (centred, within the
+    page) to the longer: the sheet's aspect, which the flat has."""
     content = np.asarray(content, float)
     cut = np.ones(4, bool) if c.frame == "inside" else np.zeros(4, bool)
     while not cut.any():
         cut = rng.random(4) < 0.5
     size = np.tile(content[2:] - content[:2], 2)
     inner = np.clip(content + np.array([-1, -1, 1, 1]) * rng.uniform(*c.crop_margin, 4) * size, 0, 1)
-    return np.where(cut, inner, [0.0, 0.0, 1.0, 1.0]), cut
+    r = np.where(cut, inner, [0.0, 0.0, 1.0, 1.0])
+    k = int(r[2] - r[0] > r[3] - r[1])                      # the shorter axis: 0 u, 1 v
+    length = r[3 - k] - r[1 - k]
+    r[k] = np.clip(0.5 * (r[k] + r[k + 2] - length), 0.0, 1.0 - length)
+    r[k + 2] = r[k] + length
+    return r, cut
 
 
 def make_camera(rng, P, N, size, c: CameraCfg, content=(0.0, 0.0, 1.0, 1.0)):

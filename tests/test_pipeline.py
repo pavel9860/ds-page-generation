@@ -30,7 +30,7 @@ def test_frame_marginals_exact_and_cut_frames_get_room(full_small):
 
 
 @pytest.mark.parametrize("frame", ["sides", "inside"])
-def test_frame_region_keeps_the_content_and_cuts_its_sides(full_small, frame):
+def test_frame_region_keeps_the_content_and_has_the_sheet_aspect(full_small, frame):
     c = replace(full_small.render.camera, frame=frame)
     rng = np.random.default_rng(0)
     for _ in range(200):
@@ -38,10 +38,13 @@ def test_frame_region_keeps_the_content_and_cuts_its_sides(full_small, frame):
         region, cut = _frame_region(rng, content, c)
         assert cut.any() and (frame != "inside" or cut.all())
         size = np.tile(content[2:] - content[:2], 2)
-        beyond = np.abs(region - content)
-        assert (region[:2] <= content[:2]).all() and (region[2:] >= content[2:]).all()
-        assert (beyond[cut] <= c.crop_margin[1] * size[cut] + 1e-12).all()
-        assert (region[~cut] == np.array([0.0, 0.0, 1.0, 1.0])[~cut]).all()
+        k = int(content[2] - content[0] > content[3] - content[1])
+        longer = np.array([k == 1, k == 0] * 2)
+        assert (region[:2] <= content[:2] + 1e-12).all() and (region[2:] >= content[2:] - 1e-12).all()
+        assert (region >= 0).all() and (region <= 1).all()
+        assert abs((region[2] - region[0]) - (region[3] - region[1])) < 1e-9
+        if frame == "inside":
+            assert (np.abs(region - content)[longer] <= c.crop_margin[1] * size[longer] + 1e-12).all()
 
 
 def test_flat_part_has_the_sheet_aspect_and_keeps_the_content():
