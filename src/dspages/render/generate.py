@@ -26,6 +26,7 @@ from .raster import grid_faces, rasterize
 BG_STEP = 4
 SHADOW_STEP = 2                 # shadow maps from every 2nd node: the 384 px maps cannot resolve the full grid
 MIP_LEVELS = (0.0, 0.5, 1.0, 2.0)   # px, page blurs blended by how much a photo pixel shrinks the page
+FLAT_ROUNDS = 6                 # _flat_part rounds at most
 MIP_STEP = 4                    # the shrink is measured on every 4th pixel (it changes slowly)
 
 
@@ -56,21 +57,35 @@ def _page_in_photo(lin, mx, my, mask):
     return out
 
 
-def _in_view(pix, nv, nu, px, content):
-    """-> the page part (u0, v0, u1, v1) the flat keeps: per side the page edge when the frame shows it along the
-    content's span, else the nearest-to-content extent of the in-frame nodes over that span (never inside the content);
-    and the farthest extent of the in-frame nodes over that span (where the flat may grow)."""
-    inside = ((pix >= 0) & (pix <= np.array(px))).all(1).reshape(nv, nu)
-    j0, i0 = np.floor(content[1::-1] * [nv - 1, nu - 1]).astype(int)
-    j1, i1 = np.ceil(content[:1:-1] * [nv - 1, nu - 1]).astype(int)
+def _in_view(inside, span, content):
+    """-> the page part (u0, v0, u1, v1) the flat may keep given the in-frame nodes inside (nv, nu): per side the page
+    edge when the frame shows it along the rows and columns of span, else the nearest-to-content extent of the in-frame
+    nodes over them (never inside the content); and their farthest extent (where the flat may grow)."""
+    nv, nu = inside.shape
+    n = np.array([nu - 1, nv - 1, nu - 1, nv - 1])
+    i0, j0 = np.floor(span[:2] * n[:2]).astype(int)
+    i1, j1 = np.ceil(span[2:] * n[2:]).astype(int)
+    c0, c1 = np.floor(content[:2] * n[:2]).astype(int), np.ceil(content[2:] * n[2:]).astype(int)
     rows, cols = inside[j0:j1 + 1], inside[:, i0:i1 + 1]
     idx_u, idx_v = np.arange(nu), np.arange(nv)[:, None]
     first_u, last_u = np.where(rows, idx_u, nu).min(1), np.where(rows, idx_u, -1).max(1)
     first_v, last_v = np.where(cols, idx_v, nv).min(0), np.where(cols, idx_v, -1).max(0)
-    n = np.array([nu - 1, nv - 1, nu - 1, nv - 1])
-    tight = np.array([min(first_u.max(), i0), min(first_v.max(), j0), max(last_u.min(), i1), max(last_v.min(), j1)])
-    loose = np.array([min(first_u.min(), i0), min(first_v.min(), j0), max(last_u.max(), i1), max(last_v.max(), j1)])
+    tight = np.r_[np.minimum([first_u.max(), first_v.max()], c0), np.maximum([last_u.min(), last_v.min()], c1)]
+    loose = np.r_[np.minimum([first_u.min(), first_v.min()], c0), np.maximum([last_u.max(), last_v.max()], c1)]
     return np.clip(tight / n, 0, 1), np.clip(loose / n, 0, 1)
+
+
+def _flat_part(pix, nv, nu, px, content):
+    """The page part the flat keeps: _in_view over the rows and columns of the part itself (from the content's on, until
+    it stays the same), brought to the sheet's aspect (_fit_aspect)."""
+    inside = ((pix >= 0) & (pix <= np.array(px))).all(1).reshape(nv, nu)
+    part = content
+    for _ in range(FLAT_ROUNDS):
+        new = _fit_aspect(*_in_view(inside, part, content), content)
+        if np.allclose(new, part):
+            break
+        part = new
+    return new
 
 
 def _resize_span(a0, a1, c0, c1, lo, hi, length):
@@ -126,7 +141,7 @@ def make_sample(rng, layout, surf, P: Preset):
     lit = photo.shade(Pts, N, cam["eye"], light, maps) if shading else np.ones(len(Pts))
     uv, lf, zmap = rasterize(pix, depth, np.stack([uu.ravel(), vv.ravel(), lit], -1), faces, px)
     mask = np.isfinite(uv[..., 0])
-    crop = _fit_aspect(*_in_view(pix, nv, nu, px, content), content)
+    crop = _flat_part(pix, nv, nu, px, content)
     scale = 1.0 / max(crop[2] - crop[0], crop[3] - crop[1])
     page, _, paper_fx = draw_layout(layout, scale, P)
     ph, pw = page.shape
@@ -154,8 +169,7 @@ def make_sample(rng, layout, surf, P: Preset):
     warped, effects = photo.camera_effects(rng, img.astype(np.float32), zmap, mask, c)
     meta = dict(view=view, light=None if light is None else dict(sharp=light["sharp"], ambient=light["ambient"]),
                 effects=effects, paper_effects=paper_fx, page_frac=float(mask.mean()),
-                border_on_page=float(np.r_[mask[0], mask[-1], mask[:, 0], mask[:, -1]].mean()), flat_part=crop.round(4).tolist(),
-                flat_scale=round(scale, 4))
+                border_on_page=float(np.r_[mask[0], mask[-1], mask[:, 0], mask[:, -1]].mean()), flat_part=crop.tolist(), flat_scale=scale)
     grid3d, cpix = _flat_nodes(surf, crop, cam)
     grid2d = ((cpix - 0.5) / (np.array(px) - 1) * 2 - 1).T.reshape(2, nv, nu).astype(np.float32)
     u, v = np.nan_to_num(uv[..., 0], nan=-1), np.nan_to_num(uv[..., 1], nan=-1)

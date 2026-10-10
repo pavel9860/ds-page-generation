@@ -8,6 +8,8 @@ render    DIR/samples/<i>.npz   flat, warped, grid2d, grid3d, mask (no metadata)
           present, else makes it in memory; the layout is always made in memory; DIR/meta.jsonl: one row per sample, the render metadata and its
           layout's (source page, window, fill, fonts, effects)
 all       the samples only: layout and geometry of each made in memory, not saved (the dataset run)
+A sample that fails (a missing or broken source file) is written to DIR/failed.jsonl with its error and the run goes on;
+render and all skip the samples meta.jsonl already has.
 --preview writes previews (sheet, height map, flat | warped) to DIR_preview/<part>/<i>.jpg, outside the dataset. The
 manifest and its rejected pages are copied to DIR.
 Each part of sample i draws from its own stream (seed, i, part): the parts are reproducible independently.
@@ -114,8 +116,15 @@ def _render(i, saved, dt):
 
 
 def _job(args):
-    """-> (i, seconds per step, metadata row of a rendered sample or None)."""
+    """-> (i, seconds per step, metadata row of a rendered sample or None, error or None)."""
     cmd, i = args
+    try:
+        return (*_run(cmd, i), None)
+    except Exception as e:
+        return i, {}, None, f"{type(e).__name__}: {e}"
+
+
+def _run(cmd, i):
     t, dt = time.time(), {}
     if cmd in ("layout", "geometry") and _path(cmd, i).exists():
         return i, dt, None
@@ -167,10 +176,13 @@ def main(argv=None):
             shutil.copy2(src, out / src.name)
     t0, times = time.time(), {}
     with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed, a.manifest, a.preview)) as pool, \
-            open(out / "meta.jsonl", "a") as meta_f:
-        for k, (i, dt, row) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=1), 1):
+            open(out / "meta.jsonl", "a") as meta_f, open(out / "failed.jsonl", "a") as fail_f:
+        for k, (i, dt, row, err) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=1), 1):
             if row is not None:
                 meta_f.write(json.dumps(row, default=io._json) + "\n")
+            if err is not None:
+                fail_f.write(json.dumps(dict(sample=f"{i:07d}", cmd=a.cmd, error=err)) + "\n")
+                fail_f.flush()
             for step, v in dt.items():
                 times.setdefault(step, []).append(v)
             if k % 50 == 0 or k == len(idx):
