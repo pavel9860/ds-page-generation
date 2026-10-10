@@ -1,6 +1,6 @@
 """Part 3: a photo of a layout page on a 3D page surface, with its flat image, UV map and 3D map.
 
-The frame holds the whole page, or (crop_prob) cuts it on some sides with the content in view. The flat is the page
+The frame (the plan's) holds the whole page, cuts it on some sides or all four, the content in view. The flat is the page
 part in view: on a cut side it ends at the smallest page margin beyond the content left in view there, then brought to
 the sheet's aspect by trimming margins (never the content). The layout is drawn once, at the scale that makes that part
 page_px (no resampling of the flat); the photo samples the same drawing. All at the sheet's aspect, turned portrait
@@ -153,7 +153,8 @@ def make_sample(rng, layout, surf, P: Preset):
         img[~mask] = 0.0
     warped, effects = photo.camera_effects(rng, img.astype(np.float32), zmap, mask, c)
     meta = dict(view=view, light=None if light is None else dict(sharp=light["sharp"], ambient=light["ambient"]),
-                effects=effects, paper_effects=paper_fx, page_frac=float(mask.mean()), flat_part=crop.round(4).tolist(),
+                effects=effects, paper_effects=paper_fx, page_frac=float(mask.mean()),
+                border_on_page=float(np.r_[mask[0], mask[-1], mask[:, 0], mask[:, -1]].mean()), flat_part=crop.round(4).tolist(),
                 flat_scale=round(scale, 4))
     grid3d, cpix = _flat_nodes(surf, crop, cam)
     grid2d = ((cpix - 0.5) / (np.array(px) - 1) * 2 - 1).T.reshape(2, nv, nu).astype(np.float32)

@@ -43,6 +43,7 @@ def factors(P: Preset):
         deep=g.deep.levels,
         bend_deep=((True, g.deep.on_bends_prob), (False, 1 - g.deep.on_bends_prob)),
         sharp=((True, li.sharp_prob), (False, 1 - li.sharp_prob)),
+        frame=P.render.camera.frames,
         margin_bin=tuple((b, 1.0) for b in _bins(*m, 3)) if m[1] > m[0] else ((m, 1.0),))
 
 
@@ -54,7 +55,7 @@ def _canonical(c):
 
 
 GROUPS = dict(geometry=("combo", "two", "along_long", "bend_bin", "gsm", "shallow", "deep", "bend_deep"),
-              view=("sharp",), layout=("margin_bin",))
+              view=("sharp", "frame"), layout=("margin_bin",))
 
 
 def cells(P: Preset, group):
@@ -165,10 +166,12 @@ def geometry_cond(spec):
 
 
 def sample_preset(P: Preset, spec):
-    """The preset of a sample: its light and layout bins; an open book on the sheet turned landscape (two pages)."""
+    """The preset of a sample: its light, frame (restyled pages whose frame cuts the page get cut_margin_frac) and layout bins;
+    an open book on the sheet turned landscape (two pages)."""
     r, c, g = P.render, P.layout, P.geometry
     flip = (lambda t: t[::-1]) if spec["combo"][0] == "open" else (lambda t: t)
-    return replace(P, render=replace(r, light=replace(r.light, sharp_prob=float(spec["sharp"]))),
-                   layout=replace(c, margin_frac=spec["margin_bin"],
+    frame = spec.get("frame", "page")
+    return replace(P, render=replace(r, light=replace(r.light, sharp_prob=float(spec["sharp"])), camera=replace(r.camera, frame=frame)),
+                   layout=replace(c, margin_frac=c.cut_margin_frac if frame != "page" else spec["margin_bin"],
                                   sheet_mm=flip(c.sheet_mm), page_px=flip(c.page_px)),
                    geometry=replace(g, sheet_mm=flip(g.sheet_mm), mesh=flip(g.mesh)))

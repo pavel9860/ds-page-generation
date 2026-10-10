@@ -317,6 +317,7 @@ class LayoutCfg:
     page_px: tuple = (1024, 1440)                   # flat page and photo (width, height)
     sheet_scale: float = 1.25                       # the sheet is laid out this much larger: a flat cut to the content stays >= 1:1
     margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
+    cut_margin_frac: tuple = (0.12, 0.20)           # the margin of restyled pages whose frame cuts the page (room around the content)
     min_fill: float = 0.75                          # fraction of the content window's patches with ink
     fill_grid: int = 16
     max_image: float = 0.25                         # max share of the window covered by pictures
@@ -378,8 +379,10 @@ class CameraCfg:
     incidence_deg: float = 65.0                     # max view angle to the surface normal, anywhere on the page
     view_dirs: int = 256                            # view directions spread evenly over the tilts the offsets allow
     view_step: int = 4                              # the views are worked out on every 4th node of the page grid
-    crop_prob: float = 0.3                          # the frame cuts the page, the content stays in view
-    crop_margin: tuple = (0.0, 0.05)                # page in view beyond the content per side, share of the content box's side
+    frames: tuple = (("page", 0.7), ("sides", 0.15), ("inside", 0.15))   # the plan's frame of a photo: the whole page,
+                                                    # some sides cut, all four cut (the page edges barely in view)
+    frame: str = "page"                             # this photo's (sample_preset sets it)
+    crop_margin: tuple = (0.0, 0.05)                # page in view beyond the content per cut side, share of the content box's side
 
 
 @dataclass(frozen=True)

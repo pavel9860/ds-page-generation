@@ -104,17 +104,23 @@ def views(P, N, c: CameraCfg, offset, first=False):
 
 
 def _frame_region(rng, content, c: CameraCfg):
-    """The page part (u0, v0, u1, v1) the frame is fitted to when it cuts the page: the content box with crop_margin
-    (shares of its sides, drawn per side) around it."""
+    """The page part (u0, v0, u1, v1) the frame is fitted to when it cuts the page and its cut sides: all four for the
+    frame "inside", else a nonempty set drawn (each half the time); a cut side crop_margin (share of the content box's
+    side, drawn per side) beyond the content, the others at the page edge."""
     content = np.asarray(content, float)
+    cut = np.ones(4, bool) if c.frame == "inside" else np.zeros(4, bool)
+    while not cut.any():
+        cut = rng.random(4) < 0.5
     size = np.tile(content[2:] - content[:2], 2)
-    return np.clip(content + np.array([-1, -1, 1, 1]) * rng.uniform(*c.crop_margin, 4) * size, 0, 1)
+    inner = np.clip(content + np.array([-1, -1, 1, 1]) * rng.uniform(*c.crop_margin, 4) * size, 0, 1)
+    return np.where(cut, inner, [0.0, 0.0, 1.0, 1.0]), cut
 
 
 def make_camera(rng, P, N, size, c: CameraCfg, content=(0.0, 0.0, 1.0, 1.0)):
     """P, N: (nv, nu, 3) page grid points and unit normals; content: the content box (u0, v0, u1, v1) on the page.
     -> camera dict (eye, R, f, cx, cy) and view parameters.
-    The frame fits the page bbox at the drawn fill, or with crop_prob exactly the page part _frame_region draws.
+    The frame fits the page bbox at the drawn fill (frame "page"), or exactly the page part _frame_region draws along
+    the tighter axis; along the other one its free room goes away from the cut side (centred when both are cut).
     A view drawn among the possible ones (views, offset max_offset, else side_offset: a side view): a direction uniformly,
     then a distance log-uniformly in its range, moved out to where every node of the grid is within incidence_deg; the
     overhead view at the far end of dist_mm when none is possible (the geometry avoids it). Roll and fill are drawn; the focal length sets the fill. min_px_per_mm reports the smallest local
@@ -142,9 +148,10 @@ def make_camera(rng, P, N, size, c: CameraCfg, content=(0.0, 0.0, 1.0, 1.0)):
     cos_k = np.einsum("nk,nk->n", ray, N) / np.linalg.norm(ray, axis=1)
     cam = dict(eye=eye, R=look_at(eye, target, roll), f=1.0, cx=0.0, cy=0.0)
     xy, z = project(P, cam)
-    cut = rng.random() < c.crop_prob
+    cut = c.frame != "page"
+    sides = np.zeros(4, bool)
     if cut:
-        region = _frame_region(rng, content, c)
+        region, sides = _frame_region(rng, content, c)
         (i0, j0), (i1, j1) = np.floor(region[:2] * [nu - 1, nv - 1]).astype(int), np.ceil(region[2:] * [nu - 1, nv - 1]).astype(int)
         fill = 1.0
         sub = xy.reshape(nv, nu, 2)[j0:j1 + 1, i0:i1 + 1].reshape(-1, 2)
@@ -153,10 +160,12 @@ def make_camera(rng, P, N, size, c: CameraCfg, content=(0.0, 0.0, 1.0, 1.0)):
         lo, hi = xy.min(0), xy.max(0)
     f = fill * min(w / (hi[0] - lo[0]), h / (hi[1] - lo[1]))
     free = np.array([w, h]) - f * (hi - lo)
-    cx, cy = np.array([w, h]) / 2 - f * (lo + hi) / 2 + 0.5 * c.shift * free * rng.uniform(-1, 1, 2)
+    shift = np.where(sides[:2] == sides[2:], 0.0 if cut else c.shift * rng.uniform(-1, 1, 2), np.where(sides[:2], -1.0, 1.0))
+    cx, cy = np.array([w, h]) / 2 - f * (lo + hi) / 2 + 0.5 * free * shift
     cam.update(f=float(f), cx=float(cx), cy=float(cy))
     view = dict(dist_mm=float(dist), tilt_deg=float(np.degrees(tilts[k])), azimuth_deg=float(np.degrees(azs[k]) % 360),
                 roll_deg=float(np.degrees(roll)), fill=float(fill), fov_deg=float(np.degrees(2 * np.arctan(h / 2 / f))),
                 max_incidence_deg=float(np.degrees(np.arccos(np.clip(worst, -1, 1)))),
-                min_px_per_mm=float((f * np.clip(cos_k, 0, 1) / z).min()), cut=bool(cut))
+                min_px_per_mm=float((f * np.clip(cos_k, 0, 1) / z).min()), cut=bool(cut),
+                cut_sides="".join(n for n, k in zip("LTRB", sides) if k))
     return cam, view
