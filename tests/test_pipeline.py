@@ -133,6 +133,26 @@ def test_a_failing_sample_is_logged_and_the_run_goes_on_and_resumes(tmp_path):
     assert sum(1 for _ in open(out / "meta.jsonl")) == len(done)
 
 
+def test_a_stopped_run_goes_on_and_a_run_of_another_manifest_or_size_is_refused(tmp_path):
+    man = _raster_manifest(tmp_path, 4, missing=set())
+    out = tmp_path / "run"
+    args = ["all", "--preset", "demo", "--out", str(out), "--workers", "1", "--manifest", str(man)]
+    cli.main(args + ["--n", "4", "--count", "2"])
+    rows = (out / "meta.jsonl").read_bytes()
+    (out / "meta.jsonl").write_bytes(rows + rows.splitlines(True)[0][:20])
+    (out / "samples" / "0000003.npz.tmp").write_bytes(b"cut short")
+    cli.main(args + ["--n", "4"])
+    samples = [json.loads(l)["sample"] for l in open(out / "meta.jsonl")]
+    assert sorted(samples) == [f"{i:07d}" for i in range(sum(1 for _ in open(out / "plan.jsonl")))]
+    assert all(np.load(out / "samples" / f"{s}.npz")["flat"].shape for s in samples)
+    with pytest.raises(SystemExit):
+        cli.main(args + ["--n", "5"])
+    man.write_text(man.read_text() + man.read_text().splitlines(True)[0])
+    with pytest.raises(SystemExit):
+        cli.main(args + ["--n", "4"])
+    assert sorted(json.loads(l)["sample"] for l in open(out / "meta.jsonl")) == samples
+
+
 def test_a_manifest_file_that_raises_is_rejected_with_its_error(tmp_path):
     from dspages.prep import manifest
     p = tmp_path / "broken.pdf"

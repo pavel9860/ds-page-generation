@@ -9,14 +9,18 @@ render    DIR/samples/<i>.npz   flat, warped, grid2d, grid3d, mask (no metadata)
           layout's (source page, window, fill, fonts, effects)
 all       the samples only: layout and geometry of each made in memory, not saved (the dataset run)
 A sample that fails (a missing or broken source file) is written to DIR/failed.jsonl with its error and the run goes on;
-render and all skip the samples meta.jsonl already has.
+render and all skip the samples meta.jsonl already has (a stopped run goes on where it was). DIR/run.json holds what the
+plan was made from (preset, n, seed, manifest and its sha256): a run with other ones in that DIR stops with an error.
 --preview writes previews (sheet, height map, flat | warped) to DIR_preview/<part>/<i>.jpg, outside the dataset. The
 manifest and its rejected pages are copied to DIR.
 Each part of sample i draws from its own stream (seed, i, part): the parts are reproducible independently.
 """
 import argparse
+import hashlib
 import json
+import os
 import shutil
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -139,6 +143,38 @@ def _run(cmd, i):
     return i, dt, None
 
 
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _write_lines(path, rows):
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.writelines(json.dumps(r) + "\n" for r in rows)
+    os.replace(tmp, path)
+
+
+def _read_rows(path):
+    """The rows of a JSONL file; a last line cut short (the run was stopped while writing it) is dropped from it."""
+    if not path.exists():
+        return []
+    rows, good = [], 0
+    with open(path, "rb") as f:
+        for line in f:
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                break
+            good += len(line)
+    if good < path.stat().st_size:
+        os.truncate(path, good)
+    return rows
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="dspages", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -154,32 +190,38 @@ def main(argv=None):
     ap.add_argument("--preview", action="store_true", help="write previews to DIR_preview")
     a = ap.parse_args(argv)
     out = Path(a.out)
-    plan_path = out / "plan.jsonl"
-    if a.cmd == "plan" or not plan_path.exists():
-        P = get_preset(a.preset)
+    plan_path, run_path = out / "plan.jsonl", out / "run.json"
+    P = get_preset(a.preset)
+    man = Path(a.manifest or P.paths.manifest)
+    run = dict(preset=a.preset, n=a.n, seed=a.seed, manifest=str(man), manifest_sha256=_sha256(man))
+    if plan_path.exists() and a.cmd != "plan":
+        made = json.loads(run_path.read_text()) if run_path.exists() else None
+        if made != run:
+            sys.exit(f"{out} was planned for {made}, not {run}: use another --out or delete it")
+    else:
         out.mkdir(parents=True, exist_ok=True)
-        with open(plan_path, "w") as f:
-            specs = plan(P, a.n, a.seed, load_manifest(a.manifest or P.paths.manifest))
-            for s in specs:
-                f.write(json.dumps(s) + "\n")
+        specs = plan(P, a.n, a.seed, load_manifest(man))
+        _write_lines(plan_path, specs)
+        for src in (man, man.with_suffix(".rejected.jsonl")):
+            if src.exists():
+                shutil.copy2(src, out / src.name)
+        run_path.write_text(json.dumps(run))
+        for stale in ("meta.jsonl", "failed.jsonl"):
+            (out / stale).unlink(missing_ok=True)
         per = {g: sum(s["script"] == g for s in specs) for g, _ in P.layout.script_mix}
         print(f"plan: {len(specs)} of {a.n} specs -> {plan_path}; per script: {per}", flush=True)
     if a.cmd == "plan":
         return
     n = sum(1 for _ in open(plan_path))
-    meta = out / "meta.jsonl"
-    done = {json.loads(line)["sample"] for line in open(meta)} if meta.exists() and a.cmd in ("render", "all") else set()
+    done = {r["sample"] for r in _read_rows(out / "meta.jsonl")} if a.cmd in ("render", "all") else set()
     idx = [i for i in range(a.start, min(n, a.start + (a.count or n))) if f"{i:07d}" not in done]
-    man = Path(a.manifest or get_preset(a.preset).paths.manifest)
-    for src in (man, man.with_suffix(".rejected.jsonl")):
-        if src.exists() and not (out / src.name).exists():
-            shutil.copy2(src, out / src.name)
     t0, times = time.time(), {}
     with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed, a.manifest, a.preview)) as pool, \
             open(out / "meta.jsonl", "a") as meta_f, open(out / "failed.jsonl", "a") as fail_f:
         for k, (i, dt, row, err) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=1), 1):
             if row is not None:
                 meta_f.write(json.dumps(row, default=io._json) + "\n")
+                meta_f.flush()
             if err is not None:
                 fail_f.write(json.dumps(dict(sample=f"{i:07d}", cmd=a.cmd, error=err)) + "\n")
                 fail_f.flush()

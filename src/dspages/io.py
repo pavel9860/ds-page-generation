@@ -1,5 +1,6 @@
 """Sample files: one .npz per sample and part (arrays, + meta as JSON for the parts), a .jpg preview where asked."""
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -16,13 +17,16 @@ def _json(o):
 
 
 def save(path: Path, arrays: dict, meta: dict = None, preview=None, preview_path: Path = None):
-    """meta (None: none stored) as a JSON member; preview is written to preview_path (default: beside the .npz)."""
+    """meta (None: none stored) as a JSON member, written whole or not at all (a temp file renamed); preview is written to
+    preview_path (default: beside the .npz)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     items = arrays if meta is None else dict(meta=np.array(json.dumps(meta, default=_json)), **arrays)
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:   # np.load-able .npz; level 1:
+    tmp = path.with_name(path.name + ".tmp")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:    # np.load-able .npz; level 1:
         for k, v in items.items():                                                  # 2x faster, +5%
             with z.open(k + ".npy", "w", force_zip64=True) as f:
                 np.lib.format.write_array(f, np.asarray(v))
+    os.replace(tmp, path)
     if preview is not None:
         preview_path = Path(preview_path or path.with_suffix(".jpg"))
         preview_path.parent.mkdir(parents=True, exist_ok=True)
