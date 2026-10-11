@@ -50,6 +50,8 @@ def _seed(path: str) -> int:
 
 _LAYOUT = get_preset("full").layout
 _JPEG = {}                      # path -> xrefs of its images with strong JPEG artifacts (_init reads them)
+WHOLE_FILE = ("unreadable", "crashed", "error")   # rejections of a whole file: not tried again
+FILE_DONE = 1 << 30             # pages counted as taken from such a file
 
 
 def _reject(path, pi, language, reason, **kw):
@@ -257,8 +259,8 @@ def _run(row):
         return [_reject(row["path"], 0, row["language"], "error", error=f"{type(e).__name__}: {e}")]
 
 
-def _records(batch, workers):
-    """Records of the files of a batch. When a file kills its worker (a crash inside MuPDF), the files that were running
+def _records(batch, workers, sink):
+    """Records of the files of a batch, each file's handed to sink as soon as it is read. When a file kills its worker (a crash inside MuPDF), the files that were running
     (the pool hands them out in order, workers + 1 at a time: the first unfinished ones) are run one at a time (the one
     that crashes again is recorded as rejected, "crashed") and the rest go on in a new pool."""
     out, todo = {}, list(range(len(batch)))
@@ -269,6 +271,7 @@ def _records(batch, workers):
             try:
                 for k, f in futures.items():
                     out[k] = f.result()
+                    sink(out[k])
             except BrokenProcessPool:
                 running = [k for k in todo if k not in out][:workers + 1]
         for k in running:
@@ -277,32 +280,54 @@ def _records(batch, workers):
                     out[k] = one.submit(_run, batch[k]).result()
             except BrokenProcessPool:
                 out[k] = [_reject(batch[k]["path"], 0, batch[k]["language"], "crashed")]
+            sink(out[k])
         todo = [k for k in todo if k not in out]
     return [r for k in range(len(batch)) for r in out[k]]
 
 
-def main(out_path, workers, pages=None, exclude=()):
+def main(out_path, workers, pages=None, exclude=(), files=None):
     """Pages by the targets: each script group gets its share of `pages`, split equally between its languages and each
     language between its topics (a language or topic short of files leaves its share to the others). The listing gives
     the files; a round after another takes pages_per_pdf of each until the quotas are met. A page is taken once,
-    restyled or not, also across the manifests of `exclude` (their pages and rejected pages are not tried again)."""
+    restyled or not, also across the manifests of `exclude` (their pages and rejected pages are not tried again).
+    Every file's records go to <out>.partial.jsonl as soon as it is read; a run that finds that file goes on from it (the
+    files and pages it tried are not tried again)."""
     c = _LAYOUT
     quota = {g: round((pages or c.manifest_pages) * w) for g, w in c.script_mix}
     taken = defaultdict(lambda: [set(), 0])
+
+    def mark(r, kept):
+        taken[r["source_path"]][0].add(r["page_index"])
+        taken[r["source_path"]][1] += FILE_DONE if r.get("reason") in WHOLE_FILE else kept
     for m in exclude:
         for p, kept in ((Path(m), 1), (Path(m).with_suffix(".rejected.jsonl"), 0)):
             with open(p, encoding="utf-8") as f:
                 for r in map(json.loads, f):
-                    taken[r["source_path"]][0].add(r["page_index"])
-                    taken[r["source_path"]][1] += kept
-    with open(Paths().files, encoding="utf-8") as f:
-        tree = _tree([json.loads(line) for line in f], c, quota, taken)
+                    mark(r, kept)
     got, recs, rejected, t0 = Counter(), [], [], time.time()
-    while batch := _allocate(tree, {g: max(q - got[g], 0) for g, q in quota.items()}):
-        for r in _records(batch, workers):
-            (rejected if r["kind"] == "rejected" else recs).append(r)
-            got[script(r, c.scripts)] += r["kind"] != "rejected"
-        print(f"entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)
+
+    def add(r):
+        (rejected if r["kind"] == "rejected" else recs).append(r)
+        got[script(r, c.scripts)] += r["kind"] != "rejected"
+    partial = Path(out_path).with_suffix(".partial.jsonl")
+    if partial.exists():
+        with open(partial, encoding="utf-8") as f:
+            for r in map(json.loads, f):
+                add(r)
+                mark(r, r["kind"] != "rejected")
+        print(f"resumed: {len(recs)} entries, {len(rejected)} rejected from {partial}", flush=True)
+    with open(files or Paths().files, encoding="utf-8") as f:
+        tree = _tree([json.loads(line) for line in f], c, quota, taken)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(partial, "a", encoding="utf-8") as part:
+        def sink(rs):
+            part.writelines(json.dumps(r) + "\n" for r in rs)
+            part.flush()
+            for r in rs:
+                add(r)
+        while batch := _allocate(tree, {g: max(q - got[g], 0) for g, q in quota.items()}):
+            _records(batch, workers, sink)
+            print(f"entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r) + "\n" for r in recs)
@@ -310,6 +335,7 @@ def main(out_path, workers, pages=None, exclude=()):
         f.writelines(json.dumps(r) + "\n" for r in rejected)
     print(f"TOTAL {len(recs)} entries, {len(rejected)} rejected, wall={time.time() - t0:.0f}s", flush=True)
     print("per script group:", dict(got), "quota:", quota, flush=True)
+    partial.unlink()
 
 
 if __name__ == "__main__":

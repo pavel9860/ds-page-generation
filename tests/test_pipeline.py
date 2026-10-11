@@ -139,3 +139,18 @@ def test_a_manifest_file_that_raises_is_rejected_with_its_error(tmp_path):
     p.write_bytes(b"%PDF-1.4 not a pdf")
     recs = manifest._run(dict(path=str(p), language="en", category="test", digital=True, cap=2, skip=set()))
     assert len(recs) == 1 and recs[0]["kind"] == "rejected"
+
+
+def test_the_manifest_goes_on_from_its_partial_records(tmp_path):
+    from dspages.prep import manifest
+    man = _raster_manifest(tmp_path, 6, missing=set())
+    files = tmp_path / "files.jsonl"
+    files.write_text("".join(json.dumps(dict(path=e["source_path"], language="en", topic="t", category="test", digital=False,
+                                             pages=1, fonts=[], body_pt=0.0)) + "\n" for e in map(json.loads, open(man))))
+    out = tmp_path / "m.jsonl"
+    first = manifest._run(dict(path=str(tmp_path / "page0.png"), language="en", category="test", digital=False, cap=1, skip=set()))
+    (tmp_path / "m.partial.jsonl").write_text("".join(json.dumps(r) + "\n" for r in first))
+    manifest._init()
+    manifest.main(str(out), 1, pages=6, files=str(files))
+    paths = [json.loads(l)["source_path"] for l in open(out)] + [json.loads(l)["source_path"] for l in open(tmp_path / "m.rejected.jsonl")]
+    assert len(paths) == len(set(paths)) == 6 and not (tmp_path / "m.partial.jsonl").exists()
