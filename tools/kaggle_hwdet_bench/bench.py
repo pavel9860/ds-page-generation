@@ -13,8 +13,8 @@ import time
 
 W = "/kaggle/working"
 T0 = time.time()
-STEPS, NB, CONFIG_TIMEOUT, TOTAL_TIMEOUT = 100, 8, 480, 1500
-LANES = {0: [("eager", 8), ("eager", 16), ("eager", 32)], 1: [("eager", 16), ("compile", 16)]}
+STEPS, NB, POOL, CONFIG_TIMEOUT, TOTAL_TIMEOUT = 40, 8, 24, 480, 1500
+LANES = {0: [("s", 32), ("s", 24), ("s", 16)], 1: [("m", 24), ("m", 16), ("m", 8)]}
 lock = threading.Lock()
 
 
@@ -56,7 +56,7 @@ def setup():
     return src, find("hwdet-init.pt") or find("yolo26n-doclaynet.pt")
 
 
-def config(mode, bs, src, weights, gpu):
+def config(size, bs, src, weights, gpu):
     import numpy as np
     import torch
     from ultralytics import YOLO
@@ -65,20 +65,22 @@ def config(mode, bs, src, weights, gpu):
     from ultralytics.data.build import build_dataloader
     from ultralytics.utils import DEFAULT_CFG
 
-    tag = f"gpu{gpu} {mode} bs{bs}"
+    tag = f"gpu{gpu} {size} bs{bs}"
     cfg = get_cfg(DEFAULT_CFG, dict(imgsz=1024, batch=bs, mosaic=0.5, close_mosaic=3, fliplr=0.0, degrees=0.0, scale=0.35,
                                     translate=0.05, hsv_h=0.01, workers=2, cache=False))
     data = {"names": {0: "handwriting", 1: "print"}, "nc": 2, "channels": 3, "path": src}
     ds = build_yolo_dataset(cfg, f"{src}/train/images", bs, data, mode="train", stride=32)
     dl = build_dataloader(ds, bs, 2, shuffle=True, rank=-1)
     t = time.time()
-    batches = []
+    pool = []
     for b in dl:
-        batches.append(b)
-        if len(batches) == NB:
+        pool.append(b)
+        if len(pool) == POOL:
             break
+    pool.sort(key=lambda b: len(b["batch_idx"]), reverse=True)
+    batches = pool[:NB // 2] + pool[NB // 2:][::max(1, (len(pool) - NB // 2) // (NB // 2))][:NB // 2]
     objs = [int(np.bincount(b["batch_idx"].numpy().astype(int)).max()) for b in batches]
-    say(f"[{tag}] {NB} batches loaded: {(time.time() - t) / NB * 1000:.0f} ms per batch (2 workers), "
+    say(f"[{tag}] {len(pool)} batches loaded: {(time.time() - t) / len(pool) * 1000:.0f} ms per batch (2 workers), "
         f"max objects per image {max(objs)}")
     del dl
     dev = torch.device("cuda:0")
@@ -87,7 +89,7 @@ def config(mode, bs, src, weights, gpu):
     for p in model.parameters():
         p.requires_grad = True
     model.criterion = model.init_criterion()
-    fwd = torch.compile(model) if mode == "compile" else model
+    fwd = model
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
     scaler = torch.amp.GradScaler()
     torch.cuda.reset_peak_memory_stats()
@@ -117,7 +119,7 @@ def config(mode, bs, src, weights, gpu):
             f"{torch.cuda.max_memory_reserved() / 2**30:5.2f} GB reserved")
     tal_oom = any(getattr(getattr(model.criterion, n).assigner, "_oom_warned", False) for n in ("one2many", "one2one"))
     steady = ms[10:] if len(ms) > 10 else ms
-    res = {"tag": tag, "status": status, "tal_oom_retry": tal_oom, "steps": len(ms), "first_step_ms": ms[0] if ms else None,
+    res = {"tag": tag, "status": status, "tal_oom_retry": tal_oom, "steps": len(ms), "first_step_ms": ms[0] if ms else None, "size": size, "bs": bs,
            "median_ms": float(np.median(steady)) if steady else None, "p95_ms": float(np.percentile(steady, 95)) if steady else None,
            "peak_alloc_gb": torch.cuda.max_memory_allocated() / 2**30, "peak_reserved_gb": torch.cuda.max_memory_reserved() / 2**30}
     say(f"[{tag}] RESULT {json.dumps(res)}")
@@ -126,13 +128,14 @@ def config(mode, bs, src, weights, gpu):
 
 
 def lane(gpu, jobs, src, weights, deadline, procs):
-    for mode, bs in jobs:
+    for size, bs in jobs:
+        mode = size
         left = deadline - time.time()
         if left < 30:
             say(f"gpu{gpu} {mode} bs{bs}: skipped, no time left")
             continue
-        env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu))
-        p = subprocess.Popen([sys.executable, "-u", __file__, "run", mode, str(bs), src, weights, str(gpu)], env=env,
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu), PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+        p = subprocess.Popen([sys.executable, "-u", __file__, "run", size, str(bs), src, f"yolo26{size}.pt", str(gpu)], env=env,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
         procs.append(p)
         timer = threading.Timer(min(CONFIG_TIMEOUT, left), lambda p=p: os.killpg(p.pid, 9))

@@ -1,13 +1,11 @@
-"""Kaggle kernel: fine-tunes YOLO26 on the hwdet dataset, validates, exports ONNX and writes train_meta.json.
+"""Kaggle kernel: fine-tunes YOLO26 s (GPU 0) and m (GPU 1) on the hwdet dataset, one process per GPU (no DDP), each
+for HOURS of wall time (ultralytics sizes the epochs and the cosine schedule from it), then validates and exports ONNX.
 
-Inputs (/kaggle/input): the dataset (data.yaml, train/, val/, manifest.json) and an init checkpoint: `hwdet-init.pt`
-(continue a round), else `yolo26n-doclaynet.pt` (size n) or the Ultralytics pretrained `yolo26<SIZE>.pt` (downloaded).
-Outputs (/kaggle/working): hwdet-yolo26<SIZE>.{pt,onnx}, train_meta.json, train.log, runs/.
-"""
+Micro-batch from the memory bench (T4, 1024 px, densest mosaic batches): s 16 (peak 13.2 GB; 24 and 32 ran out of
+memory), m 8 (12.7 GB; 16 and 24 ran out); nbs=32 makes the optimizer step a batch of 32 by accumulation.
+Outputs (/kaggle/working): hwdet-yolo26{s,m}.{pt,onnx}, train_meta_{s,m}.json, train_{s,m}.log, runs/."""
 import glob
-import hashlib
 import json
-import logging
 import os
 import shutil
 import signal
@@ -17,57 +15,59 @@ import time
 
 W = "/kaggle/working"
 ULTRALYTICS = "8.4.175"
-SIZE = "s"
-HOURS = 2.0
+HOURS = 1.4
+LANES = {0: ("s", 16), 1: ("m", 8)}
 PARAMS = dict(
-    imgsz=1024, epochs=25, time=HOURS, batch=64, device=[0, 1], workers=4, cache=False, seed=0, deterministic=False,
-    optimizer="AdamW", lr0=0.001, lrf=0.01, cos_lr=True, warmup_epochs=1, weight_decay=0.0005, patience=8,
-    close_mosaic=5, mosaic=0.5, scale=0.5, translate=0.05, degrees=2.0, shear=0.0, fliplr=0.0, hsv_h=0.01,
-    hsv_s=0.5, hsv_v=0.3, plots=False, save_period=5,
+    imgsz=1024, epochs=40, time=HOURS, nbs=32, workers=2, cache=False, seed=0, deterministic=False,
+    optimizer="AdamW", lr0=0.001, lrf=0.01, cos_lr=True, warmup_epochs=1, weight_decay=0.0005, patience=4,
+    close_mosaic=1, mosaic=0.5, scale=0.5, translate=0.05, degrees=2.0, shear=0.0, fliplr=0.0, hsv_h=0.01,
+    hsv_s=0.5, hsv_v=0.3, plots=False, device=0,
 )
 
-logging.basicConfig(filename=f"{W}/train.log", level=logging.INFO, format="%(asctime)s %(message)s")
-log = logging.getLogger("train")
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", f"ultralytics=={ULTRALYTICS}", "onnx", "onnxslim"], check=True)
-
-yaml = glob.glob("/kaggle/input/**/data.yaml", recursive=True)[0]
-src = os.path.dirname(yaml)
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-input", f"ultralytics=={ULTRALYTICS}", "onnx", "onnxslim"],
+               check=True, timeout=600)
+src = os.path.dirname(glob.glob("/kaggle/input/**/data.yaml", recursive=True)[0])
 data = f"{W}/data.yaml"
 open(data, "w").write(f"path: {src}\ntrain: train/images\nval: val/images\nnames:\n  0: handwriting\n  1: print\n")
-init = (glob.glob("/kaggle/input/**/hwdet-init.pt", recursive=True)
-        or glob.glob(f"/kaggle/input/**/yolo26{SIZE}-doclaynet.pt", recursive=True) or [f"yolo26{SIZE}.pt"])[0]
-manifest = os.path.join(src, "manifest.json")
-meta = dict(size=SIZE, init=os.path.basename(init), params=PARAMS, ultralytics=ULTRALYTICS,
-            manifest_sha256=hashlib.sha256(open(manifest, "rb").read()).hexdigest() if os.path.exists(manifest) else None,
-            started=time.strftime("%Y-%m-%dT%H:%M:%S"))
-log.info("init %s, params %s", init, PARAMS)
+manifest = json.load(open(f"{src}/manifest.json")) if os.path.exists(f"{src}/manifest.json") else {}
 
-code = f"""
+CHILD = '''
+import json, shutil, time
+import torch
 from ultralytics import YOLO
-YOLO({init!r}).train(data={data!r}, project={W + '/runs'!r}, name="hw", exist_ok=True, **{PARAMS!r})
-"""
-with open(f"{W}/train.log", "a") as out:
-    proc = subprocess.Popen([sys.executable, "-u", "-c", code], stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
-    try:
-        proc.wait(timeout=int(HOURS * 3600 + 15 * 60))
-    except subprocess.TimeoutExpired:
-        log.warning("TIMEOUT")
-        os.killpg(proc.pid, signal.SIGKILL)      # the DDP launcher and both ranks, not only the parent
-        proc.wait()
-
-best = f"{W}/runs/hw/weights/best.pt"
-if not os.path.exists(best):
-    best = f"{W}/runs/hw/weights/last.pt"
-import torch  # noqa: E402
-from ultralytics import YOLO  # noqa: E402
-
+size, batch, W, data = {size!r}, {batch}, {W!r}, {data!r}
+params = {params!r}
+YOLO(f"yolo26{{size}}.pt").train(data=data, project=W + "/runs", name=f"hw_{{size}}", exist_ok=True, batch=batch, **params)
+best = f"{{W}}/runs/hw_{{size}}/weights/best.pt"
 model = YOLO(best)
-m = model.val(data=data, imgsz=PARAMS["imgsz"], batch=32, device=0, plots=False)
-meta.update(torch=torch.__version__, weights=os.path.basename(best), finished=time.strftime("%Y-%m-%dT%H:%M:%S"),
-            val=dict(zip(("precision", "recall", "mAP50", "mAP50-95"), map(float, m.box.mean_results()))),
-            val_ap50=dict(zip(m.names.values(), map(float, m.box.ap50))), val_speed_ms=m.speed)
-onnx = model.export(format="onnx", imgsz=PARAMS["imgsz"], opset=17, dynamic=True, simplify=True)
-shutil.copy(best, f"{W}/hwdet-yolo26{SIZE}.pt")
-shutil.copy(onnx, f"{W}/hwdet-yolo26{SIZE}.onnx")
-json.dump(meta, open(f"{W}/train_meta.json", "w"), indent=1)
-log.info("done %s", meta["val"])
+m = model.val(data=data, imgsz=params["imgsz"], batch=8, device=0, plots=False)
+onnx = model.export(format="onnx", imgsz=params["imgsz"], opset=17, dynamic=True, simplify=True)
+shutil.copy(best, f"{{W}}/hwdet-yolo26{{size}}.pt")
+shutil.copy(onnx, f"{{W}}/hwdet-yolo26{{size}}.onnx")
+json.dump(dict(size=size, batch=batch, params=params, torch=torch.__version__,
+               val=dict(zip(("precision", "recall", "mAP50", "mAP50-95"), map(float, m.box.mean_results()))),
+               val_ap50=dict(zip(m.names.values(), map(float, m.box.ap50))), val_speed_ms=m.speed,
+               finished=time.strftime("%Y-%m-%dT%H:%M:%S")), open(f"{{W}}/train_meta_{{size}}.json", "w"), indent=1)
+'''
+
+procs = {}
+for gpu, (size, batch) in LANES.items():
+    code = CHILD.format(size=size, batch=batch, W=W, data=data, params=PARAMS)
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu), PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+    out = open(f"{W}/train_{size}.log", "w")
+    procs[size] = subprocess.Popen([sys.executable, "-u", "-c", code], stdout=out, stderr=subprocess.STDOUT, env=env,
+                                   start_new_session=True)
+deadline = time.time() + HOURS * 3600 + 25 * 60
+for size, p in procs.items():
+    try:
+        p.wait(timeout=max(1, deadline - time.time()))
+    except subprocess.TimeoutExpired:
+        print(f"{size}: TIMEOUT", flush=True)
+        os.killpg(p.pid, signal.SIGKILL)
+        p.wait()
+    print(f"{size}: exit {p.returncode}", flush=True)
+for size in LANES.values():
+    f = f"{W}/train_meta_{size[0]}.json"
+    if os.path.exists(f):
+        print(open(f).read(), flush=True)
+shutil.copy(data, f"{W}/data_used.yaml")
