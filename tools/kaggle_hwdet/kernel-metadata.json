@@ -1,6 +1,6 @@
 {
-  "id": "pavel9860/hwdet-yolo26n",
-  "title": "hwdet-yolo26n",
+  "id": "pavel9860/hwdet-yolo26s",
+  "title": "hwdet-yolo26s",
   "code_file": "train.py",
   "language": "python",
   "kernel_type": "script",
@@ -8,9 +8,13 @@
   "enable_gpu": true,
   "enable_tpu": false,
   "enable_internet": true,
-  "dataset_sources": ["pavel9860/hwdet-synth"],
+  "keywords": [],
+  "dataset_sources": [
+    "pavel9860/hwdet-synth"
+  ],
   "kernel_sources": [],
   "competition_sources": [],
   "model_sources": [],
+  "docker_image": "",
   "machine_shape": "NvidiaTeslaT4"
 }
