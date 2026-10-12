@@ -1,6 +1,6 @@
 {
- "id": "pavel9860/hwdet-yolo26sm",
- "title": "hwdet-yolo26sm",
+ "id": "pavel9860/hwdet-train",
+ "title": "hwdet-train",
  "code_file": "train.py",
  "language": "python",
  "kernel_type": "script",

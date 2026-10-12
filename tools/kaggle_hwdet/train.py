@@ -4,17 +4,26 @@ import subprocess
 import sys
 
 W = "/kaggle/working"
+LANES = {0: ("s", 16), 1: ("m", 8)}
+print("before pip", flush=True)
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ultralytics==8.4.175", "onnx"], check=True)
+print("after pip", flush=True)
 src = os.path.dirname(glob.glob("/kaggle/input/**/data.yaml", recursive=True)[0])
 data = f"{W}/data.yaml"
 open(data, "w").write(f"path: {src}\ntrain: train/images\nval: val/images\nnames:\n  0: handwriting\n  1: print\n")
-w = glob.glob("/kaggle/input/**/yolo26n-doclaynet.pt", recursive=True)[0]
+print("after data", src, flush=True)
 train = f"""
 from ultralytics import YOLO
-YOLO("{w}").train(data="{data}", imgsz=1024, epochs=40, time=0.05, fraction=0.1, batch=16, device={{gpu}}, workers=2,
-    cache=False, optimizer="AdamW", lr0=0.001, cos_lr=True, warmup_epochs=0, mosaic=0.5, close_mosaic=3, fliplr=0.0,
-    degrees=0.0, scale=0.35, translate=0.05, hsv_h=0.01, project="{W}/runs", name="hw{{gpu}}", exist_ok=True, plots=False)
+YOLO("yolo26{{size}}.pt").train(data="{data}", imgsz=1024, epochs=40, time=1.4, batch={{batch}}, nbs=32, device={{gpu}},
+    workers=2, cache=False, optimizer="AdamW", lr0=0.001, cos_lr=True, warmup_epochs=1, patience=4, close_mosaic=1,
+    mosaic=0.5, fliplr=0.0, degrees=0.0, scale=0.35, translate=0.05, hsv_h=0.01, project="{W}/runs", name="hw_{{size}}",
+    exist_ok=True, plots=False)
+best = YOLO("{W}/runs/hw_{{size}}/weights/best.pt")
+best.val(data="{data}", imgsz=1024, batch=8, device={{gpu}}, plots=False)
+best.export(format="onnx", imgsz=1024, opset=17, dynamic=True, simplify=True)
 """
-procs = [subprocess.Popen([sys.executable, "-u", "-c", train.format(gpu=g)]) for g in (0, 1)]
+procs = [subprocess.Popen([sys.executable, "-u", "-c", train.format(size=s, batch=b, gpu=g)]) for g, (s, b) in LANES.items()]
+print("training started", flush=True)
 for p in procs:
-    p.wait(timeout=10 * 60)
+    p.wait()
+print("done", flush=True)
