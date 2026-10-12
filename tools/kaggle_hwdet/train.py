@@ -78,13 +78,34 @@ for gpu, (size, batch) in LANES.items():
                                    env=env, start_new_session=True, text=True, bufsize=1)
     threading.Thread(target=pump, args=(size, procs[size], open(f"{W}/train_{size}.log", "w")), daemon=True).start()
 deadline = time.time() + HOURS * 3600 + 25 * 60
+
+
+def stop_all(code):
+    for p in procs.values():
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    print(f"HARD STOP at {time.time() - T0:.0f}s", flush=True)
+    os._exit(code)
+
+
+def watchdog():
+    """Exit at the deadline whatever the children or the parent are blocked on (a child in an uninterruptible state
+    does not die on SIGKILL, so nothing here waits for one); a status line every 60 s."""
+    while True:
+        time.sleep(60)
+        gpu = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu,memory.used", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=20).stdout.strip().replace("\n", " | ")
+        print(f"[alive {time.time() - T0:5.0f}s] exit codes {[p.poll() for p in procs.values()]} gpu {gpu}", flush=True)
+        if time.time() > deadline:
+            stop_all(2)
+
+
+threading.Thread(target=watchdog, daemon=True).start()
 for size, p in procs.items():
-    try:
-        p.wait(timeout=max(1, deadline - time.time()))
-    except subprocess.TimeoutExpired:
-        print(f"{size}: TIMEOUT", flush=True)
-        os.killpg(p.pid, signal.SIGKILL)
-        p.wait()
+    while p.poll() is None:
+        time.sleep(5)
     print(f"{size}: exit {p.returncode}", flush=True)
 for size in LANES.values():
     f = f"{W}/train_meta_{size[0]}.json"
