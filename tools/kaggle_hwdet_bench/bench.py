@@ -115,7 +115,7 @@ def config(mode, bs, src, weights, gpu):
         say(f"[{tag}] step {i:3d} {ms[-1]:7.1f} ms  {bs / ms[-1] * 1000:6.1f} img/s  "
             f"peak {torch.cuda.max_memory_allocated() / 2**30:5.2f} GB alloc / "
             f"{torch.cuda.max_memory_reserved() / 2**30:5.2f} GB reserved")
-    tal_oom = bool(getattr(model.criterion.assigner, "_oom_warned", False))
+    tal_oom = any(getattr(getattr(model.criterion, n).assigner, "_oom_warned", False) for n in ("one2many", "one2one"))
     steady = ms[10:] if len(ms) > 10 else ms
     res = {"tag": tag, "status": status, "tal_oom_retry": tal_oom, "steps": len(ms), "first_step_ms": ms[0] if ms else None,
            "median_ms": float(np.median(steady)) if steady else None, "p95_ms": float(np.percentile(steady, 95)) if steady else None,
