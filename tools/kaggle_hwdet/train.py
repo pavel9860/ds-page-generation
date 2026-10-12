@@ -7,10 +7,12 @@ Outputs (/kaggle/working): hwdet-yolo26{s,m}.{pt,onnx}, train_meta_{s,m}.json, t
 import glob
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 W = "/kaggle/working"
@@ -50,13 +52,31 @@ json.dump(dict(size=size, batch=batch, params=params, torch=torch.__version__,
                finished=time.strftime("%Y-%m-%dT%H:%M:%S")), open(f"{{W}}/train_meta_{{size}}.json", "w"), indent=1)
 '''
 
+def pump(size, p, log):
+    """Child output to the kernel's stdout (visible while it runs) and to the log file; progress-bar updates are
+    printed at most every 30 s, every other line at once."""
+    last = 0.0
+    for raw in p.stdout:
+        log.write(raw)
+        log.flush()
+        line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", raw).strip()
+        if not line:
+            continue
+        bar = "it/s" in line or "s/it" in line or "━" in line
+        if bar and time.time() - last < 30:
+            continue
+        last = time.time() if bar else last
+        print(f"[{size} {time.time() - T0:5.0f}s] {line[:200]}", flush=True)
+
+
+T0 = time.time()
 procs = {}
 for gpu, (size, batch) in LANES.items():
     code = CHILD.format(size=size, batch=batch, W=W, data=data, params=PARAMS)
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu), PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
-    out = open(f"{W}/train_{size}.log", "w")
-    procs[size] = subprocess.Popen([sys.executable, "-u", "-c", code], stdout=out, stderr=subprocess.STDOUT, env=env,
-                                   start_new_session=True)
+    procs[size] = subprocess.Popen([sys.executable, "-u", "-c", code], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   env=env, start_new_session=True, text=True, bufsize=1)
+    threading.Thread(target=pump, args=(size, procs[size], open(f"{W}/train_{size}.log", "w")), daemon=True).start()
 deadline = time.time() + HOURS * 3600 + 25 * 60
 for size, p in procs.items():
     try:
