@@ -1,6 +1,6 @@
 {
- "id": "pavel9860/hwdet-lang-train",
- "title": "hwdet-lang-train",
+ "id": "pavel9860/hw-lang-train",
+ "title": "hw-lang-train",
  "code_file": "train.py",
  "language": "python",
  "kernel_type": "script",
@@ -14,5 +14,6 @@
  "kernel_sources": [],
  "competition_sources": [],
  "model_sources": [],
- "machine_shape": "NvidiaTeslaT4"
+ "machine_shape": "NvidiaTeslaT4",
+ "docker_image": "gcr.io/kaggle-private-byod/python@sha256:2757e0c7d1e0a9cb43da657b97e223c321a98f5014bdf64f44f2f6b083ad2b2f"
 }
