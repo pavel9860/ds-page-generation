@@ -22,6 +22,7 @@ from scipy.sparse.csgraph import connected_components
 from PIL import Image, ImageDraw, ImageFont
 
 from ..config import RefontCfg
+from . import indic
 from .text import _font_cmap, find_fonts, font_info, save_font_info
 from fontTools.ttLib import TTFont
 
@@ -194,10 +195,12 @@ def _chars_text(s):
     return "".join(out)
 
 
-def _spans(l, symbolic):
+def _spans(l, symbolic, visual=False):
     spans = []
     for s in l["spans"]:
         text = _chars_text(s).replace("\x00", "").replace("\xa0", " ").translate(THAI_PUA).translate(MATH_LETTERS)
+        if visual:
+            text = indic.to_logical(text)
         if (text.strip() or any(_icon(c) for c in text)) and round(s["size"] * C.size_step) > 0:
             spans.append(_span(s, text, symbolic))
     return spans
@@ -343,9 +346,12 @@ def _glyph_texts(page):
             continue
         text, direct, _ = best
         if any(g in direct and text[g] != c for c, g, _ in chars):
+            run = {}
             for c, g, o in chars:
                 key = (tr["font"], round(o[0], 1), round(o[1], 1))
-                out[key] = out.get(key, "") + text.get(g, c)
+                run[key] = run.get(key, "") + text.get(g, c)
+            for key, t in run.items():
+                out.setdefault(key, t)
     return out
 
 
@@ -363,12 +369,13 @@ def extract_segments(page, textpage=None):
                     if key in fixed:
                         ch["c"] = "" if key in seen else fixed[key]
                         seen.add(key)
+    visual = indic.visual_order("".join(ch["c"] for l in lines for sp in l["spans"] for ch in sp["chars"]))
     segs, rows = [], []
     for l in lines:
         if abs(l["dir"][1]) > C.tilt:
             segs += _tilted(l) if "".join(c["c"] for s in l["spans"] for c in s["chars"]).strip() else []
         else:
-            spans = _spans(l, symbolic)
+            spans = _spans(l, symbolic, visual)
             if spans:
                 ink = _union(_ink(sp) for sp in l["spans"])
                 rows.append(((l["bbox"][0], ink.y0, l["bbox"][2], ink.y1), spans))
