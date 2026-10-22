@@ -47,6 +47,11 @@ present. `--preview` writes `.jpg` previews to `OUT_preview/` (off by default). 
 Sample metadata (source page, scene, paper, camera, light, effects) goes to `OUT/meta.jsonl`; the part files hold theirs
 as `meta`. A full-preset sample is about 2.9 MB (70k samples: about 200 GB).
 
+## Handwritten pages
+
+`src/dspages/hand` writes real digital-born text (headings, paragraphs, lists, tables, columns) by hand on many papers: `python -m dspages.hand`, see its
+[README](src/dspages/hand/README.md). Kaggle CPU shards: `tools/kaggle_handpages`.
+
 ## Presets
 
 | | demo | full |

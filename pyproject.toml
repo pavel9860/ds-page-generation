@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-xdist>=3.5", "matplotlib>=3.8"]
 export = ["ultralytics>=8.3"]
+hand = ["hwsynth", "regex>=2023.0", "scikit-image>=0.22", "tesserocr>=2.7"]       # handwritten pages (dspages.hand)
 
 [project.scripts]
 dspages = "dspages.cli:main"
