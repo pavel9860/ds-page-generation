@@ -5,6 +5,7 @@ download. Data goes to Layouts/archive/info/diverse (OUT), never to the repo.
           manifest plan (language, pages, scan class) ->
           OUT/pool.parquet (one row per page: doc, page, path, folder, scope live / rej, label, p, lang, pages, scan, c1, c2, d1)
           and OUT/X.npy (L2-normalised embeddings, float16); two-level k-means (2000 clusters, 200 groups)
+  geom    page ratio (h / w) and native px of the raster of every pool page (metadata only) -> OUT/geom.parquet
   score   p_form (forms vs other pages, pagetype_labelled), p_fill (filled vs blank / other, trained on the filled-form reviews),
           tax (zero-shot type: SigLIP 2 text prompts of curate.TYPES), reviewed / real_filled from the reviews -> OUT/pool.parquet
   plan    for --size N: OUT/<N>k_fill_blanks.csv (blank digital forms to fill), <N>k_check_scans.csv (scans to check for warping: coverage
@@ -18,7 +19,7 @@ download. Data goes to Layouts/archive/info/diverse (OUT), never to the repo.
 Reviews (filled forms): Layouts/archive/info/filled_review/{candidates.csv, batch_*/out.json (10-page sheets),
 recheck/batch_*/out.json (full resolution)}: {"<k>": [label, bad]}; a full-resolution label wins.
 
-python tools/diverse_ds.py pool | score
+python tools/diverse_ds.py pool | geom | score
 python tools/diverse_ds.py plan --size 100 [--floor 170] [--hw-x 5] [--margin 1.5]
 python tools/diverse_ds.py export --size 100
 python tools/diverse_ds.py render CSV OUT_DIR [--per 50]
@@ -132,18 +133,24 @@ def reviews():
     return cand[["k", "h", "page", "lang", "label", "bad", "hires"]]
 
 
-def text_types(X):
-    """Zero-shot type of every page: the closest text prompt of curate.TYPES."""
+def text_scores(X, texts):
+    """Cosine of every page embedding to SigLIP 2 text embeddings of `texts` (pages x texts)."""
     import torch
     from transformers import AutoModel, AutoTokenizer
     tok, m = AutoTokenizer.from_pretrained(MODEL), AutoModel.from_pretrained(MODEL).eval()
     with torch.inference_mode():
-        t = tok([C.PROMPT.format(x) for x in C.TYPES], padding="max_length", max_length=64, truncation=True, return_tensors="pt")
-        o = m.get_text_features(**t)
+        o = m.get_text_features(**tok(list(texts), padding="max_length", max_length=64, truncation=True, return_tensors="pt"))
         T = (o.pooler_output if hasattr(o, "pooler_output") else o).numpy()
     T /= np.linalg.norm(T, axis=1, keepdims=True)
-    sim = np.concatenate([X[i:i + 50000] @ T.T for i in range(0, len(X), 50000)])
-    return np.array(C.TYPES)[sim.argmax(1)], sim.max(1)
+    return np.concatenate([X[i:i + 50000] @ T.T for i in range(0, len(X), 50000)])
+
+
+def text_types(X):
+    """Zero-shot type of every page (the closest text prompt of curate.TYPES) and the picture score (curate.PIC_TEXTS)."""
+    sim = text_scores(X, [C.PROMPT.format(x) for x in C.TYPES] + list(C.PIC_POS) + list(C.PIC_NEG))
+    t, n = len(C.TYPES), len(C.PIC_POS)
+    pic = sim[:, t:t + n].max(1) - sim[:, t + n:].max(1)
+    return np.array(C.TYPES)[sim[:, :t].argmax(1)], sim[:, :t].max(1), pic
 
 
 def cmd_score(_):
@@ -170,7 +177,7 @@ def cmd_score(_):
     real = R[R.hires & R.label.isin(REAL) & (R.bad == 0)]                       # only full-resolution checks count as real
     P["reviewed"] = key.isin(set(zip(R.h, R.page)))
     P["real_filled"] = key.isin(set(zip(real.h, real.page)))
-    P["tax"], P["tax_sim"] = text_types(X)
+    P["tax"], P["tax_sim"], P["pic"] = text_types(X)
     P.to_parquet(OUT / "pool.parquet")
     print("forms", int((P.p_form > C.FORM_P).sum()), "filled-looking", int((P.p_fill > C.FILL_HI).sum()), "reviewed", int(P.reviewed.sum()),
           "real filled", int(P.real_filled.sum()))
@@ -208,10 +215,24 @@ def spread(df, by, n, seed=0):
     return pd.concat([d[d[by] == c].head(int(k)) for c, k in n.items() if k > 0]) if (n > 0).any() else d.head(0)
 
 
+def pool_for_plan():
+    """The pool pages a set may use: curate.keep_pages, page ratio / resolution / pictures (geom.parquet), near duplicates out
+    (the digital, live, central page of a group kept)."""
+    P = pd.read_parquet(OUT / "pool.parquet")
+    g = pd.read_parquet(OUT / "geom.parquet").set_index("i")
+    P = P.join(g)
+    P["page_ok"] = C.page_ok(P.ratio, P.native) & (P.pic <= C.MAX_PIC)
+    X = np.load(OUT / "X.npy").astype(np.float32)
+    prefer = np.lexsort((P.d1.values, P.scope.values != "live", P.scan.values))
+    P["dup"] = C.near_duplicates(X, P.c1.values, prefer=prefer)
+    print("pages", len(P), " out: ratio / resolution / pictures", int((~P.page_ok).sum()), " near duplicates", int(P.dup.sum()))
+    return C.keep_pages(P)
+
+
 def cmd_plan(a):
     B, tag = a.size * 1000, f"{a.size}k"
     floor = a.floor if a.floor is not None else round(1000 * a.size / 600)
-    P = C.keep_pages(pd.read_parquet(OUT / "pool.parquet"))
+    P = pool_for_plan()
     sup = C.supply(P)
     q1 = C.allocate(sup, B)
     scans = C.scans_needed(sup, q1)
@@ -277,28 +298,99 @@ def cmd_plan(a):
           f" handwriting need {int(H.need.sum())}, collect {int(H.collect.sum())} -> {OUT}")
 
 
-def render(job):
-    k, path, page, out = job
+def resolve(path):
+    """The file of a corpus path; moved / renamed since the embedding: found by its hash (a pdf first); None."""
+    p = corpus.resolve(path)
+    if p.exists():
+        return p
+    alts = sorted(HASHES.get(corpus.doc_id(path), []), key=lambda x: not x.lower().endswith(".pdf"))
+    return corpus.resolve(alts[0]) if alts else None
+
+
+def native_px(pg, W, H):
+    """Long side px of a pdf page's raster: the picture covering most of the page scaled to it; inf without one (vector page)."""
+    best = np.inf
+    for i in pg.get_image_info():
+        bw, bh = i["bbox"][2] - i["bbox"][0], i["bbox"][3] - i["bbox"][1]
+        if bw * bh > 0.3 * W * H:
+            best = min(best, max(i["width"] * W / bw, i["height"] * H / bh))
+    return best
+
+
+def load_page(path, page, long):
+    """BGR image of the page with its long side `long` px, or None."""
     import cv2
     import pymupdf
+    p = resolve(path)
+    if p is None:
+        return None
+    if str(p).lower().endswith(".pdf"):
+        pymupdf.TOOLS.mupdf_display_errors(False)
+        d = pymupdf.open(p)
+        pg = d[min(int(page), len(d) - 1)]
+        s = long / max(pg.rect.width, pg.rect.height)
+        pix = pg.get_pixmap(matrix=pymupdf.Matrix(s, s), colorspace=pymupdf.csRGB)
+        return np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, 3)[:, :, ::-1]
+    im = cv2.imread(str(p))
+    if im is None:
+        return None
+    s = long / max(im.shape[:2])
+    return cv2.resize(im, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+
+
+def render(job):
+    """Full-resolution page, cropped to the page ratio (curate.crop_box)."""
+    k, path, page, out = job
+    import cv2
     try:
-        p = corpus.resolve(path)
-        if not p.exists():                              # moved / renamed since the embedding: find the document by its hash
-            alts = sorted(HASHES.get(corpus.doc_id(path), []), key=lambda x: not x.lower().endswith(".pdf"))
-            p, page = (corpus.resolve(alts[0]), page if alts[0].lower().endswith(".pdf") else 0) if alts else (p, page)
-        if str(p).lower().endswith(".pdf"):
-            d = pymupdf.open(p)
-            pg = d[min(int(page), len(d) - 1)]
-            s = LONG / max(pg.rect.width, pg.rect.height)
-            pix = pg.get_pixmap(matrix=pymupdf.Matrix(s, s), colorspace=pymupdf.csRGB)
-            im = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, 3)[:, :, ::-1]
-        else:
-            im = cv2.imread(str(p))
-            s = LONG / max(im.shape[:2])
-            im = cv2.resize(im, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
-        return k, cv2.imwrite(str(out), im, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        im = load_page(path, page, LONG)
+        if im is None:
+            return k, False
+        b = C.crop_box(im.shape[1], im.shape[0])
+        if b:
+            im = im[b[1]:b[3], b[0]:b[2]]
+        return k, cv2.imwrite(str(out), im, [cv2.IMWRITE_JPEG_QUALITY, 90])
     except Exception:
         return k, False
+
+
+def geom(job):
+    """(row, h / w, native px of the page's raster) of one page from its metadata (no rendering)."""
+    i, path, page = job
+    import pymupdf
+    from PIL import Image
+    try:
+        p = resolve(path)
+        if p is None:
+            return i, np.nan, np.nan
+        if str(p).lower().endswith(".pdf"):
+            pymupdf.TOOLS.mupdf_display_errors(False)
+            d = pymupdf.open(p)
+            pg = d[min(int(page), len(d) - 1)]
+            W, H = pg.rect.width, pg.rect.height
+            return i, H / W, native_px(pg, W, H)
+        w, h = Image.open(p).size
+        return i, h / w, max(w, h)
+    except Exception:
+        return i, np.nan, np.nan
+
+
+def cmd_geom(_):
+    """Page ratio and native resolution of every pool page -> OUT/geom.parquet (resumable by rows done)."""
+    P = pd.read_parquet(OUT / "pool.parquet", columns=["path", "page"])
+    f = OUT / "geom.parquet"
+    done = pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["i", "ratio", "native"])
+    seen = set(done.i)
+    todo = [(i, r.path, r.page) for i, r in zip(P.index, P.itertuples()) if i not in seen]
+    out = []
+    with ProcessPoolExecutor(WORKERS, initializer=_init, initargs=(hash_index(),)) as ex:
+        for n, r in enumerate(ex.map(geom, todo, chunksize=64)):
+            out.append(r)
+            if len(out) % 20000 == 0 or n == len(todo) - 1:
+                done = pd.concat([done, pd.DataFrame(out, columns=["i", "ratio", "native"])])
+                done.to_parquet(f)
+                out = []
+                print(len(done), "of", len(P), flush=True)
 
 
 def hash_index():
@@ -356,6 +448,7 @@ def main():
     ap = argparse.ArgumentParser()
     sp = ap.add_subparsers(dest="cmd", required=True)
     sp.add_parser("pool")
+    sp.add_parser("geom")
     sp.add_parser("score")
     p = sp.add_parser("plan")
     p.add_argument("--size", type=int, required=True, help="set size in thousands of pages")
@@ -370,7 +463,7 @@ def main():
     r.add_argument("out")
     r.add_argument("--per", type=int, default=50)
     a = ap.parse_args()
-    {"pool": cmd_pool, "score": cmd_score, "plan": cmd_plan, "export": cmd_export, "render": cmd_render}[a.cmd](a)
+    {"pool": cmd_pool, "geom": cmd_geom, "score": cmd_score, "plan": cmd_plan, "export": cmd_export, "render": cmd_render}[a.cmd](a)
 
 
 if __name__ == "__main__":

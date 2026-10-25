@@ -10,12 +10,14 @@ a floor; what the corpus lacks is downloaded, handwriting is scanned or generate
 import numpy as np
 import pandas as pd
 
-OUT_LABELS = ("images", "pages_photo", "recieps")          # never in the set: pictures, photographed pages, receipts
-OUT_FOLDERS = ("pages_photo", "receipts")
+OUT_LABELS = ("images", "pages_photo", "recieps", "maps", "blueprints")   # never in the set: pictures, photographed pages, receipts,
+                                                                          # maps and blueprints (out of scope)
+OUT_FOLDERS = ("pages_photo", "receipts", "maps", "blueprints", "maps_blueprints")
 OUT_TYPES = frozenset({"postcard", "greeting card", "envelope", "receipt", "coupon", "lottery ticket", "ticket", "boarding pass",
                        "shipping label", "label sticker", "business card",                         # small formats: out of scope
                        "blank page", "photocopy", "fax", "dot matrix printout", "old typewritten document", "old printed book page",
-                       "page with stamps and signatures"})                                         # styles, not document types
+                       "page with stamps and signatures",
+                       "map", "floor plan", "engineering drawing", "electrical schematic"})                         # maps, drawings                                         # styles, not document types
 HW_TYPES = ("handwritten letter", "handwritten notes", "homework in a notebook", "diary page", "lined notebook page",
             "graph paper page", "recipe", "filled form with handwriting")
 PROMPT = "a scan of a {}"
@@ -47,6 +49,54 @@ FORM_P, FILL_LO, FILL_HI = 0.5, 0.3, 0.5                # p_form of a form page;
 MIN_FORMS = 10                                          # a cluster with fewer form pages is not a form cluster
 
 
+RATIO = 2 ** 0.5                                        # page h / w of the set (A4); other pages are cropped to it
+MAX_CROP = 0.15                                         # at most this share of a side is cropped, else the page is out
+MIN_NATIVE = 1000                                       # long side px of a raster page under this: too coarse
+MAX_PIC = 0.0                                           # picture score above this (~ the top 10 % of pages): out
+PIC_POS = ("a page dominated by a large photograph", "a page with big colourful illustrations", "a poster with a large picture",
+           "a page with a large chart or diagram")          # picture score = max cosine to these - max cosine to PIC_NEG
+PIC_NEG = ("a page of printed text", "a scanned document page with text", "a page of handwritten text", "a form with fields",
+           "a page with a table")
+DUP_SIM = 0.96                                          # cosine of two page embeddings above this: the same page
+
+
+def crop_box(w, h, ratio=RATIO, max_crop=MAX_CROP):
+    """(x0, y0, x1, y1) of the centred crop of a w x h page to h / w = ratio, None when it is the ratio; False when the crop would
+    cut more than max_crop of a side (landscape pages, strips)."""
+    r = h / w
+    if abs(r / ratio - 1) < 0.01:
+        return None
+    if r > ratio:
+        nh = round(w * ratio)
+        return (0, (h - nh) // 2, w, (h - nh) // 2 + nh) if 1 - nh / h <= max_crop else False
+    nw = round(h / ratio)
+    return ((w - nw) // 2, 0, (w - nw) // 2 + nw, h) if 1 - nw / w <= max_crop else False
+
+
+def page_ok(ratio, native):
+    """A page the set may use by its geometry: croppable to the page ratio, raster fine enough."""
+    r = np.asarray(ratio, float)
+    lo, hi = RATIO * (1 - MAX_CROP), RATIO / (1 - MAX_CROP)
+    return (r >= lo) & (r <= hi) & (np.asarray(native, float) >= MIN_NATIVE)
+
+
+def near_duplicates(X, c1, sim=DUP_SIM, prefer=None):
+    """Boolean mask of the pages to drop: within each cluster, a page whose embedding is within `sim` of an earlier kept page
+    (pages taken in the order of `prefer`, best first: digital, live)."""
+    order = np.arange(len(c1)) if prefer is None else np.asarray(prefer)
+    drop = np.zeros(len(c1), bool)
+    c1 = np.asarray(c1)
+    for c in np.unique(c1):
+        idx = order[c1[order] == c]
+        kept = []
+        for i in idx:
+            if kept and (X[kept] @ X[i]).max() > sim:
+                drop[i] = True
+            else:
+                kept.append(i)
+    return drop
+
+
 def water(supply, budget, weight):
     """Allocation per index of `supply` (Series): `budget` dealt in proportion to `weight`, capped by the supply, the excess dealt
     out again over the uncapped ones. Sum = min(budget, supply.sum())."""
@@ -62,10 +112,13 @@ def water(supply, budget, weight):
 
 
 def keep_pages(P):
-    """The pages a set may use: no pictures, photographed pages, receipts, out-of-scope types."""
+    """The pages a set may use: no pictures, photographed pages, receipts, maps, out-of-scope types; with geometry columns also
+    croppable to the page ratio, fine raster, no big pictures, not a near duplicate."""
     m = ~P.label.isin(OUT_LABELS) & ~P.folder.isin(OUT_FOLDERS)
     if "tax" in P:
         m &= ~P.tax.isin(OUT_TYPES)
+    if "page_ok" in P:
+        m &= P.page_ok & ~P.dup
     return P[m]
 
 

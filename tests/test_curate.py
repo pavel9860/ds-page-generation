@@ -55,3 +55,17 @@ def test_keep_rates_and_inflate():
     k = C.keep_rates(docs, dup=1.0)
     assert abs(k["maps"] - 0.75 * 2 / 3) < 1e-9 and abs(k["tables"] - 0.5) < 1e-9
     assert list(C.inflate(pd.Series([10, 10]), pd.Series([0.5, 0.01]))) == [20, 67]
+
+
+def test_crop_box_and_page_ok():
+    assert C.crop_box(1000, 1414) is None
+    assert C.crop_box(1000, 1300) == (40, 0, 959, 1300)                    # US letter: the sides cut to A4
+    assert C.crop_box(1414, 1000) is False                                  # landscape: out
+    ok = C.page_ok([1.414, 1.3, 0.75, 1.414], [np.inf, 2000, 3000, 600])
+    assert list(ok) == [True, True, False, False]
+
+
+def test_near_duplicates_keeps_the_preferred_page():
+    X = np.array([[1, 0], [0.999, 0.0447], [0, 1]], float)
+    X /= np.linalg.norm(X, axis=1, keepdims=True)
+    assert list(C.near_duplicates(X, [0, 0, 0], prefer=[1, 0, 2])) == [True, False, False]
