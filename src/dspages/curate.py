@@ -54,10 +54,11 @@ MAX_CROP = 0.15                                         # at most this share of 
 MIN_NATIVE = 1000                                       # long side px of a raster page under this: too coarse
 MAX_PIC = 0.0                                           # picture score above this (~ the top 10 % of pages): out
 PIC_POS = ("a page dominated by a large photograph", "a page with big colourful illustrations", "a poster with a large picture",
-           "a page with a large chart or diagram")          # picture score = max cosine to these - max cosine to PIC_NEG
+           "a page with a large chart or diagram", "a page with a grid of photographs", "a comic page")          # picture score = max cosine to these - max cosine to PIC_NEG
 PIC_NEG = ("a page of printed text", "a scanned document page with text", "a page of handwritten text", "a form with fields",
            "a page with a table")
-DUP_SIM = 0.96                                          # cosine of two page embeddings above this: the same page
+DUP_SIM = 0.90                                          # cosine above this: the same page or the same template / series (letters of one
+                                                        # office, a listing split into files); pages of one cluster: ~0.73
 
 
 def crop_box(w, h, ratio=RATIO, max_crop=MAX_CROP):
