@@ -1,23 +1,26 @@
 """Diverse page set from the corpus (dspages.curate): pool of embedded pages, scores, per-size plan of what to take, fill, check and
 download. Data goes to Layouts/archive/info/diverse (OUT), never to the repo.
 
-  pool    emb_out (SigLIP 2 page embeddings of pages 0 / 1) + doc_types + manifest plan + uv_pages/scans.jsonl (scan documents) ->
+  pool    emb_out (SigLIP 2 page embeddings of pages 0 / 1, manifest.jsonl) + doc_types (labels; new documents: by embedding) +
+          manifest plan (language, pages, scan class) ->
           OUT/pool.parquet (one row per page: doc, page, path, folder, scope live / rej, label, p, lang, pages, scan, c1, c2, d1)
           and OUT/X.npy (L2-normalised embeddings, float16); two-level k-means (2000 clusters, 200 groups)
   score   p_form (forms vs other pages, pagetype_labelled), p_fill (filled vs blank / other, trained on the filled-form reviews),
           tax (zero-shot type: SigLIP 2 text prompts of curate.TYPES), reviewed / real_filled from the reviews -> OUT/pool.parquet
-  plan    for --size N: OUT/<N>k_fill_blanks.csv (blank digital forms to fill), <N>k_check_scans.csv (scans to check by hand: coverage
-          gaps with a reserve, real filled scans, filled candidate scans), <N>k_downloads.csv (per cluster: digital pages to download in
+  plan    for --size N: OUT/<N>k_fill_blanks.csv (blank digital forms to fill), <N>k_check_scans.csv (scans to check for warping: coverage
+          gaps x --margin, real filled scans), <N>k_check_filled.csv (filled-looking candidates / their reviewed filled share), <N>k_downloads.csv (per cluster: digital pages to download in
           place of non-handwritten scans, filled forms to download; described by languages, types, example text and paths),
           <N>k_type_gaps.csv, <N>k_download_master.csv (all downloads, inflated by keep rates measured on the crawl folders),
           <N>k_handwritten.csv and <N>k_handwritten_by_lang.csv (x --hw-x for dirty sources); prints the summary
+  export  the check lists of a plan as full-resolution jpgs: archive/<N>k_warp_check, archive/<N>k_filled_check (+ index.csv)
   render  full-resolution page images of a csv (columns k, path, page) for a review: OUT_DIR/batch_NNN/{<k>.jpg, in.json}
 
 Reviews (filled forms): Layouts/archive/info/filled_review/{candidates.csv, batch_*/out.json (10-page sheets),
 recheck/batch_*/out.json (full resolution)}: {"<k>": [label, bad]}; a full-resolution label wins.
 
 python tools/diverse_ds.py pool | score
-python tools/diverse_ds.py plan --size 100 [--floor 170] [--hw-x 5]
+python tools/diverse_ds.py plan --size 100 [--floor 170] [--hw-x 5] [--margin 1.5]
+python tools/diverse_ds.py export --size 100
 python tools/diverse_ds.py render CSV OUT_DIR [--per 50]
 """
 import argparse
@@ -48,17 +51,45 @@ WORKERS = 6
 
 
 def docs_table():
-    """One row per embedded document: doc (emb id), path, label, p, scope (live / rej), h (hash), folder, top, scan."""
-    dt = pd.DataFrame([json.loads(l) for l in open(UV / "emb_out" / "doc_types.jsonl")])[["doc", "path", "label", "p"]]
-    rej = dt.path.str.startswith("archive/rejected")
-    dt = dt[rej | ~dt.path.str.startswith(("archive/", "_"))].copy()                 # Layouts without the archive, but its rejected
-    dt["scope"] = np.where(dt.path.str.startswith("archive/rejected"), "rej", "live")
-    dt["h"] = dt.path.map(corpus.doc_id)
-    dt["folder"] = dt.path.map(lambda p: "/".join(p.split("/")[:2]) if p.startswith("archive") else p.split("/")[0])
+    """One row per embedded document (emb_out/manifest.jsonl): doc (emb id), path, h (hash), folder, scope (live / rej), label / p of
+    doc_types (by path, else by hash; NaN for documents added after it), scan (manifest plan class scan-like, a pdf without a plan
+    row, or a picture)."""
+    dt = pd.DataFrame([json.loads(l) for l in open(UV / "emb_out" / "manifest.jsonl")]).rename(columns={"id": "doc"})
+    dt = dt.drop_duplicates("path")                                   # a path embedded twice (two runs): the first id
+    dt["folder"] = dt.path.map(lambda p: "/".join(p.split("/")[:2]) if p.startswith("archive/") else p.split("/")[0])
+    dt = dt[(dt.folder == "archive/rejected") | ~dt.path.str.startswith(("archive/", "_"))].copy()   # Layouts without the archive, but its rejected
+    dt["scope"] = np.where(dt.folder == "archive/rejected", "rej", "live")
     dt["top"] = dt.folder
-    scans = {json.loads(l)["path"] for l in open(UV / "uv_pages" / "scans.jsonl")}
-    dt["scan"] = dt.path.isin(scans) | ~dt.path.str.lower().str.endswith(".pdf")
+    dt["h"] = dt.path.map(corpus.doc_id)
+    old = pd.DataFrame([json.loads(l) for l in open(UV / "emb_out" / "doc_types.jsonl")])[["path", "label", "p"]]
+    old["h"] = old.path.map(corpus.doc_id)
+    lab = old.drop_duplicates("path").set_index("path")[["label", "p"]]
+    dt = dt.join(lab, on="path")
+    by_h = old.drop_duplicates("h").set_index("h")[["label", "p"]]
+    miss = dt.label.isna()
+    dt.loc[miss, ["label", "p"]] = by_h.reindex(dt.h[miss]).values
+    db = sqlite3.connect(f"file:{PATHS.manifest}?mode=ro", uri=True)
+    cls = dict(db.execute("select doc, cls from plan"))
+    pdf = dt.path.str.lower().str.endswith(".pdf")
+    c = dt.h.map(cls)
+    dt["scan"] = ~pdf | (c == "scan-like") | c.isna()
     return dt
+
+
+def fill_labels(P, X):
+    """Labels of the documents doc_types does not know: logistic regression of the page embedding on the known labels."""
+    from sklearn.linear_model import LogisticRegression
+    known = P.label.notna().values
+    if known.all():
+        return P
+    rng = np.random.default_rng(0)
+    tr = rng.choice(np.where(known)[0], min(60000, known.sum()), replace=False)
+    lr = LogisticRegression(max_iter=500, C=2).fit(X[tr], P.label.values[tr])
+    pr = lr.predict_proba(X[~known])
+    P.loc[~known, "label"] = lr.classes_[pr.argmax(1)]
+    P.loc[~known, "p"] = pr.max(1)
+    P["label_src"] = np.where(known, "doc_types", "embedding")
+    return P
 
 
 def cmd_pool(_):
@@ -74,6 +105,7 @@ def cmd_pool(_):
     P = pd.DataFrame({"row": np.arange(len(ids)), "doc": ids[:, 0], "page": ids[:, 1]}).merge(dt, on="doc")
     X = np.asarray(E[P.row.values], dtype=np.float32)
     X /= np.linalg.norm(X, axis=1, keepdims=True)
+    P = fill_labels(P, X)
     k1 = MiniBatchKMeans(2000, random_state=0, batch_size=8192, n_init=1, max_iter=60).fit(X)
     cen = k1.cluster_centers_ / np.linalg.norm(k1.cluster_centers_, axis=1, keepdims=True)
     P["c1"] = k1.labels_
@@ -87,7 +119,7 @@ def cmd_pool(_):
 
 
 def reviews():
-    """Filled-form reviews: doc, page, label, bad, hires (full-resolution label)."""
+    """Filled-form reviews: h (document hash), page, label, bad, hires (full-resolution label)."""
     cand = pd.read_csv(REVIEW / "candidates.csv")
     lab = {}
     for hires, pat in ((False, "batch_*/out.json"), (True, "recheck/batch_*/out.json")):
@@ -96,7 +128,8 @@ def reviews():
                 lab[k] = (v[0], int(v[1]) if len(v) > 1 and v[1] is not None else 0, hires)
     cand = cand[cand.k.isin(lab)].copy()
     cand[["label", "bad", "hires"]] = [lab[k] for k in cand.k]
-    return cand[["k", "doc", "page", "lang", "label", "bad", "hires"]]
+    cand["h"] = cand.path.map(corpus.doc_id)                          # emb ids change between embedding runs; the hash does not
+    return cand[["k", "h", "page", "lang", "label", "bad", "hires"]]
 
 
 def text_types(X):
@@ -123,8 +156,8 @@ def cmd_score(_):
     form = LogisticRegression(C=2, max_iter=1000, class_weight="balanced").fit(E[m], np.isin(lab[m], ["forms_blank", "forms_filled"]))
     P["p_form"] = form.predict_proba(X)[:, 1]
     R = reviews()
-    pos = dict(zip(zip(P.doc, P.page), range(len(P))))
-    R["i"] = [pos.get(k, -1) for k in zip(R.doc, R.page)]
+    pos = dict(zip(zip(P.h, P.page), range(len(P))))
+    R["i"] = [pos.get(k, -1) for k in zip(R.h, R.page)]
     R = R[R.i >= 0]
     rng = np.random.default_rng(0)
     other = P.index[(~P.label.isin(["forms_blank", "forms_filled", "handwritten"])) & (P.p > 0.8)].values
@@ -133,10 +166,10 @@ def cmd_score(_):
     Xt = np.vstack([X[R.i.values], X[neg]])
     yt = np.r_[R.label.isin(REAL).values, np.zeros(len(neg), bool)]
     P["p_fill"] = LogisticRegression(C=4, max_iter=2000, class_weight="balanced").fit(Xt, yt).predict_proba(X)[:, 1]
-    key = pd.Series(list(zip(P.doc, P.page)), index=P.index)
+    key = pd.Series(list(zip(P.h, P.page)), index=P.index)
     real = R[R.hires & R.label.isin(REAL) & (R.bad == 0)]                       # only full-resolution checks count as real
-    P["reviewed"] = key.isin(set(zip(R.doc, R.page)))
-    P["real_filled"] = key.isin(set(zip(real.doc, real.page)))
+    P["reviewed"] = key.isin(set(zip(R.h, R.page)))
+    P["real_filled"] = key.isin(set(zip(real.h, real.page)))
     P["tax"], P["tax_sim"] = text_types(X)
     P.to_parquet(OUT / "pool.parquet")
     print("forms", int((P.p_form > C.FORM_P).sum()), "filled-looking", int((P.p_fill > C.FILL_HI).sum()), "reviewed", int(P.reviewed.sum()),
@@ -185,22 +218,26 @@ def cmd_plan(a):
     w = C.page_weight(P, sup, q1)
     f = C.forms_plan(P, sup, q1)
     db = sqlite3.connect(f"file:{PATHS.manifest}?mode=ro", uri=True)
-    keep = C.keep_rates(docs_table())
+    keep = C.keep_rates(docs_table().dropna(subset=["label"]))
     R = reviews()
-    dig = R[R.hires & ~R.doc.isin(P[P.scan].doc)]
+    dig = R[R.hires & ~R.h.isin(P[P.scan].h)]
     keep_filled = dig.label.isin(REAL).mean() * 0.9 if len(dig) else 0.2      # digital filled-looking pages that are really filled
     # 1) blank digital forms to fill
     F = P[(P.p_form > C.FORM_P) & (P.p_fill < C.FILL_LO) & ~P.scan]
     spread(F, "c1", f.fill)[["doc", "page", "path", "lang", "c1"]].to_csv(OUT / f"{tag}_fill_blanks.csv", index=False)
-    # 2) scans to check by hand: coverage gaps (+50 % reserve, take = False), real filled scans, filled candidate scans
+    # 2) scans to check for warping by hand: coverage gaps x margin (take = False: the reserve), real filled scans
     S = P[P.scan]
-    gap = spread(S, "c1", np.ceil(1.5 * scans))
+    gap = spread(S, "c1", np.ceil(a.margin * scans))
     gap = gap.assign(why="coverage_gap", take=gap.groupby("c1").cumcount() < gap.c1.map(scans))
-    rf = spread(S[S.real_filled], "c1", f.real)
-    cs = S[(S.p_form > C.FORM_P) & (S.p_fill > C.FILL_HI) & ~S.reviewed].sort_values("p_fill", ascending=False)
-    cs = cs[cs.groupby("c1").cumcount() < cs.c1.map(f.cand_scan_use).fillna(0)]
-    chk = pd.concat([gap, rf.assign(why="real_filled", take=True), cs.assign(why="filled_candidate", take=True)])
-    chk[["why", "take", "doc", "page", "path", "lang", "c1", "label"]].to_csv(OUT / f"{tag}_check_scans.csv", index=False)
+    rf = spread(S[S.real_filled], "c1", f.real).assign(why="real_filled", take=True)
+    cols = ["why", "take", "doc", "page", "path", "h", "lang", "c1", "label"]
+    pd.concat([gap, rf])[cols].to_csv(OUT / f"{tag}_check_scans.csv", index=False)
+    # 2b) filled-looking candidates to check for filling (scans: also for warping), / the share of them that was filled in the reviews
+    yd, ys = (R[R.hires & (R.h.isin(P[P.scan].h) == s)].label.isin(REAL).mean() for s in (False, True))
+    cand = P[(P.p_form > C.FORM_P) & (P.p_fill > C.FILL_HI) & ~P.reviewed].sort_values("p_fill", ascending=False)
+    n = np.where(cand.scan, np.ceil(cand.c1.map(f.cand_scan_use).fillna(0) / max(ys, 0.1)), np.ceil(cand.c1.map(f.cand_dig_use).fillna(0) / max(yd, 0.1)))
+    cand = cand[cand.groupby(["c1", "scan"]).cumcount().values < n].assign(why="filled_candidate", take=True)
+    cand[cols].to_csv(OUT / f"{tag}_check_filled.csv", index=False)
     # 3) per cluster downloads: digital pages in place of non-handwritten scans, filled forms (no candidate, or only scan candidates)
     hw = (P.label == "handwritten").groupby(P.c1).mean()
     D = pd.DataFrame({"gap_scans": scans, "hw_scans": (scans * hw).round()}).join(
@@ -232,8 +269,9 @@ def cmd_plan(a):
     L = pd.concat([L.head(40), pd.Series({"other": L.iloc[40:].sum()})])
     HL = pd.DataFrame([dict(type=t, lang=l, collect=round(r.collect * p)) for t, r in H.iterrows() for l, p in L.items()])
     HL[HL.collect > 0].to_csv(OUT / f"{tag}_handwritten_by_lang.csv", index=False)
-    print(f"{tag}: scans to check {int(scans.sum())} (+ real filled {int(f.real.sum())}, candidates {int(f.cand_scan_use.sum())});"
-          f" filled forms {int(f.need.sum())} = real {int(f.real.sum())} + fill {int(f.fill.sum())} + digital candidates"
+    print(f"{tag}: scans to check {int(scans.sum())} x {a.margin} = {len(gap)} (+ real filled {len(rf)}); filled candidates to check"
+          f" {len(cand)} ({int(cand.scan.sum())} scans; filled share in the reviews: digital {yd:.2f}, scans {ys:.2f})")
+    print(f"  filled forms {int(f.need.sum())} = real {int(f.real.sum())} + fill {int(f.fill.sum())} + digital candidates"
           f" {int(f.cand_dig_use.sum())} + scan candidates {int(f.cand_scan_use.sum())} + download {int(f.download.sum())}")
     print(f"  downloads: {M.groupby('part').need.sum().astype(int).to_dict()} kept pages -> {M.groupby('part').download.sum().to_dict()} documents;"
           f" handwriting need {int(H.need.sum())}, collect {int(H.collect.sum())} -> {OUT}")
@@ -296,6 +334,24 @@ def cmd_render(a):
     print(len(df), "pages", sum(ok.values()), "rendered in", -(-len(df) // a.per), "batches")
 
 
+def cmd_export(a):
+    """The pages of a plan's check lists as full-resolution jpgs: archive/<N>k_warp_check (scans: coverage gaps with the reserve,
+    real filled scans) and archive/<N>k_filled_check (filled-looking candidates); file <n>_<hash>_p<page>.jpg, index.csv."""
+    tag = f"{a.size}k"
+    hashes = hash_index()
+    for src, name in ((f"{tag}_check_scans.csv", f"{tag}_warp_check"), (f"{tag}_check_filled.csv", f"{tag}_filled_check")):
+        df = pd.read_csv(OUT / src)
+        out = Path(PATHS.layouts) / "archive" / name
+        out.mkdir(parents=True, exist_ok=True)
+        df["file"] = [f"{i:05d}_{h}_p{p}.jpg" for i, (h, p) in enumerate(zip(df.h, df.page))]
+        jobs = [(r.file, r.path, r.page, out / r.file) for r in df.itertuples()]
+        with ProcessPoolExecutor(WORKERS, initializer=_init, initargs=(hashes,)) as ex:
+            ok = dict(ex.map(render, jobs, chunksize=8))
+        df["rendered"] = df.file.map(ok)
+        df.to_csv(out / "index.csv", index=False)
+        print(name, len(df), "pages", int(df.rendered.sum()), "rendered ->", out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -305,12 +361,16 @@ def main():
     p.add_argument("--size", type=int, required=True, help="set size in thousands of pages")
     p.add_argument("--floor", type=int, help="pages of every document type (default 1000 per 600k)")
     p.add_argument("--hw-x", type=float, default=5.0, help="handwriting to collect per page needed (dirty sources)")
+    p.add_argument("--margin", type=float, default=1.5, help="scans to check per scan needed (warped ones are dropped; "
+                   "the last warp cleaning dropped ~11 %% of the scanned form documents and 43 %% of the pages of partly warped ones)")
+    e = sp.add_parser("export")
+    e.add_argument("--size", type=int, required=True)
     r = sp.add_parser("render")
     r.add_argument("csv")
     r.add_argument("out")
     r.add_argument("--per", type=int, default=50)
     a = ap.parse_args()
-    {"pool": cmd_pool, "score": cmd_score, "plan": cmd_plan, "render": cmd_render}[a.cmd](a)
+    {"pool": cmd_pool, "score": cmd_score, "plan": cmd_plan, "export": cmd_export, "render": cmd_render}[a.cmd](a)
 
 
 if __name__ == "__main__":
