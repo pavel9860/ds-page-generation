@@ -60,7 +60,6 @@ def docs_table():
     dt["folder"] = dt.path.map(lambda p: "/".join(p.split("/")[:2]) if p.startswith("archive/") else p.split("/")[0])
     dt = dt[(dt.folder == "archive/rejected") | ~dt.path.str.startswith(("archive/", "_"))].copy()   # Layouts without the archive, but its rejected
     dt["scope"] = np.where(dt.folder == "archive/rejected", "rej", "live")
-    dt["top"] = dt.folder
     dt["h"] = dt.path.map(corpus.doc_id)
     old = pd.DataFrame([json.loads(l) for l in open(UV / "emb_out" / "doc_types.jsonl")])[["path", "label", "p"]]
     old["h"] = old.path.map(corpus.doc_id)

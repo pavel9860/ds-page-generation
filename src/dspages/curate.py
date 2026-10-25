@@ -5,7 +5,9 @@ a budget is dealt out over the groups and then over their clusters in proportion
 dealt out again (water filling). A cluster takes its digital pages first, then deeper pages of its digital documents, then scans
 (scans need a manual warp check). Forms: half of the quota of a form cluster is filled pages: checked real filled pages, then blank
 digital forms to fill, then unchecked filled-looking candidates, the rest is downloaded. Document types (zero-shot text prompts) get
-a floor; what the corpus lacks is downloaded, handwriting is scanned or generated. Everything here is pure (frames in, frames out).
+a floor; what the corpus lacks is downloaded, handwriting is scanned or generated. Out of every set: pictures, photographed pages,
+receipts, maps, picture-dominated pages, pages that do not crop to the A4 ratio, coarse rasters, near duplicates and pages of one
+template. Everything here is pure (frames in, frames out).
 """
 import numpy as np
 import pandas as pd
@@ -194,10 +196,10 @@ def type_floor(P, w, floor):
 def keep_rates(docs, dup=0.9):
     """Share of downloaded documents that end up used, per page type, measured on the corpus crawl folders:
     (1 - scan share) x share of the folder's digital documents that are the folder's type, x `dup` (duplicates, broken, language).
-    docs: one row per document with top (crawl folder), scan, label."""
+    docs: one row per document with folder (crawl folder), scan, label."""
     out = {}
     for folder, labels in FOLDER_TYPE.items():
-        s = docs[docs.top == folder]
+        s = docs[docs.folder == folder]
         if len(s):
             r = (1 - s.scan.mean()) * s[~s.scan].label.isin(labels).mean() * dup
             for lab in labels:

@@ -50,7 +50,7 @@ def test_forms_plan_order():
 
 
 def test_keep_rates_and_inflate():
-    docs = pd.DataFrame({"top": ["maps"] * 4 + ["tables"] * 4, "scan": [False, False, True, False] + [False] * 4,
+    docs = pd.DataFrame({"folder": ["maps"] * 4 + ["tables"] * 4, "scan": [False, False, True, False] + [False] * 4,
                          "label": ["maps", "maps", "maps", "flyers", "tables", "tables", "plain", "plain"]})
     k = C.keep_rates(docs, dup=1.0)
     assert abs(k["maps"] - 0.75 * 2 / 3) < 1e-9 and abs(k["tables"] - 0.5) < 1e-9
