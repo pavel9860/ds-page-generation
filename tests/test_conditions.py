@@ -57,3 +57,18 @@ def test_unknown_uses_all(full_small):
     man = fake_manifest()
     specs = plan(full_small, 300, 3, man)
     assert sum(s["script"] == "unknown" for s in specs) == len(entry_pools(full_small, man)["unknown"])
+
+
+def test_water_leaves_other_factors_unchanged(full_small):
+    from dataclasses import replace
+    n = 400
+    man = [dict(e, source_path=f"{e['source_path']}.{k}") for k in range(20) for e in fake_manifest()]
+    g = full_small.geometry
+    dry = replace(full_small, geometry=replace(g, water=replace(g.water, prob=0.0)))
+    wet = replace(full_small, geometry=replace(g, water=replace(g.water, prob=0.1, scale=(0.5, 1.0))))
+    a, b = plan(dry, n, 0, man), plan(wet, n, 0, man)
+    assert all("water" not in s for s in a)
+    assert [{k: v for k, v in s.items() if k != "water"} for s in b] == a
+    w = [s for s in b if "water" in s]
+    assert len(w) == round(0.1 * len(b))
+    assert not any(s["combo"][3] or s["shallow"] or s["deep"] for s in w) and all(0.5 <= s["water"] <= 1.0 for s in w)

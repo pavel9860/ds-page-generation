@@ -9,11 +9,12 @@ give them their lengths back; the mesh is every work_scale-th node.
 """
 from dataclasses import replace
 
+import cv2
 import numpy as np
 from numba import njit
 
 from ..config import GeometryCfg, paper_props
-from ..creases import deep, shallow
+from ..creases import cockle, deep, shallow
 from .sag import sag_field, solve_sag
 from .scenes import lerp_scene, sample_ends, scene_label
 from .strip import solve_strip
@@ -114,6 +115,17 @@ def page_points(work, u, v):
     """X, Y, Z [mm] of the page points at sheet coordinates u (across), v (down the rows) [mm]: one bilinear lookup in
     the page-aligned working grid W (3, len(Wv), len(Wu)) [mm] of make_page."""
     return np.moveaxis(_lerp2((work["Wv"], work["Wu"]), np.moveaxis(work["W"], 0, -1), np.stack([v, u], -1)), -1, 0)
+
+
+def _water(rng, S, g, scale):
+    """Cockling of a real water-damaged page (creases.cockle) on the working grid S [m]: field and present band
+    energy on a grid of the band tables' pitch over the sheet, the field resized to the working grid."""
+    shape = tuple(int(round(L / d)) + 1 for L, d in zip(g.sheet_mm[::-1], cockle.pitch()[::-1]))   # (rows, cols)
+    Zt = cv2.resize(1e3 * S[..., 2], shape[::-1], interpolation=cv2.INTER_LINEAR)
+    h = cockle.field(shape, rng, cockle.sample(rng), dict(rms=cockle.bands(Zt).std((1, 2))), scale)
+    h = cv2.resize(h, S.shape[1::-1], interpolation=cv2.INTER_AREA if h.shape[0] > S.shape[0] else cv2.INTER_LINEAR)
+    n = np.cross(np.gradient(S, axis=1), np.gradient(S, axis=0))
+    return S + 1e-3 * h[..., None] * n / np.linalg.norm(n, axis=-1, keepdims=True) * np.sign(n[..., 2:3] + 1e-12)
 
 
 def make_surface(rng, g: GeometryCfg, paper, cond, camera=None):
@@ -221,6 +233,8 @@ def make_page(rng, g: GeometryCfg, paper, cond, strips=None, sag=None):
         h = _lerp2(axes, hmap, np.stack(np.meshgrid(v, u, indexing="ij"), -1))
         n = np.cross(np.gradient(S, axis=1), np.gradient(S, axis=0))
         S = S + h[..., None] * n / np.linalg.norm(n, axis=-1, keepdims=True) * np.sign(n[..., 2:3] + 1e-12)
+    if cond.get("water", 0.0) > 0:
+        S = _water(rng, S, g, cond["water"])
     for _ in range(ISO_PASSES):
         if cond["combo"][3]:
             S[..., 2] -= S[..., 2].min()

@@ -158,11 +158,21 @@ def plan(P: Preset, n, seed, manifest):
         if np.isfinite(font[i]):
             s["font_pt"] = float(font[i])
         specs.append(s)
+    _water(P.geometry.water, specs, seed)
     return specs
 
 
+def _water(w, specs, seed):
+    """round(prob * len(specs)) water-damaged pages, drawn among the pages without creases (no crumple, shallow or
+    deep creases); own streams, so the other factors stay as without water."""
+    ok = [s for s in specs if not (s["combo"][3] or s["shallow"] or s["deep"])]
+    k = min(int(round(w.prob * len(specs))), len(ok))
+    for s in np.random.default_rng([seed, 1]).permutation(np.array(ok, dtype=object))[:k]:
+        s["water"] = float(np.random.default_rng([seed, 2, s["entry"]]).uniform(*w.scale))
+
+
 def geometry_cond(spec):
-    return {k: spec[k] for k in ("combo", "two", "along_long", "bend_dir", "gsm", "shallow", "deep")}
+    return {k: spec[k] for k in ("combo", "two", "along_long", "bend_dir", "gsm", "shallow", "deep", "water") if k in spec}
 
 
 def sample_preset(P: Preset, spec):

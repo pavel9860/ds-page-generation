@@ -126,6 +126,13 @@ class DeepCreaseCfg:
 
 
 @dataclass(frozen=True)
+class WaterCfg:
+    prob: float = 0.1                             # share of all pages water-damaged (cockled), drawn among pages
+                                                  # without creases (crumple, shallow, deep)
+    scale: tuple = (1.0, 1.0)                     # x the band rms of a real water-damaged page (creases.cockle)
+
+
+@dataclass(frozen=True)
 class GeometryCfg:
     sheet_mm: tuple = (210.0, 297.0)                # (width, height)
     mesh: tuple = (256, 360)                        # page grid nodes (u across, v down): layout page_px / 4; the
@@ -143,6 +150,7 @@ class GeometryCfg:
     scene: SceneCfg = SceneCfg()
     shallow: ShallowCreaseCfg = ShallowCreaseCfg()
     deep: DeepCreaseCfg = DeepCreaseCfg()
+    water: WaterCfg = WaterCfg()
 
 
 @dataclass(frozen=True)
