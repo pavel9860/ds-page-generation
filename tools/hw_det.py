@@ -1,7 +1,7 @@
 """Text / handwriting boxes of the embedded pages: detection shards (UVTM/Labels/hw_detection) -> manifest.sqlite table hw_det.
 
   python tools/hw_det.py detect   # embedded pages no shard has: 768 x 1024 render (tools/form_pages.py), yolo26s -> the next d<N> shard
-  python tools/hw_det.py merge    # -> table hw_det (doc = emb_out id, page, hash, text, hw, shard); prints the re-render check
+  python tools/hw_det.py merge    # -> table hw_det (doc = emb_out id, page, hash, text, hw, shard, src_doc = the id in the shard); prints the re-render check
 
 Shard d<N>__pages_<NNNN>.npz: ids int32 (n, 2) [doc, page]; offsets int64 (n + 1); per box cls uint8 (0 handwriting, 1 print) and
 conf uint8 (round(conf * 255), floor 0.25); failed int32 (k, 2). Boxes of page i: [offsets[i]:offsets[i + 1]]; no coordinates.
@@ -100,8 +100,8 @@ def cmd_merge(_):
     D["hash"] = [m.group(0) if (m := HEX.search(Path(path.get(d, "")).name)) else None for d in D.doc]
     with sqlite3.connect(LAYOUTS / "manifest.sqlite") as con:
         con.execute("drop table if exists hw_det")
-        con.execute("create table hw_det (doc integer, page integer, hash text, text integer, hw integer, shard text, primary key (doc, page))")
-        con.executemany("insert into hw_det values (?,?,?,?,?,?)", D[["doc", "page", "hash", "text", "hw", "shard"]].astype(object).itertuples(False, None))
+        con.execute("create table hw_det (doc integer, page integer, hash text, text integer, hw integer, shard text, src_doc integer, primary key (doc, page))")
+        con.executemany("insert into hw_det values (?,?,?,?,?,?,?)", D.assign(src_doc=D.doc)[["doc", "page", "hash", "text", "hw", "shard", "src_doc"]].astype(object).itertuples(False, None))
     print(f"hw_det: {len(D)} of {len(E)} embedded pages; pages by group", D.grp.value_counts().sort_index().to_dict())
 
 
