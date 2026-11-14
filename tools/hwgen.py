@@ -27,7 +27,8 @@ from skimage.morphology import skeletonize
 
 from dspages.config import Paths
 
-HWFONTS = "/run/media/me/D/ML_DS/UVTM/hwfonts"
+UVTM = os.environ.get("DSPAGES_UVTM", "/run/media/p/D/ML_DS/UVTM")
+HWFONTS = f"{UVTM}/hwfonts"
 NOTO = ("/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype/dejavu")
 OUT = f"{Paths().layouts}/test/hw_gen"
 BANK = f"{OUT}/writers.json"

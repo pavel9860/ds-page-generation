@@ -54,12 +54,12 @@ MIN_FORMS = 10                                          # a cluster with fewer f
 RATIO = 2 ** 0.5                                        # page h / w of the set (A4); other pages are cropped to it
 MAX_CROP = 0.15                                         # at most this share of a side is cropped, else the page is out
 MIN_NATIVE = 1000                                       # long side px of a raster page under this: too coarse
-MAX_PIC = 0.0                                           # picture score above this (~ the top 10 % of pages): out
+PIC_OUT = 0.10                                          # the pages with the highest picture score (this share of the pool) are out
 PIC_POS = ("a page dominated by a large photograph", "a page with big colourful illustrations", "a poster with a large picture",
            "a page with a large chart or diagram", "a page with a grid of photographs", "a comic page")          # picture score = max cosine to these - max cosine to PIC_NEG
 PIC_NEG = ("a page of printed text", "a scanned document page with text", "a page of handwritten text", "a form with fields",
            "a page with a table")
-DUP_SIM = 0.90                                          # cosine above this: the same page or the same template / series (letters of one
+DUP_SIM = 0.95                                          # cosine above this (1536-d page vectors: pooled | mid-layer patch mean): the same page or template / series
                                                         # office, a listing split into files); pages of one cluster: ~0.73
 
 
@@ -83,20 +83,26 @@ def page_ok(ratio, native):
     return (r >= lo) & (r <= hi) & (np.asarray(native, float) >= MIN_NATIVE)
 
 
-def near_duplicates(X, c1, sim=DUP_SIM, prefer=None):
+def near_duplicates(X, c1, sim=DUP_SIM, prefer=None, block=2048):
     """Boolean mask of the pages to drop: within each cluster, a page whose embedding is within `sim` of an earlier kept page
-    (pages taken in the order of `prefer`, best first: digital, live)."""
+    (pages taken in the order of `prefer`, best first: digital, live). Similarities by blocks of rows (one matmul per block)."""
     order = np.arange(len(c1)) if prefer is None else np.asarray(prefer)
     drop = np.zeros(len(c1), bool)
     c1 = np.asarray(c1)
-    for c in np.unique(c1):
-        idx = order[c1[order] == c]
-        kept = []
-        for i in idx:
-            if kept and (X[kept] @ X[i]).max() > sim:
-                drop[i] = True
-            else:
-                kept.append(i)
+    oc = c1[order]
+    srt = np.argsort(oc, kind="stable")                                  # pages of a cluster together, in the order of prefer
+    order, oc = order[srt], oc[srt]
+    cuts = np.r_[0, np.flatnonzero(np.diff(oc)) + 1, len(oc)]
+    for a, b in zip(cuts[:-1], cuts[1:]):
+        idx = order[a:b]
+        Z = X[idx]
+        alive = np.ones(len(idx), bool)
+        for s in range(0, len(idx), block):
+            S = (Z[s:s + block] @ Z[s:].T) > sim                           # rows s.., columns s..
+            for j in range(min(block, len(idx) - s)):
+                if alive[s + j]:
+                    alive[s + j + 1:] &= ~S[j, j + 1:]
+        drop[idx[~alive]] = True
     return drop
 
 
@@ -126,10 +132,9 @@ def keep_pages(P):
 
 
 def supply(P):
-    """Per fine cluster: n pages, digital pages, deeper pages of its digital documents (pages 2..n; a document has rows for pages
-    0 and 1, each row carries half), group."""
+    """Per fine cluster: n pages, digital pages, deep (0: every page of a document is a row of the pool), group."""
     g = P.groupby("c1")
-    deep = (P.pages.clip(1, 500) - 2).clip(lower=0).where(~P.scan, 0) / 2
+    deep = P.pages * 0                                                    # every page is its own embedded row: no estimate of pages not embedded
     return pd.DataFrame({"n": g.size(), "dig": (~P.scan).groupby(P.c1).sum(), "deep": deep.groupby(P.c1).sum(), "c2": g.c2.first()})
 
 
@@ -212,3 +217,75 @@ def keep_rates(docs, dup=0.9):
 def inflate(need, keep, floor=0.15):
     """Documents to download for `need` kept pages."""
     return np.ceil(need / np.maximum(keep, floor)).astype(int)
+
+
+# ---- embedding-space selection of a small set (1K pages): benchmarked in tools/diverse_ds.py bench / sample ----
+def density(X, ref, r=0.2, chunk=10000):
+    """Share of the `ref` embeddings within cosine distance r of every row of X (rows are L2-normalised)."""
+    out = np.zeros(len(X), np.float32)
+    for i in range(0, len(X), chunk):
+        out[i:i + chunk] = ((X[i:i + chunk] @ ref.T) > 1 - r).mean(1)
+    return out
+
+
+def nearest(X, C, chunk=20000):
+    """Cosine distance of every row of X to its nearest row of C."""
+    out = np.empty(len(X), np.float32)
+    for i in range(0, len(X), chunk):
+        out[i:i + chunk] = 1 - (X[i:i + chunk] @ C.T).max(1)
+    return out
+
+
+def medoids(X, k, weight=None, seed=0):
+    """Indices of the pages nearest to the k centres of a (weighted) spherical k-means: the bulk, k-medoid coverage."""
+    from sklearn.cluster import MiniBatchKMeans
+    km = MiniBatchKMeans(k, random_state=seed, batch_size=8192, n_init=1, max_iter=60).fit(X, sample_weight=weight)
+    c = km.cluster_centers_ / np.linalg.norm(km.cluster_centers_, axis=1, keepdims=True)
+    return np.unique(np.concatenate([(X @ c[i:i + 200].T).argmax(0) for i in range(0, len(c), 200)]))
+
+
+def farthest(X, k, have, cand):
+    """k indices of `cand` added one by one, each the farthest from `have` and the ones taken (k-center greedy: the boundary)."""
+    Z = X[cand]
+    d = nearest(Z, X[have]) if len(have) else np.full(len(Z), 2.0, np.float32)
+    out = []
+    for _ in range(k):
+        i = int(d.argmax())
+        out.append(cand[i])
+        d = np.minimum(d, 1 - Z @ Z[i])
+    return np.array(out, int)
+
+
+def flat_weight(dens, n_ref, gamma=0.5):
+    """k-means weights that flatten the density (count within r, + 1) ** -gamma; gamma 0: density-proportional, 1: uniform."""
+    w = (dens * n_ref + 1.0) ** -gamma
+    return w / w.mean()
+
+
+def select_hybrid(X, dens, k, boundary=0.15, gamma=0.5, n_ref=30000, trim=25):
+    """k pages: (1 - boundary) k density-flattened medoids (bulk coverage, no outlier picks) + boundary k farthest-point pages
+    from the pages above the `trim` percentile of density (the extent of the distribution without junk). Topped up to k."""
+    nb = round(boundary * k)
+    core = np.where(dens >= np.percentile(dens, trim))[0]
+    sel = medoids(X, k - nb, flat_weight(dens, n_ref, gamma))
+    sel = np.concatenate([sel, farthest(X, k - len(sel), sel, core)])
+    return sel
+
+
+def select_by_group(X, dens, groups, k, alpha=0.5, boundary=0.15, **kw):
+    """Hybrid selection per group (language): quota ~ pages ** alpha, at least 1, capped by the group."""
+    n = pd.Series(groups).value_counts()
+    q = water(n, k, n ** alpha).round().astype(int).clip(lower=1)
+    sel = []
+    for g, qg in q.items():
+        ix = np.where(groups == g)[0]
+        if qg >= len(ix):
+            sel += list(ix)
+        elif qg < 4:
+            sel += list(ix[np.argsort(-dens[ix])[:qg]])
+        else:
+            sel += list(ix[select_hybrid(X[ix], dens[ix], int(qg), boundary, **kw)])
+    sel = np.unique(sel)
+    if len(sel) < k:
+        sel = np.concatenate([sel, farthest(X, k - len(sel), sel, np.where(dens >= np.percentile(dens, 25))[0])])
+    return sel

@@ -1,22 +1,24 @@
 """All parameters of the pipeline. Units: geometry in metres, layout and camera in mm, images in px."""
+import os
 from dataclasses import dataclass, field, replace
 
 G = 9.81
+UVTM = os.environ.get("DSPAGES_UVTM", "/run/media/p/D/ML_DS/UVTM")          # the data root (the same variable as hand.config)
 
 
 @dataclass(frozen=True)
 class Paths:
-    layouts: str = "/run/media/me/D/ML_DS/UVTM/Layouts"
-    manifest: str = "/run/media/me/D/ML_DS/UVTM/Layouts/manifest_pages.jsonl"
-    files: str = "/run/media/me/D/ML_DS/UVTM/Layouts/manifest_files.jsonl"   # listing of the source files
-    jpeg_artifacts: str = "/run/media/me/D/ML_DS/UVTM/Layouts/jpeg_grid_above3_at_1024x1440.jsonl"   # PDF images (path, xref) with strong JPEG artifacts
-    out: str = "/run/media/me/D/ML_DS/UVTM/dspages"
+    layouts: str = f"{UVTM}/Layouts"
+    manifest: str = f"{UVTM}/Layouts/manifest_pages.jsonl"
+    files: str = f"{UVTM}/Layouts/archive/info/manifest_files.jsonl"   # listing of the source files
+    jpeg_artifacts: str = f"{UVTM}/Layouts/archive/info/jpeg_grid_above3_at_1024x1440.jsonl"   # PDF images (path, xref) with strong JPEG artifacts
+    out: str = f"{UVTM}/dspages"
     font_dirs: tuple = ("/usr/share/fonts", "/usr/local/share/fonts", "~/.fonts")
 
 
 @dataclass(frozen=True)
 class SortCfg:
-    input_dir: str = "/run/media/me/D/ML_DS/UVTM/Layouts/corpus_add/pdf"
+    input_dir: str = f"{UVTM}/Layouts/corpus_add/pdf"
     extensions: tuple = (".jpg", ".jpeg", ".png", ".pdf")
     max_pdf_pages: int = 40
     keys: tuple = (                                 # (key, name, folder of Paths.layouts)
@@ -130,6 +132,10 @@ class WaterCfg:
     prob: float = 0.1                             # share of all pages water-damaged (cockled), drawn among pages
                                                   # without creases (crumple, shallow, deep)
     scale: tuple = (1.0, 1.0)                     # x the band rms of a real water-damaged page (creases.cockle)
+    cover: tuple = (0.3, 1.0)                     # wet share of the page (creases.cockle.mask), drawn per page;
+                                                  # real wet pages: 8 x 6 tiles above half the max rms 17 / 28 / 48 % (p10/50/90)
+    region: float = 200.0                         # nodes: correlation length of the wet-part field
+    dry: float = 0.3                              # cockle amplitude kept outside the wet part (real max / min tile rms ~8)
 
 
 @dataclass(frozen=True)
@@ -249,7 +255,7 @@ class RefontCfg:
     figure_rounds: int = 3                          # times the reach is grown with what joined
     tile_cover: float = 0.9                         # when together they cover this share of their bounding box
     tab_max_em: float = 4.0                         # widest gap after a list marker that still joins the marker to its text
-    space_em: float = 0.2                           # a gap between two letters wider than this is a space
+    word_margin: float = 0.1                        # a gap between two characters wider than this x the new one's width or height is a space (pdfminer LAParams)
     gap_reach: float = 3.0                          # lines (in font sizes) above and below a wide gap that tell its kind:
     gap_cross: float = 0.5                          # this share with ink over it makes it a justified space, not a gutter
     letter_gray: int = 128                          # drawings as letters are dark fills (a white box in a line is a field)

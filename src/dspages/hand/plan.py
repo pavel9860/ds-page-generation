@@ -5,6 +5,7 @@ python -m dspages.hand plan --texts texts.jsonl ... --out plan.jsonl --n 10000
 """
 import argparse
 import json
+import re
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -15,9 +16,10 @@ from hwsynth.scripts import text_script
 from hwsynth.styles import personas
 
 from . import paper as paper_mod
-from .langs import EXPECT, NO_TEXT_LAYER, SKIP_SCRIPTS, group_of, implausible, script_ok
+from ..ingest.lang import garbled
+from .langs import EXPECT, NO_TEXT_LAYER, ILLEGIBLE_TYPES, LEGIBLE_STYLES, PRINT_HANDS, PRINT_ONLY_NOT, SKIP_SCRIPTS, group_of, script_ok
 from .paper import paper
-from .util import CHAR_W, MAX_XH, MIN_XH
+from .util import CHAR_W, MAX_XH, MIN_XH, MIN_XH_SCRIPT, walk_text
 
 ENGLISH = 0.40
 GROUPS = {"cyrillic": 0.18, "cjk": 0.12, "other": 0.18, "latin": 0.12}     # shares of all pages (LayoutCfg.script_mix); English is the Latin rest
@@ -32,9 +34,19 @@ PAPER_BY = {                                           # (notebook, mode) -> pap
     (True, "dense"): {"lined": 0.35, "margin": 0.20, "spiral": 0.20, "squared": 0.15, "dotted": 0.10},
     (True, "table"): {"squared": 0.5, "dotted": 0.2, "lined": 0.3},
 }
-XH_RANGE = {(False, "normal"): (1.1, 3.0), (False, "dense"): (1.2, 1.8), (False, "table"): (1.2, 2.3),   # x-height [mm] on paper without rules
-            (True, "normal"): (1.4, 3.4), (True, "dense"): (1.25, 2.1), (True, "table"): (1.4, 2.5)}
+XH_RANGE = {(False, "normal"): (2.0, 3.0), (False, "dense"): (2.0, 2.3), (False, "table"): (2.0, 2.4),   # x-height [mm] on paper without rules; font size 4 mm = 2 mm x-height at least
+            (True, "normal"): (2.0, 3.4), (True, "dense"): (2.0, 2.4), (True, "table"): (2.0, 2.6)}
 KIND_W = {"book": 0.22, "paper": 0.22, "article": 0.16, "letter": 0.14, "magazine": 0.10, "lecture": 0.15, "recipe": 0.005, "poem": 0.005}
+
+
+def fitted_tune(rng, spread=0.12):
+    """Writer genes fitted to the distributions of real lines (fitted_tune.json: component sizes, joins, word gaps), each moved a little per page."""
+    import json
+    from pathlib import Path
+    base = json.loads((Path(__file__).parent / "fitted_tune.json").read_text())["tune"]
+    wide = dict(ws=(0.8, 1.5), ws_ln=(0.05, 0.4), asc=(0.75, 2.2), desc=(0.75, 2.2), cap=(0.9, 1.8), lv_s=(0, 0.35), lv_dy=(0, 0.2), lv_break=(0, 0.3), lv_warp=(0, 0.2),
+                ls_sd=(0, 0.1), lv_gap=(0, 0.4), size_sd=(0, 0.1), connect=(0, 1), speed=(0, 1), slant_sd=(0, 4), base_sd=(0, 0.09))
+    return {k: float(min(max(v + rng.normal(0, spread * (wide[k][1] - wide[k][0])), wide[k][0]), wide[k][1])) for k, v in base.items() if k in wide}
 
 
 def balanced(values, weights, n, rng):
@@ -48,7 +60,7 @@ def balanced(values, weights, n, rng):
     return out
 
 
-def languages(texts, n):
+def languages(texts, n, as_is=False):
     """{language: pages}: English 40 %, the other shares by script group, equal over the languages of a group (capped by the passages a
     language has: water filling)."""
     langs = defaultdict(list)
@@ -56,7 +68,9 @@ def languages(texts, n):
         if t["kind"] != "table":                       # a language needs text passages, tables alone are not enough
             langs[t["lang"]].append(i)
     group = {lg: Counter(t["script"] for t in (texts[i] for i in ix)).most_common(1)[0][0] for lg, ix in langs.items()}
-    quota = {"en": int(round(ENGLISH * n))}
+    if as_is:                                          # a set of seeds: every passage once, the languages as the set has them
+        return {lg: len(ix) for lg, ix in langs.items()}
+    quota = {"en": int(round(ENGLISH * n))} if "en" in langs else {}        # no English passages (a set of seeds): no English pages
     for g, share in GROUPS.items():
         members = [lg for lg in langs if group_of(group[lg]) == g and lg != "en" and group[lg] not in SKIP_SCRIPTS]
         pool = {lg: len(langs[lg]) for lg in members}
@@ -71,7 +85,20 @@ def languages(texts, n):
     return quota
 
 
-def load_texts(files):
+def usable(t, repeats=False):
+    """The passage is real text of its language: script, no scrambled text layer, no repeated lines, no table of numbers cut out of its table.
+    A verified (Google-translated) text comes from no PDF layer, and the Latin names and codes Google keeps do not count against its script."""
+    v = t.get("verified")
+    if (t["lang"] in NO_TEXT_LAYER and not v) or not script_ok(re.sub("[A-Za-z]", "", t["text"]) if v else t["text"], t["lang"]) or (garbled(t["text"]) and not v):
+        return False
+    lines = [x.strip() for x in t["text"].split("\n") if len(x.strip()) > 12]
+    if not repeats and len(lines) - len(set(lines)) > 0.05 * max(len(lines), 1):          # a passage that repeats its own lines (footnotes, running text) teaches repeated phrases
+        return False
+    digits = sum(c.isdigit() for c in t["text"])
+    return repeats or t["kind"] == "table" or digits <= 0.3 * max(sum(c.isalnum() for c in t["text"]), 1)
+
+
+def load_texts(files, repeats=False):
     """Passages of the jsonl files that are real text of their language: script, no cross-document boilerplate, no table of numbers cut out
     of its table, no scrambled text layers."""
     texts, seen = [], set()
@@ -79,20 +106,17 @@ def load_texts(files):
         for line in open(f):
             t = json.loads(line)
             key = {" ".join(t["text"].split())[k:k + 60] for k in (0, 200, 500) if len(t["text"]) > k + 60}
-            if key & seen or t["lang"] in NO_TEXT_LAYER or not script_ok(t["text"], t["lang"]):
-                continue
-            digits = sum(c.isdigit() for c in t["text"])
-            if t["kind"] != "table" and digits > 0.3 * max(sum(c.isalnum() for c in t["text"]), 1):
+            if key & seen and not repeats or not usable(t, repeats):      # a seed set (repeats) keeps every passage
                 continue
             seen |= key
             t["script"] = text_script(t["text"])
             texts.append(t)
-    return implausible(texts)
+    return texts
 
 
 def draw_factors(n, quota, table_langs, rng):
     """n rows with the independent factors: type, style, pen, language, format, mode (normal / dense / table), writer, seeds."""
-    types, styles, pens = list(H.PERSONS), list(H.STYLES), list(TOOLS)
+    types, styles, pens = [t for t in H.PERSONS if t not in ILLEGIBLE_TYPES], list(LEGIBLE_STYLES), list(TOOLS)
     cols = {"type": balanced(types, np.ones(len(types)), n, rng), "style": balanced(styles, np.ones(len(styles)), n, rng),
             "pen": balanced(pens, np.ones(len(pens)), n, rng), "lang": balanced(list(quota), list(quota.values()), n, rng),
             "iam": balanced([1, 0], [IAM_SHARE, 1 - IAM_SHARE], n, rng), "fmt": balanced(list(FMT_W), list(FMT_W.values()), n, rng),
@@ -108,6 +132,8 @@ def draw_factors(n, quota, table_langs, rng):
         r["persona"] = f"iam:{iam[r['type']][int(rng.integers(len(iam[r['type']])))]}" if r.pop("iam") and iam[r["type"]] else r["type"]
         r["dense"] = bool(r["dense"]) and not r["tab"]
         r["table"] = bool(r.pop("tab")) and r["lang"] in table_langs
+        if EXPECT.get(r["lang"], "Latin") not in PRINT_ONLY_NOT:               # no fitted or cursive writer: print-like hands only, drawn per page
+            r["type"] = r["persona"] = PRINT_HANDS[int(rng.integers(len(PRINT_HANDS)))]
         rows.append(r)
     return rows
 
@@ -124,15 +150,56 @@ def set_geometry(rows, rng):
     for r in rows:
         mode = "dense" if r["dense"] else "table" if r["table"] else "normal"
         lo, hi = XH_RANGE[(r["fmt"] != "a4", mode)]
-        r["fill"] = float(rng.uniform(0.88, 1.0) if r["dense"] else rng.uniform(0.5, 0.9) if r["table"] else rng.uniform(0.6, 1.0))
-        r["xh"] = float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
+        r["fill"] = float(rng.uniform(0.8, 1.0) if r["dense"] else rng.uniform(0.5, 0.9) if r["table"] else rng.uniform(0.5, 1.0))
+        lo = max(lo, MIN_XH_SCRIPT.get(EXPECT.get(r["lang"], "Latin"), 0))
+        r["xh"] = float(np.exp(rng.uniform(np.log(lo), np.log(max(hi, lo * 1.2)))))
         u = rng.random()
         r["xh_ratio"] = float(rng.uniform(0.16, 0.27) if r["dense"] else rng.uniform(0.22, 0.5) if u < 0.8 else rng.uniform(0.5, 0.62) if u < 0.9 else rng.uniform(0.18, 0.22))
         r["dy"] = float(rng.uniform(0.0, 0.5))
+        r["tune"] = fitted_tune(rng)
+        u = float(rng.uniform(0.3, 1.0))                      # word-to-word irregularity of the hand: rotation [deg], shift [x-heights], scale, shear [deg]
+        r["wj"] = [round(6 * u, 2), round(0.3 * u, 3), round(0.12 * u, 3), round(8 * u, 2)]
+        u = float(rng.uniform(0.3, 1.0))                      # word-to-word irregularity of the hand: rotation [deg], shift [x-heights], scale, shear [deg]
+        r["wj"] = [round(6 * u, 2), round(0.3 * u, 3), round(0.12 * u, 3), round(8 * u, 2)]
+        u = float(rng.uniform(0.3, 1.0))                      # word-to-word irregularity of the hand: rotation [deg], shift [x-heights], scale, shear [deg]
+        r["wj"] = [round(6 * u, 2), round(0.3 * u, 3), round(0.12 * u, 3), round(8 * u, 2)]
         pp = paper(r["paper"], np.random.default_rng(r["seed"]), r["fmt"], r["dense"])
         xh = float(np.clip(pp.pitch * r["xh_ratio"], MIN_XH, MAX_XH)) if pp.pitch else r["xh"]
         lines = max(int(round(((pp.size[1] - pp.bottom - pp.first) / (pp.pitch or 3.3 * xh) + 1) * r["fill"])), 1)
         r["_cap"] = 1.1 * lines * (pp.size[0] - pp.left - pp.right) / (xh * CHAR_W.get(EXPECT.get(r["lang"], "Latin"), 1.8))
+
+
+def relayout(items, rng):
+    """Page layouts of a reflowed document: two columns, a narrow side column, a text box away from the margin, two boxes at different heights.
+    A leading heading stays full width; pages that already have columns are left as they are."""
+    if len(items) < 4 or any(i["k"] in ("cols", "table") for i in items):
+        return items
+    u = rng.random()
+    head = [items[0]] if items[0]["k"] == "h" else []
+    body = [dict(i) for i in items[len(head):]]
+    sizes = np.cumsum([len(i.get("t", "")) + 1 for i in body])
+
+    def split(share):
+        k = int(np.searchsorted(sizes, share * sizes[-1])) + 1
+        k = min(max(k, 1), len(body) - 1)
+        a, b = body[:k], body[k:]
+        a[0]["gap"], b[0]["gap"] = 0, 0
+        return a, b
+    if u < 0.30:
+        a, b = split(0.5)
+        cols = [dict(x=0.0, w=0.47, start=0, items=a), dict(x=0.53, w=0.47, start=0, items=b)]
+    elif u < 0.40:
+        a, b = split(0.28)
+        cols = [dict(x=0.0, w=0.30, start=0, items=a), dict(x=0.35, w=0.65, start=0, items=b)]
+    elif u < 0.52:
+        body[0]["gap"] = 0
+        cols = [dict(x=float(rng.uniform(0.08, 0.3)), w=float(rng.uniform(0.5, 0.65)), start=0, items=body)]
+    elif u < 0.62:
+        a, b = split(0.5)
+        cols = [dict(x=0.0, w=0.46, start=0, items=a), dict(x=0.5, w=0.5, start=int(rng.integers(2, 7)), items=b)]
+    else:
+        return items
+    return head + [dict(k="cols", cols=cols, gap=1 if head else 0)]
 
 
 def assign_texts(rows, texts, quota, rng):
@@ -165,18 +232,21 @@ def assign_texts(rows, texts, quota, rng):
                 t = texts[pool.pop(j)]
                 used.add(t["doc"])
                 items, extra = list(t["items"]), 0
-                while sum(len(i["t"]) for i in items) < 0.85 * r["_cap"] and pool and extra < (8 if r["dense"] else 5):
+                while len(" ".join(walk_text(items))) < 0.85 * r["_cap"] and pool and extra < (8 if r["dense"] else 5):
                     same = [k for k, i in enumerate(pool) if texts[i]["doc"] == t["doc"]]
-                    items += texts[pool.pop(same[0] if same else len(pool) - 1)]["items"]
+                    more = [dict(i) for i in texts[pool.pop(same[0] if same else len(pool) - 1)]["items"]]
+                    if more:
+                        more[0]["gap"] = 1                    # another passage: one blank line
+                    items += more
                     extra += 1
-                r.update(items=items, doc=t["doc"], kind=t["kind"], page=t["page"], ocr=bool(t.get("ocr")))
+                r.update(items=relayout(items, rng), doc=t["doc"], kind=t["kind"], page=t["page"], ocr=bool(t.get("ocr")))
             del r["_cap"], r["kind_t"]
 
 
-def make_plan(texts, n, seed=1):
+def make_plan(texts, n, seed=1, as_is=False):
     """The plan: n page specs with their passages (list of dict)."""
     rng = np.random.default_rng(seed)
-    quota = languages(texts, n)
+    quota = languages(texts, n, as_is)
     rows = draw_factors(n, quota, {t["lang"] for t in texts if t["kind"] == "table"}, rng)
     set_geometry(rows, rng)
     assign_texts(rows, texts, quota, rng)
@@ -189,13 +259,14 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--n", type=int, default=10000)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--as-is", action="store_true", help="one page per passage, the languages as the passages have them")
     a = ap.parse_args(argv)
     paper_mod.DRAW = False                         # planning needs the geometry of the papers, not their pictures
-    texts = load_texts(a.texts)
-    rows = make_plan(texts, a.n, a.seed)
+    texts = load_texts(a.texts, a.as_is)
+    rows = make_plan(texts, len(texts) if a.as_is else a.n, a.seed, a.as_is)
     with open(a.out, "w") as f:
         f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
-    print(f"{a.n} pages from {len(texts)} passages;", Counter(r["lang"] for r in rows).most_common(8))
+    print(f"{len(rows)} pages from {len(texts)} passages;", Counter(r["lang"] for r in rows).most_common(8))
     print(Counter(r["kind"] for r in rows))
 
 

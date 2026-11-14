@@ -32,8 +32,10 @@ from scipy import ndimage
 from scipy.spatial import cKDTree
 from scipy.interpolate import LinearNDInterpolator
 
-SRC = Path("/run/media/me/D/ML_DS/UVTM/GridPages/3d_maps")
-OUT = Path("/run/media/me/D/ML_DS/UVTM/GridPages/maps3d_256x360")
+from ..config import UVTM
+
+SRC = Path(f"{UVTM}/GridPages/3d_maps")
+OUT = Path(f"{UVTM}/GridPages/maps3d_256x360")
 SHEET = (210.0, 297.0)                     # mm (width, height)
 MESH = (256, 360)                          # nodes (across, down)
 ROUNDS = 4                                 # column and row passes of `even`

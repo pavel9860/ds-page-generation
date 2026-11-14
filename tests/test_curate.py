@@ -32,9 +32,9 @@ def test_allocate_and_scans_needed():
 
 def test_deep_pages_of_digital_documents():
     P = pool()
-    P.loc[P.c1 == 0, "pages"] = 10                                       # 2 embedded rows per document carry half each
+    P.loc[P.c1 == 0, "pages"] = 10                                       # every page is a pool row of its own: no estimate of pages not embedded
     sup = C.supply(P)
-    assert sup.deep[0] == 40 * 8 / 2 and sup.deep[1] == 0
+    assert (sup.deep == 0).all() and sup.n[0] == 40
 
 
 def test_forms_plan_order():

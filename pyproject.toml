@@ -11,6 +11,8 @@ license = "CC-BY-NC-4.0"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.0",
+    "langid>=1.1",
+    "wordfreq[cjk]>=3.1",
     "scipy>=1.13",
     "opencv-python-headless>=4.9",
     "numba>=0.60",

@@ -9,6 +9,8 @@ from collections import Counter
 
 import numpy as np
 
+from .util import walk_text
+
 
 def cramers_v(a, b):
     """Bias-corrected Cramer's V of two categorical sequences."""
@@ -28,7 +30,7 @@ def factors(rows):
     f["iam"] = [r["persona"].startswith("iam") for r in rows]
     f["mode"] = [("table" if r.get("table") else "dense" if r.get("dense") else "normal") for r in rows]
     f["fill"] = [band(r["fill"], [.3, .6, .85]) for r in rows]
-    f["len"] = [band(sum(len(i.get("t", "")) for i in r["items"]), [300, 600, 1000, 1500]) for r in rows]
+    f["len"] = [band(len(" ".join(walk_text(r["items"]))), [300, 600, 1000, 1500]) for r in rows]
     return f
 
 
@@ -44,7 +46,7 @@ def main(argv=None):
     print("languages:", len(set(f["lang"])), Counter(f["lang"]).most_common(6))
     top = sorted(((cramers_v(f[a], f[b]), a, b) for a, b in itertools.combinations(f, 2)), reverse=True)[:8]
     print("largest Cramer V:", [(round(v, 3), a, b) for v, a, b in top])
-    first = Counter(" ".join(r["items"][0].get("t", "").split())[:60] for r in rows)
+    first = Counter(" ".join(next(walk_text(r["items"]), "").split())[:60] for r in rows)
     print("repeated first lines:", sum(c > 1 for c in first.values()), "| documents used more than once:", sum(c - 1 for c in Counter(r["doc"] for r in rows).values()))
 
 

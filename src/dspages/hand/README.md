@@ -20,7 +20,8 @@ python -m dspages.hand sheet  DIR                # HTML sheet and contact sheet 
 |---|---|
 | `config` | paths (`DSPAGES_UVTM`, `DSPAGES_PAGETYPE_LABELS`, `DSPAGES_TESSDATA`) |
 | `corpus`, `langs` | catalogue queries (documents, languages, page types); script of a language, text plausibility |
-| `texts`, `edu`, `tables_src` | passage extraction from digital PDFs (items: h / p / li / v / table with kind and language) |
+| `texts`, `edu`, `tables_src` | passage extraction from digital PDFs: every line of the page kept (h / p / li with level / l single line / v / table), wrapped lines joined, page furniture dropped; blank lines, alignment and columns by `structure` |
+| `pagekind` | plain / poems / formatted from the text layer only (line geometry, fonts, sizes, bullets, rules): ~8 ms a page; tools/pagekind_sources.py + tools/pagekind_eval.py |
 | `ocr`, `structure` | a page read by Tesseract with positions; blocks to items with gaps, heading sizes and columns |
 | `plan` | exact shares, independent factors, passages matched to the capacity of a page |
 | `paper`, `page`, `tables`, `util` | papers (formats A4 / A5 / B5), layout and drawing of a page, hand-drawn tables, text helpers |

@@ -17,6 +17,11 @@ class HandPaths:
         return f"{self.uvtm}/Layouts"
 
     @property
+    def refine(self):
+        """Folders moved out of Layouts (same relative paths): certificates, flyers_clean, tables_clean, ..."""
+        return _env("DSPAGES_REFINE", f"{self.uvtm}/Refine_DS")
+
+    @property
     def manifest(self):
         """SQLite manifest of the corpus: plan (documents), lang_res (languages), old_meta (topics)."""
         return f"{self.layouts}/manifest.sqlite"
@@ -24,7 +29,7 @@ class HandPaths:
     @property
     def doc_types(self):
         """Page type of every document from the embedding classifier (jsonl: path, label, p)."""
-        return f"{self.uvtm}/emb_out/doc_types.jsonl"
+        return f"{self.uvtm}/Labels/embedding/emb_out/doc_types.jsonl"
 
     @property
     def tessdata(self):

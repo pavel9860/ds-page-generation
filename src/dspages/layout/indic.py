@@ -3,11 +3,18 @@ that stands before its consonant cluster (i, e, ai, o...) and the reph (ra + vir
 Unicode stores the sign after the cluster and the reph before it."""
 import unicodedata
 
+import regex
+
+_INSC = regex.compile(r"\p{InSC=Consonant}|\p{InSC=Consonant_Dead}")
+
 PREFIX = {0x093F, 0x09BF, 0x09C7, 0x09C8, 0x0A3F, 0x0ABF, 0x0BC6, 0x0BC7, 0x0BC8, 0x0D46, 0x0D47, 0x0D48, 0x0DD9, 0x0DDA,
-          0x0DDB, 0x17C1, 0x17C2, 0x17C3, 0x1031}
-RA = {0x0930, 0x09B0, 0x0AB0, 0x0A30}
-VIRAMA = {0x094D, 0x09CD, 0x0ACD, 0x0A4D, 0x0BCD, 0x0C4D, 0x0CCD, 0x0D4D, 0x0DCA, 0x17D2, 0x1039}
-NUKTA = {0x093C, 0x09BC, 0x0ABC, 0x0A3C}
+          0x0DDB, 0x17C1, 0x17C2, 0x17C3, 0x1031, 0x0B47, 0x0B48}              # + Oriya e, ai (drawn left of the consonant)
+RA = {0x0930, 0x09B0, 0x0AB0, 0x0A30, 0x0B30}
+VIRAMA = {0x094D, 0x09CD, 0x0ACD, 0x0A4D, 0x0BCD, 0x0C4D, 0x0CCD, 0x0D4D, 0x0DCA, 0x17D2, 0x1039, 0x0B4D}
+NUKTA = {0x093C, 0x09BC, 0x0ABC, 0x0A3C, 0x0B3C}
+KHMER_RO = "\u17d2\u179a"                                                  # coeng ro (subscript ro)
+KHMER_SPLIT = regex.compile("\u17c1(?=[\u17be\u17bf\u17c0\u17c4\u17c5])")      # Khmer e drawn as the left piece of oe, ya, ie, oo, au
+REPH = "\ue0f0"                                                             # marks the text of a reph glyph (GSUB rphf), drawn after its syllable
 
 
 def _base(c):
@@ -27,29 +34,44 @@ def _cluster_end(t, i):
     return j
 
 
+def _consonant(c):
+    """A consonant by the Unicode property Indic_Syllabic_Category (an independent vowel takes no vowel sign)."""
+    return bool(_INSC.match(c))
+
+
+def _prefix_first(text):
+    """A prefix vowel sign where it cannot be in logical order: at the start of a word or after anything but a consonant cluster; or a Khmer coeng
+    ro at the start of a word (in logical order it follows its consonant)."""
+    return any(ord(c) in PREFIX and (i == 0 or not (_consonant(text[i - 1]) or ord(text[i - 1]) in NUKTA or ord(text[i - 1]) in VIRAMA))
+               or text.startswith(KHMER_RO, i) and (i == 0 or text[i - 1].isspace()) for i, c in enumerate(text))
+
+
 def visual_order(text):
-    """Whether text has a prefix vowel sign where it cannot be in logical order: at the start of a word or after anything
-    but a consonant cluster (its sign is stored after the consonant)."""
-    for i, c in enumerate(text):
-        if ord(c) in PREFIX and (i == 0 or not (_base(text[i - 1]) or ord(text[i - 1]) in NUKTA or ord(text[i - 1]) in VIRAMA)):
-            return True
-    return False
+    """Whether text has a sign in drawing order: a prefix vowel sign before its cluster (_prefix_first), or a reph glyph (REPH: its GSUB rphf text)."""
+    return _prefix_first(text) or REPH in text
 
 
 def to_logical(text):
-    """Prefix vowel signs moved after the cluster that follows them, a reph (ra + virama) at the end of a word moved before
-    the cluster it stands over; two-part vowels (e + aa) recomposed."""
-    out, i = [], 0
+    """Prefix vowel signs moved after the cluster that follows them (when the text has them first: _prefix_first), a reph (ra + virama) at the end
+    of a word moved before the cluster it stands over; two-part vowels (e + aa) recomposed."""
+    out, i, first = [], 0, _prefix_first(text)
     while i < len(text):
         c = text[i]
-        if ord(c) in PREFIX and i + 1 < len(text) and _base(text[i + 1]):
+        if first and ord(c) in PREFIX and i + 1 < len(text) and _base(text[i + 1]):
             j = _cluster_end(text, i + 1)
             out.append(text[i + 1:j] + c)
+            i = j
+        elif first and text.startswith(KHMER_RO, i) and i + 2 < len(text) and _base(text[i + 2]):     # Khmer coeng ro, drawn left of its consonant
+            j = _cluster_end(text, i + 2)
+            out.append(text[i + 2:j] + KHMER_RO)
             i = j
         else:
             out.append(c)
             i += 1
     t = "".join(out)
+    t = KHMER_SPLIT.sub("", t).replace("\u17c1\u17b8", "\u17be").replace("\u17c1\u17b6", "\u17c4")    # Khmer two-part vowels have no decomposition
+    # (NFC keeps them apart): the left piece e before oe / ya / ie / oo / au goes, e + ii is oe, e + aa is oo
+    t = t.replace(REPH, "")
     words = []
     for w in t.split(" "):
         if len(w) >= 3 and ord(w[-1]) in VIRAMA and ord(w[-2]) in RA:

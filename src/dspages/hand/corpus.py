@@ -31,12 +31,21 @@ def languages(db, min_conf=0.95, min_chars=0):
     return {d: lg for d, lg, cf, ch in db.execute("select doc,lang,conf,chars from lang_res") if cf >= min_conf and (ch or 0) >= min_chars}
 
 
+def resolve(rel):
+    """Path of a corpus file given relative to Layouts: in Layouts, or in Refine_DS where folders were moved."""
+    p = Path(PATHS.layouts) / rel
+    if p.exists():
+        return p
+    q = Path(PATHS.refine) / rel
+    return q if q.exists() else p
+
+
 def pdf_documents(db):
     """[(document, path, pages)] of the PDFs with a digital text layer."""
-    return [(d, Path(PATHS.layouts) / p, n or 1) for d, p, c, n in db.execute("select doc,new_path,cls,pages from plan")
+    return [(d, resolve(p), n or 1) for d, p, c, n in db.execute("select doc,new_path,cls,pages from plan")
             if c == "text" and p.lower().endswith(".pdf")]
 
 
 def pdf_paths(db):
     """{document: path} of all PDFs (the files were moved after earlier labels were written)."""
-    return {d: Path(PATHS.layouts) / p for d, p in db.execute("select doc,new_path from plan") if p.lower().endswith(".pdf")}
+    return {d: resolve(p) for d, p in db.execute("select doc,new_path from plan") if p.lower().endswith(".pdf")}

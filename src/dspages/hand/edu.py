@@ -16,6 +16,8 @@ import pymupdf
 from . import corpus
 from . import texts as T
 from .langs import EXPECT, script_ok
+from .structure import to_items
+from .util import flat_items, walk_text
 
 EDU = {"education", "textbook", "academic", "mathematics", "history", "physics_and_astronomy", "psychology", "social_sciences",
        "social-sciences", "arts_and_humanities", "arts-and-humanities", "computer_science", "computer-science", "medicine",
@@ -60,24 +62,26 @@ def long_passage(job):
         pg = rng.randrange(lo, hi)
         items, size = [], 0
         for p in range(pg, min(pg + 6, n)):
-            for k, t in T.blocks_of(pdf[p], False):
-                if native and not script_ok(t, c["lang"], 0.85):
-                    continue
-                if not items and k not in ("h", "p"):
-                    continue
-                items.append(dict(k=k, t=t))
-                size += len(t)
+            bl = T.blocks_of(pdf[p])
+            if not items:
+                bl = bl[next((i for i, b in enumerate(bl) if b[0] in ("h", "p")), len(bl)):]
+            page_items = to_items(bl)
+            if page_items and items:
+                page_items[0]["gap"] = 0                   # the next page goes on without a break
+            items += page_items
+            size += sum(len(b[1]) for b in bl)
             if size >= target:
                 break
         while items and items[-1]["k"] == "h":
             items.pop()
-        if size < 1800 or sum(i["k"] == "p" for i in items) < 3:
+        if size < 1800 or sum(i["k"] == "p" for i in flat_items(items)) < 3:
             return None
-        text = "\n".join(i["t"] for i in items)
+        text = "\n".join(walk_text(items))
         if native and not script_ok(text, c["lang"], 0.85):
             return None
         return dict(c, items=items, text=text, page=pg, pages=n, path=os.path.relpath(c["path"], T.LAYOUTS))
-    except Exception:
+    except Exception as e:
+        print("passage failed:", c["path"], repr(e)[:120], flush=True)
         return None
 
 

@@ -96,8 +96,9 @@ def holes(img, rng, n, x_mm, r_mm, y0, y1):
         return
     ys = np.linspace(y0, y1, n)
     for y in ys:
-        cv2.circle(img, (int(x_mm * K + rng.normal(0, 1)), int(y)), int(r_mm * K), (0.45, 0.45, 0.45), -1, cv2.LINE_AA)
-        cv2.circle(img, (int(x_mm * K), int(y)), int(r_mm * K * 0.8), (0.30, 0.30, 0.32), -1, cv2.LINE_AA)
+        cx, cy, r = int(x_mm * K + rng.normal(0, 1)), int(y + rng.normal(0, 1.5)), int(r_mm * K * 0.85)
+        cv2.circle(img, (cx, cy), r + 2, (0.86, 0.86, 0.84), -1, cv2.LINE_AA)          # torn rim, lighter than the sheet shadow
+        cv2.circle(img, (cx, cy), r, (0.17, 0.17, 0.19), -1, cv2.LINE_AA)               # the table through the hole
 
 
 def paper(kind, rng, fmt="a4", dense=False):

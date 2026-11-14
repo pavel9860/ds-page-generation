@@ -2,11 +2,12 @@
 import re
 import unicodedata
 
-from hwsynth.scripts import script as char_script
+from hwsynth.scripts import script as char_script, text_script
 
 CHAR_W = {"Latin": 1.8, "Cyrillic": 2.0, "Greek": 2.2, "Han": 3.6, "Hiragana": 3.6, "Katakana": 3.6, "Hangul": 3.8, "Arabic": 2.5,
           "Devanagari": 2.6, "Bengali": 2.4, "Tamil": 2.3, "Telugu": 1.95, "Thai": 1.4}   # x-heights per character, measured
-MIN_XH, MAX_XH = 1.0, 3.4                              # x-height of the writing [mm]
+MIN_XH, MAX_XH = 3.0, 3.4                              # x-height of the writing [mm]; 3.0 mm is about 2.1% of the page height word height at 1024 px (hwdet rejects pages under 14)
+MIN_XH_SCRIPT = {"Han": 2.3, "Hangul": 2.3, "Arabic": 2.0}                  # complex glyphs smear below these x-heights
 MAX_GLYPH_MM = 15.0                                    # tallest word of a page (ascender to descender)
 LEADERS = re.compile(r"[.…·_\-–—=~*|]{3,}")
 COMMON = ("Common", "Inherited", "Unknown", None)
@@ -30,9 +31,21 @@ def trim(text, chars):
     return cut[:sp] if sp > 0.7 * chars else cut
 
 
-def script_of(ch):
-    s = char_script(ch)
-    return "Latin" if s in COMMON else s
+def char_scripts(text):
+    """(char, script, shared) of the characters of the text as hwsynth.writer draws them: a word in the font of the script of its letters, Latin for a word
+    without letters; shared = punctuation / digits / symbols, which the writer takes from any hand font when that font lacks them (Fonts.for_unit)."""
+    for wd in text.split():
+        ws = text_script(wd)
+        ws = "Latin" if ws in COMMON else ws
+        for ch in wd:
+            s = char_script(ch)
+            yield ch, ws if s in COMMON else s, s == "Common"
+
+
+def lacks(w, ch, sc, shared):
+    """The writer draws no glyph for ch: its font for the script lacks it, and for a shared character no hand font has it either."""
+    cm = w.fonts.cmap.get(w.font(sc), ())
+    return bool(cm) and ord(ch) not in cm and not (shared and w.fonts.for_unit(None, ch))
 
 
 def walk_text(items):
@@ -70,11 +83,11 @@ def map_text(items, fn):
 
 def pick_fonts(w, text, prefer=None):
     """One font per script that has every character of the page: the writer's own when it covers the text, else another handwriting font
-    of the script (a font asked for by name goes first). No mixing of fonts inside a word."""
+    of the script (a font asked for by name goes first), else the hand font of any script with most of them. No mixing of fonts inside a word."""
     by = {}
-    for ch in set(text):
-        if not ch.isspace():
-            by.setdefault(script_of(ch), set()).add(ch)
+    for ch, sc, shared in char_scripts(text):
+        if not shared:
+            by.setdefault(sc, set()).add(ch)
     mapping = {}
     for sc, chars in by.items():
         own = w.font(sc)
@@ -84,19 +97,30 @@ def pick_fonts(w, text, prefer=None):
             cands = [f for f in cands if str(f).endswith(name)] + cands
         need = "".join(chars)
         mapping[sc] = next((f for f in cands if f and w.fonts.covers(f, need)), None)
+        if mapping[sc] is None:                              # no font has every character: the one with most of them (the rest is stripped, and a page that lost too much is rejected)
+            cov = lambda f: sum(ord(c) in w.fonts.cmap.get(f, ()) for c in need)
+            best = max((f for f in cands if f), key=cov, default=None)
+            if best is not None and cov(best) >= 0.9 * len(need):
+                mapping[sc] = best
+    for sc, chars in by.items():                             # a script no font of its own covers: the hand font with most of its characters (the kana font of a Japanese page has its kanji)
+        if mapping[sc] is None:
+            cov = lambda f: sum(ord(c) in w.fonts.cmap.get(f, ()) for c in chars)
+            mapping[sc] = next((f for fs in ([f for f in mapping.values() if f], w.fonts.hand)        # the page's own fonts first: one hand on the page
+                                for f in sorted(fs, key=cov, reverse=True)[:1] if cov(f) >= 0.9 * len(chars)), None)
     return {k: v for k, v in mapping.items() if v}
 
 
 def strip_missing(w, text):
     """The text without the characters the writer's fonts lack (they would be empty boxes) and without orphaned vowel signs."""
+    sc = iter(char_scripts(text))
     out, start = [], True
     for ch in text:
         if ch.isspace():
             out.append(ch)
             start = True
             continue
-        cm = w.fonts.cmap.get(w.font(script_of(ch)), ())
-        if (unicodedata.category(ch)[0] == "M" and (start or unicodedata.combining(out[-1]) == 9)) or (cm and ord(ch) not in cm):
+        _, s, shared = next(sc)
+        if (unicodedata.category(ch)[0] == "M" and (start or unicodedata.combining(out[-1]) == 9)) or lacks(w, ch, s, shared):
             start = True
             continue
         out.append(ch)
@@ -105,10 +129,5 @@ def strip_missing(w, text):
 
 
 def uncovered(w, text):
-    """Characters of the text that the writer's font of their script does not have."""
-    n = 0
-    for ch in set(text):
-        if not ch.isspace():
-            cm = w.fonts.cmap.get(w.font(script_of(ch)), ())
-            n += bool(cm) and ord(ch) not in cm
-    return n
+    """Characters of the text that the writer cannot draw (lacks)."""
+    return len({c for c, sc, shared in char_scripts(text) if lacks(w, c, sc, shared)})

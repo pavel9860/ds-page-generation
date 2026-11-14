@@ -328,7 +328,7 @@ def _balance(frames, units, obstacles, typesetter, role_of, px_of, g, width, pag
     return lo
 
 
-def layout(src, number, rng, fonts, width_px, k=1.0, turn=False):
+def layout(src, number, rng, fonts, width_px, k=1.0, turn=False, pick=None):
     """Layout of page `number` of a refont.Source width_px wide, every text at k x its source size (scaled with the page).
     turn: the page turned a quarter (see turn.py): width_px is the width of the turned page, and the text, which keeps its
     size as far as the fixed rows of the page allow, is set again in the turned boxes."""
@@ -363,7 +363,7 @@ def layout(src, number, rng, fonts, width_px, k=1.0, turn=False):
     boxes = np.array([tuple(o["bbox"]) for o in text_blocks], float).reshape(-1, 4)
     ids = np.array([id(o) for o in text_blocks])
 
-    typesetter = R.Typesetter(fonts, rng, chars, need)
+    typesetter = R.Typesetter(fonts, rng, chars, need, pick)
     running = R.running_bands(first)
     later = {}
 
@@ -415,7 +415,7 @@ def layout(src, number, rng, fonts, width_px, k=1.0, turn=False):
     info = dict(head=typesetter.role["head"], body=typesetter.role["body"], mono=typesetter.role["mono"],
                 body_src_pt=body, k=k, pages=st["used"], dropped=typesetter.dropped, full=full,
                 wrapped=sum(1 for p in fixed_ps if not p["multi"] and len(p["lines"]) > 1),
-                unresolved={f"U+{ord(c):04X} {unicodedata.name(c, '?')}": n for c, n in typesetter.unresolved.items()})
+                unresolved={" ".join(f"U+{ord(x):04X} {unicodedata.name(x, '?')}" for x in c): n for c, n in typesetter.unresolved.items()})
     return dict(items=out["items"], glyphs=out["glyphs"], pics=pics, rects=out["rects"], elems=elems, cols=cols_px, g=g,
                 size=(width_px, page_h), info=info)
 
@@ -447,7 +447,7 @@ def _ink_box(lay):
     return (*np.maximum(b[:, :2].min(0), 0), *np.minimum(b[:, 2:].max(0), lay["size"]))
 
 
-def sheet_layout(path, number, seed, fonts, margin, size, body_px=None, turn=False):
+def sheet_layout(path, number, seed, fonts, margin, size, body_px=None, turn=False, pick=None):
     """The content of a PDF page restyled on a sheet of size (width, height) px with a blank margin (share of the sheet's
     sides) all around, its body at body_px (None: the source size) and its other sizes in the source's ratio to it: ->
     a sheet description (draw_sheet draws it at any scale; it holds the open PDF) with the layout info (body_px) and the ink box (x0, y0, x1, y1)
@@ -461,7 +461,7 @@ def sheet_layout(path, number, seed, fonts, margin, size, body_px=None, turn=Fal
     g = w / box.width
     body = R.body_size(R.page_blocks(src, number, True))
     k = body_px / (body * g) if body_px and body else 1.0
-    lay = layout(src, number, np.random.default_rng(seed), fonts, round(w * box.height / box.width) if turn else w, k, turn)
+    lay = layout(src, number, np.random.default_rng(seed), fonts, round(w * box.height / box.width) if turn else w, k, turn, pick)
     lw, lh = lay["size"]
     x0, y0, x1, y1 = _ink_box(lay)
     if turn:
@@ -483,7 +483,7 @@ def draw_sheet(desc, s=1.0):
     return np.asarray(out)
 
 
-def sheet(path, number, seed, fonts, margin, size, body_px=None, turn=False):
-    """sheet_layout drawn at its size: -> (uint8 sheet, layout info with body_px)."""
-    desc, info = sheet_layout(path, number, seed, fonts, margin, size, body_px, turn)
+def sheet(path, number, seed, fonts, margin, size, body_px=None, turn=False, pick=None):
+    """sheet_layout drawn at its size: -> (uint8 sheet, layout info with body_px); pick: (head, body) family numbers (refont.pick_family k)."""
+    desc, info = sheet_layout(path, number, seed, fonts, margin, size, body_px, turn, pick)
     return draw_sheet(desc), info

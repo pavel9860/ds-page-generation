@@ -21,6 +21,8 @@ import cv2
 import numpy as np
 from scipy.optimize import nnls
 
+from ..noise import smooth_noise
+
 BANDS = np.array(((1, 2), (2, 4), (4, 8), (8, 16), (16, 32), (32, 64)))   # Gaussian sigma, nodes
 SIGMAS = np.unique(BANDS)
 PAD = 64                                                                   # nodes: ~ the coarsest sigma
@@ -45,10 +47,29 @@ def pitch():
     return tuple(json.loads(Path(__file__).with_name("cockle_targets.json").read_text())["step_mm"])
 
 
-def sample(rng):
-    """One real page's band table (all pages equally likely)."""
-    p = targets()
+LEVELS = ("low", "medium", "high")                                         # tertiles of the real pages' cockle rms
+
+
+def level_of(t):
+    """Level of a band table: its cockle rms (bands 2..16 nodes) against the tertiles of the real pages."""
+    r = lambda x: float(np.sqrt((x["rms"][1:4] ** 2).sum()))
+    q = np.quantile([r(x) for x in targets()], (1 / 3, 2 / 3))
+    return LEVELS[int(np.searchsorted(q, r(t)))]
+
+
+def sample(rng, level=None):
+    """One real page's band table (all pages of the level equally likely; level None: all pages)."""
+    p = [t for t in targets() if level is None or level_of(t) == level]
     return p[rng.integers(len(p))]
+
+
+def mask(shape, rng, cover, region, edge=0.15):
+    """Wet part of the page in [0, 1]: a smooth random field (correlation length region nodes) above its (1 - cover)
+    quantile, soft edge of `edge` field std; cover >= 1: the whole page."""
+    if cover >= 1:
+        return np.ones(shape, np.float32)
+    f = smooth_noise(rng, shape, region)
+    return (1 / (1 + np.exp(-(f - np.quantile(f, 1 - cover)) / edge))).astype(np.float32)
 
 
 def bands(Z):
@@ -144,13 +165,24 @@ def field(shape, rng, target, present=None, scale=1.0):
     return _crop(np.fft.irfft2(np.fft.rfft2(rng.standard_normal(P)) * np.sqrt(S), s=P), shape)
 
 
-def apply(G, rng, target=None, scale=1.0):
-    """G (rows, cols, 3) [mm] displaced along its unit normals so its Z bands reach `target` (a real page sampled
-    if None); lowest node back at Z = 0."""
-    target = sample(rng) if target is None else target
+def local(h, rng, cover, region, dry=0.0):
+    """h confined to a wet part (mask; the dry part keeps `dry` of the amplitude), its cockle band energy (bands
+    2..16 nodes) kept: the wet part carries the whole page's energy."""
+    if cover >= 1:
+        return h
+    w = dry + (1 - dry) * mask(h.shape, rng, cover, region)
+    hw = h * w
+    e = lambda x: float(np.sqrt((bands(x)[1:4] ** 2).sum(0).mean()))
+    return hw * e(h) / max(e(hw), 1e-12)
+
+
+def apply(G, rng, target=None, scale=1.0, level=None, cover=1.0, region=200, dry=0.0):
+    """G (rows, cols, 3) [mm] displaced along its unit normals so its Z bands reach `target` (a real page of `level`
+    sampled if None), the field confined to a wet part covering `cover` of the page (local); lowest node back at Z = 0."""
+    target = sample(rng, level) if target is None else target
     present = dict(rms=bands(G[..., 2]).std((1, 2)))
     n = np.cross(np.gradient(G, axis=1), np.gradient(G, axis=0))
     n *= np.sign(n[..., 2].mean()) / np.linalg.norm(n, axis=-1, keepdims=True)
-    out = G + field(G.shape[:2], rng, target, present, scale)[..., None] * n
+    out = G + local(field(G.shape[:2], rng, target, present, scale), rng, cover, region, dry)[..., None] * n
     out[..., 2] -= out[..., 2].min()
     return out

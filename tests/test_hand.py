@@ -35,6 +35,36 @@ def test_util_text_helpers():
     assert [i["t"] for i in util.map_text(tree[:2], str.lower)[1]["cols"][0]["items"]] == ["x"]
 
 
+def test_char_scripts_shared_characters_take_the_script_of_their_word():
+    got = list(util.char_scripts("قال، نعم 。 abc,"))
+    assert ("،", "Arabic", True) in got and ("。", "Latin", True) in got and (",", "Latin", True) in got
+    assert all(sc == "Arabic" for c, sc, _ in got if c in "قالنعم")
+
+
+def test_arabic_and_cjk_punctuation_are_covered(has_fonts):
+    import hwsynth as H
+    w = H.sample_writer("print_script", "casual", seed=310)
+    text = "قال، الطالب؛ نعم ـ 我们。「好」 ２０２４"
+    w.font = lambda scr, _m=util.pick_fonts(w, text), _o=w.font: _m.get(scr) or _o(scr)
+    assert util.uncovered(w, text) == 0 and util.strip_missing(w, text) == text
+
+
+def test_kanji_of_a_japanese_page_take_its_kana_font(has_fonts):
+    import hwsynth as H
+    w = H.sample_writer("print_script", "casual", seed=310)
+    text = "開発の資料を確認してください。農業と環境"
+    m = util.pick_fonts(w, text)
+    assert m.get("Han") and m["Han"] == m.get("Hiragana")
+
+
+def test_traditional_chinese_takes_a_hand_font_of_any_script(has_fonts):
+    import hwsynth as H
+    w = H.sample_writer("print_script", "casual", seed=310)
+    text = "並且亞洲倫理債務價格內則區域協會"
+    w.font = lambda scr, _m=util.pick_fonts(w, text), _o=w.font: _m.get(scr) or _o(scr)
+    assert util.uncovered(w, text) == 0
+
+
 def test_est_lines_columns_take_the_longest():
     one = [dict(k="p", t="x" * 100)]
     two = [dict(k="cols", cols=[dict(w=0.5, items=one), dict(w=0.5, items=one)])]
@@ -106,3 +136,48 @@ def test_page_columns_and_notebook_format(has_fonts):
     img, meta = page.make(sample_plan(fmt="a5", paper="squared"), items)
     xs = [(t, b) for t, b, _ in meta["words"]]
     assert max(b[2] for t, b in xs if t == "left") < min(b[0] for t, b in xs if t == "right") + 5     # the columns do not overlap
+
+
+def test_structure_alignment_levels_and_gap_after_columns():
+    items = structure.to_items([blk("h", "Title", 200, 0, 400, 30, 16), blk("l", "Name Surname", 450, 40, 600, 52),
+                                blk("li", "- sub item", 40, 60, 600, 72) + (dict(lvl=2),), blk("p", "a" * 300, 0, 80, 600, 150)])
+    assert items[0].get("align") == "center" and items[1].get("align") == "right" and items[2]["lvl"] == 2
+    left = [blk("p", "l" * 300, 0, 100, 290, 200)]
+    right = [blk("p", "r" * 300, 310, 100, 600, 200)]
+    items = structure.to_items([blk("p", "t" * 300, 0, 0, 600, 80)] + left + right + [blk("p", "f" * 300, 0, 205, 600, 260)])
+    assert items[1]["k"] == "cols" and items[2]["gap"] == 0       # the gap after a band is measured from its bottom
+
+
+def test_src_gap_caps_blank_lines():
+    assert [page.src_gap(g) for g in (0, 1, 2, 3, 5)] == [0, 1, 1, 2, 2]
+
+
+def _pdf_page(lines, size=11, x0=72):
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    pg = doc.new_page()
+    y = 90
+    for t in lines:
+        if t is None:
+            y += 2 * size
+            continue
+        pg.insert_text((x0, y), t, fontsize=size)
+        y += size * 1.3
+    return pg
+
+
+def test_blocks_of_merges_wrapped_lines_and_keeps_short_lines():
+    from dspages.hand import texts
+    long = "word " * 16
+    pg = _pdf_page(["John Smith", None, long, long, long, "end of it.", None, "- first item", "- second item"])
+    kinds = [b[0] for b in texts.blocks_of(pg)]
+    assert kinds.count("p") == 1 and "l" in kinds and kinds.count("li") == 2
+
+
+def test_pagekind_features_poem_vs_prose():
+    from dspages.hand import pagekind
+    prose = pagekind.features(_pdf_page(["word " * 18] * 30))
+    poem = pagekind.features(_pdf_page(sum((["a short line", "another and somewhat longer line of verse", "the end", None] for _ in range(6)), [])))
+    f = dict(zip(pagekind.NAMES, zip(prose, poem)))
+    assert f["full"][0] > 0.8 > f["full"][1] and f["short"][1] > 0.5 and f["gap_big"][1] > 0.2 > f["gap_big"][0]
+    assert pagekind.kind(_pdf_page(["word " * 18] * 30))[0] == "plain"

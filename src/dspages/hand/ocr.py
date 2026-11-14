@@ -13,9 +13,9 @@ from .config import PATHS
 from .langs import script_ok
 
 TESS = PATHS.tessdata                                       # tessdata_fast of the languages
-CODE = {"hi": "hin", "mr": "mar", "ne": "nep", "bn": "ben", "as": "asm", "ta": "tam", "te": "tel", "kn": "kan", "ml": "mal", "gu": "guj",
+CODE = {"en": "eng", "hi": "hin", "mr": "mar", "ne": "nep", "bn": "ben", "as": "asm", "ta": "tam", "te": "tel", "kn": "kan", "ml": "mal", "gu": "guj",
         "pa": "pan", "or": "ori", "si": "sin", "km": "khm", "my": "mya", "ur": "urd", "ps": "pus", "sd": "snd", "ku": "kur", "ckb": "kur",
-        "sa": "san", "mai": "hin", "am": "amh", "lo": "lao", "th": "tha"}
+        "sa": "san", "mai": "hin", "am": "amh", "lo": "lao", "th": "tha", "tg": "tgk", "hy": "hye", "bg": "bul"}
 INDIC = ("ta", "te", "kn", "ml", "bn", "as", "hi", "mr", "ne", "mai", "sa", "gu", "pa", "or", "si", "my", "km")
 LATIN_BITS = re.compile(r"(?<=\s)[A-Za-z]{1,3}(?=\s|$)")
 BULLET = re.compile(r"^(?:[-–•*·]|\(?\d{1,2}[.)]|\(?[a-zA-Zऀ-෿][.)])\s")

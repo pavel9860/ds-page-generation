@@ -38,8 +38,9 @@ def pick(label, n, rng):
         try:
             pdf = pymupdf.open(f)
             no = min((int(m.group(1)) if m else 0) + p["page"], len(pdf) - 1)       # a labelled piece is page k of its document
-            blocks = T.blocks_of(pdf[no], False, with_box=True)
-        except Exception:
+            blocks = T.blocks_of(pdf[no])
+        except Exception as e:
+            print("labelled page unreadable:", f, repr(e)[:120], flush=True)
             continue
         text = " ".join(b[1] for b in blocks)
         lang = f.stem.split("_")[-1]

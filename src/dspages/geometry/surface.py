@@ -122,7 +122,9 @@ def _water(rng, S, g, scale):
     energy on a grid of the band tables' pitch over the sheet, the field resized to the working grid."""
     shape = tuple(int(round(L / d)) + 1 for L, d in zip(g.sheet_mm[::-1], cockle.pitch()[::-1]))   # (rows, cols)
     Zt = cv2.resize(1e3 * S[..., 2], shape[::-1], interpolation=cv2.INTER_LINEAR)
+    w = g.water
     h = cockle.field(shape, rng, cockle.sample(rng), dict(rms=cockle.bands(Zt).std((1, 2))), scale)
+    h = cockle.local(h, rng, rng.uniform(*w.cover), w.region * shape[0] / 360, w.dry)
     h = cv2.resize(h, S.shape[1::-1], interpolation=cv2.INTER_AREA if h.shape[0] > S.shape[0] else cv2.INTER_LINEAR)
     n = np.cross(np.gradient(S, axis=1), np.gradient(S, axis=0))
     return S + 1e-3 * h[..., None] * n / np.linalg.norm(n, axis=-1, keepdims=True) * np.sign(n[..., 2:3] + 1e-12)

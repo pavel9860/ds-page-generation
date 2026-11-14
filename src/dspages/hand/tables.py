@@ -29,15 +29,16 @@ def _try(rows, w, xh, colw, xs, room, rng, base_word, y0, pad=1.4, padv=1.1):
     for row in rows:
         lays = [w.lines(trim(t, int(4 * max(colw[c] - 2 * pad, 4) / (xh * 1.6))), max(colw[c] - 2 * pad, 4), None) if t else None
                 for c, t in enumerate(row)]
-        nl = max([ly.lines for ly in lays if ly] or [1])
-        rh = (nl - 1) * max([ly.pitch for ly in lays if ly] or [2.6 * xh]) + 2.3 * xh + 2 * padv
+        ink = [np.vstack([q.p for q in ly.strokes]) if ly and ly.strokes else None for ly in lays]
+        top = min([a[:, 1].min() for a in ink if a is not None] or [0.0])
+        rh = max([a[:, 1].max() - top for a in ink if a is not None] or [2.3 * xh]) + 2 * padv      # the row as tall as its ink
         if ytop + rh - y0 > room:
             break
         for c, ly in enumerate(lays):
             if not ly:
                 continue
             for s in ly.strokes:
-                s.p = s.p + (xs[c] + pad, ytop + padv + 1.7 * xh)
+                s.p = s.p + (xs[c] + pad, ytop + padv - top)
                 s.word += base
                 strokes.append(s)
             words += ly.words

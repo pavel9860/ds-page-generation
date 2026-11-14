@@ -66,8 +66,8 @@ def read(job):
                 res.append(dict(c, items=[dict(k="table", rows=rows)], text=text, page=pg, pages=n,
                                 path=os.path.relpath(c["path"], T.LAYOUTS)))
                 break
-    except Exception:
-        pass
+    except Exception as e:
+        print("table source failed:", c["path"], repr(e)[:120], flush=True)
     return res
 
 
