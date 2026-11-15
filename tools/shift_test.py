@@ -201,7 +201,7 @@ def languages():
 def writable(langs):
     """The languages whose script has a realistic handwriting font (hwdet.pagegen.handfonts.Restricted: the fonts text pages and forms are written in)."""
     from hwsynth.fonts import FontIndex
-    from hwdet.pagegen.handfonts import Restricted
+    from dspages.pagegen.handfonts import Restricted
     from dspages.hand.langs import EXPECT
     F = Restricted(FontIndex())
     return [l for l in langs if F.candidates(EXPECT.get(l, "Latin"))]
@@ -254,9 +254,9 @@ def _prepfile(path, page, lang):
 
 
 def prepped(path, page, lang):
-    """(batch item, meta) of hwdet.filledforms.prep_one (the fields of a form page and what each holds), made once per form pdf: PAIRS/forms_prep/
+    """(batch item, meta) of dspages.multilang.filledforms.prep_one (the fields of a form page and what each holds), made once per form pdf: PAIRS/forms_prep/
     (the gate and the filling share it; made again when the pdf is newer: a translation made again)."""
-    from hwdet import filledforms as FF
+    from dspages.multilang import filledforms as FF
     f = _prepfile(path, page, lang)
     if f.exists() and f.stat().st_mtime < Path(path).stat().st_mtime:
         f.unlink()
@@ -352,7 +352,7 @@ def translate_texts(jobs, workers):
 
 
 def _translate(job):
-    import seed_texts  # noqa: F401  (sets hwdet.gtranslate to whole tagged texts)
+    import seed_texts  # noqa: F401  (sets dspages.multilang.gtranslate to whole tagged texts)
     from dspages.hand import rare
     i, path, page, lang, tl = job
     blocks, _ = page_text(path, page, lang)
@@ -445,7 +445,7 @@ def render(job):
 
 def printed(r, t1):
     """(factors, jpeg) of the translated blocks of the layout's page set in print in place of the original text (the page before writing)."""
-    from hwdet import translate as TR
+    from dspages.multilang import translate as TR
     from hwsynth.writer import _index
     font = TR.fonts_for(" ".join(b[1] for b in t1)[:400], _index(), 1)[0]
     pm = TR.render(r["path"], r["page"], [(b[2], b[3], b[1]) for b in t1], font, r["tl"], erase="all", dpi=100)
@@ -454,9 +454,9 @@ def printed(r, t1):
 
 
 def _fill_one(job):
-    """(fields, jpeg) of one form filled with its answers (hwdet.filledforms.fill_window)."""
+    """(fields, jpeg) of one form filled with its answers (dspages.multilang.filledforms.fill_window)."""
     import cv2
-    from hwdet import filledforms as FF
+    from dspages.multilang import filledforms as FF
     fid, m, ans = job
     g, hand, _, _, _ = FF.fill_window(fid, m, ans, 0, None)
     return len(hand), jpeg(cv2.cvtColor(g, cv2.COLOR_GRAY2RGB) if g.ndim == 2 else g)
@@ -471,8 +471,8 @@ def _labels(job):
     translated once."""
     item, meta = prepped(*job)
     if any("label_en" not in b for b in item["boxes"]):
-        import seed_texts  # noqa: F401  (hwdet.gtranslate: whole tagged texts)
-        from hwdet import formfill as FO
+        import seed_texts  # noqa: F401  (dspages.multilang.gtranslate: whole tagged texts)
+        from dspages.multilang import formfill as FO
         FO.labels_en([item])
         _write(_prepfile(*job), [item, meta])
     return item
@@ -481,7 +481,7 @@ def _labels(job):
 def fill(L, workers, google):
     """The forms and their translations filled (prepped, formfill.fill_forms, fill_window); layouts of one source form share its
     filled page -> keep (i, filled / tr_filled) -> how many forms are gated 'no fields to fill' (no field found in the form or its translation)."""
-    from hwdet import formfill as FO
+    from dspages.multilang import formfill as FO
     F = L[L.kind == "form"]
     if all(have(i, "filled", r) and have(i, "tr_filled", r) for i, r in F.iterrows()):
         return 0

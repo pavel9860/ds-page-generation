@@ -8,7 +8,7 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-from hwsynth.pagegen.handfonts import can_write
+from dspages.pagegen.handfonts import can_write
 
 from .buckets import BUCKETS, bucket_of
 from .config import LANGDS as C
@@ -16,7 +16,7 @@ from .config import LANGDS as C
 
 def writable(lang):
     """True when synthetic handwriting is possible in the language's script(s) (handfonts.py)."""
-    from hwsynth.pagegen.source import scripts_of
+    from dspages.pagegen.source import scripts_of
     return can_write(scripts_of(lang))
 
 

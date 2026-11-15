@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import cv2
 import numpy as np
-from hwsynth.pagegen.hand import FontHand, writing_height
+from dspages.pagegen.hand import FontHand, writing_height
 
 from . import dettext as T
 from . import linebank as LB

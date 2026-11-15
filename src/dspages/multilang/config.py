@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from hwsynth.pagegen.config import PAGE, GenCfg, PageCfg  # noqa: F401
+from dspages.pagegen.config import PAGE, GenCfg, PageCfg  # noqa: F401
 
 from . import paths
 

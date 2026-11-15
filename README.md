@@ -88,6 +88,12 @@ rasterized, never restyled.
 
 [Apache-2.0](LICENSE), see [NOTICE](NOTICE) for third-party data and models; versions up to 0.1.0 were CC BY-NC 4.0.
 
+## pagegen: handwritten pages and filled forms (`dspages.pagegen`)
+
+Handwritten page layouts (letters, notes, lists on 8 paper types) and printed PDF forms filled by one writer, with
+text-line boxes; handwriting lines come from [hwsynth](https://github.com/pavel9860/realistic_handwriting_153_scripts).
+`pip install "ds-page-generation[pagegen]"`; [docs/PAGEGEN.md](docs/PAGEGEN.md); `python tools/generate_page.py out.png 1 plain`.
+
 ## multilang: multilingual document data (`dspages.multilang`)
 
 Text sources and page composition for document models in 90 languages, moved here from

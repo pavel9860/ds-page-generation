@@ -25,7 +25,7 @@ def known_languages():
 def check_text(text, lang):
     """(status, detected): ok (the text is in `lang`)"""
     import langid
-    from hwsynth.pagegen.source import scripts_of
+    from dspages.pagegen.source import scripts_of
     from hwsynth.scripts import text_script
     from langdetect import DetectorFactory, detect_langs
     DetectorFactory.seed = 0
@@ -87,7 +87,7 @@ def lexicon_share(text, lang):
 
 def clean_ok(text, lang, max_foreign=0.10, lexicon=True):
     """False for a text with control or private-use characters"""
-    from hwsynth.pagegen.source import scripts_of
+    from dspages.pagegen.source import scripts_of
     if re.search(C.mojibake, text) or any(ch == "\ufffd" or 0xE000 <= ord(ch) <= 0xF8FF or (ord(ch) < 32 and ch not in "\n\t") for ch in text):
         return False
     words = text.split()

@@ -28,7 +28,7 @@ def test_keyed_ignores_ids_out_of_range_and_repeats():
 
 @pytest.mark.parametrize("lost, garbled", [(0, False), (5, False), (6, True), (10, True)])
 def test_gate_more_than_half_lost(monkeypatch, lost, garbled):
-    from hwdet import gtranslate as GT
+    from dspages.multilang import gtranslate as GT
     blocks = [("p", f"text {i}", (0, i, 10, i + 1)) for i in range(10)]
     monkeypatch.setattr(GT, "lines", lambda src, tl, sl="auto": [None if i < lost else f"t{i}" for i in range(len(src))])
     out = rare.translated(blocks, "hi", "en")

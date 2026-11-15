@@ -1,4 +1,4 @@
-"""One page reader for every tool: legacy fonts are decoded wherever a page's text is read (dspages.hand.texts, hwdet.translate, hwdet render_form)."""
+"""One page reader for every tool: legacy fonts are decoded wherever a page's text is read (dspages.hand.texts, dspages.multilang.translate, hwdet render_form)."""
 from pathlib import Path
 
 import pymupdf
@@ -33,8 +33,8 @@ def test_words_carry_the_decoded_text():
     assert all(0 <= w[0] <= w[2] <= r.width + 1 and 0 <= w[1] <= w[3] <= r.height + 1 for w in words)
 
 
-def test_hwdet_reads_through_the_one_reader():
-    from hwdet import translate as TR
+def test_multilang_reads_through_the_one_reader():
+    from dspages.multilang import translate as TR
     with pymupdf.open(LEGACY[0]) as doc:
         ls = TR.lines(doc[LEGACY[1]], LEGACY[2])
         ps = TR.paragraphs(doc[LEGACY[1]], lang=LEGACY[2])
@@ -45,16 +45,16 @@ def test_hwdet_reads_through_the_one_reader():
 def test_form_labels_are_decoded():
     from dataclasses import replace
 
-    from hwdet.config import Config
-    from hwdet.pagegen import forms
+    from dspages.multilang.config import Config
+    from dspages.pagegen import forms
     f = forms.render_form(str(LEGACY[0]), LEGACY[1], replace(Config(), long_side=1754), lang=LEGACY[2])
     assert f.spots and not any(c in s.get("label", "") for s in f.spots for c in "³ÖŸßµ¸ü")      # no legacy codes in a label
 
 
 def test_no_tool_reads_raw_text_for_its_words():
     """The tools that read a page's words go through dspages.hand.texts (no get_text words / dict of their own)."""
-    hw = Path(__file__).parents[2] / "handwriting_detection" / "src" / "hwdet"
-    for f in (hw / "translate.py", hw / "pagegen" / "forms.py", Path(__file__).parents[1] / "tools" / "seed_texts.py"):
+    src = Path(__file__).parents[1] / "src" / "dspages"
+    for f in (src / "multilang" / "translate.py", src / "pagegen" / "forms.py", Path(__file__).parents[1] / "tools" / "seed_texts.py"):
         s = f.read_text()
         assert 'get_text("words"' not in s and 'get_text("text"' not in s and "def _para(" not in s, f
 

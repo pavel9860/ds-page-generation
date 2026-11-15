@@ -6,7 +6,7 @@ from dataclasses import replace
 from dspages.multilang.buckets import NAMES
 from dspages.multilang.config import Config
 from dspages.multilang.paths import FILLING
-from hwsynth.pagegen import forms
+from dspages.pagegen import forms
 
 
 def main():

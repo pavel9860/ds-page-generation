@@ -1,8 +1,12 @@
 """Translation of bank lines without a browser: planning, batching, cutting, raw kept."""
 import importlib
+import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
+
+import pytest
 
 from dspages.multilang import gtranslate
 
@@ -10,6 +14,16 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "tools" / "multilang" / "tran
 gt = importlib.import_module("gt_lines")
 PAR = "Please open the file first, then read the first page. It holds the rules, which every member must know. Ask the clerk if unsure."
 LONG = " ".join(f"w{i}" for i in range(37))
+
+
+@pytest.fixture(autouse=True)
+def plain_lines(monkeypatch):
+    """gtranslate.lines as shipped: tools/seed_texts.py replaces it at import (tagged texts) for the rest of the process."""
+    spec = importlib.util.spec_from_file_location("dspages.multilang._gtranslate_fresh", gtranslate.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    f = fresh.lines
+    monkeypatch.setattr(gtranslate, "lines", types.FunctionType(f.__code__, vars(gtranslate), f.__name__, f.__defaults__, f.__closure__))
 
 
 def test_cutting_loses_no_word_and_makes_short_lines():

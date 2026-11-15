@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "tools"))
 sys.path.insert(0, str(Path(__file__).parents[2] / "handwriting_detection" / "src"))
 ST = pytest.importorskip("shift_test")
 from dspages.hand import rare  # noqa: E402
-from hwdet import filledforms as FF  # noqa: E402
-from hwdet import formfill as FO  # noqa: E402
+from dspages.multilang import filledforms as FF  # noqa: E402
+from dspages.multilang import formfill as FO  # noqa: E402
 
 TEXT = [["p", "word " * 200, [0, 0, 100, 10], 10.0, {}]]
 
@@ -139,7 +139,7 @@ def test_cached_text_as_the_reader_gives_it(pairs, monkeypatch):
     monkeypatch.setattr(rare, "page_blocks", lambda *a: ([table], "text layer"))
     first, again = ST.page_text(pdf, 0, "ru"), ST.page_text(pdf, 0, "ru")                 # made, then read from the cache
     assert first == again and type(again[0][0]) is tuple
-    from hwdet import gtranslate as GT
+    from dspages.multilang import gtranslate as GT
     monkeypatch.setattr(GT, "lines", lambda src, tl, sl="auto": [s.upper() for s in src])
     assert rare.translated(again[0], "hi", "ru")[0][4]["rows"] == [["A", "B"]]           # a table block from the cache translates
 
@@ -164,8 +164,8 @@ def test_translated_form_outlines_read_as_no_text(tmp_path):
 def test_form_page_read_once_for_its_target_languages(tmp_path, monkeypatch):
     import seed_texts
     import pymupdf
-    from hwdet import translate as TR
-    from hwdet import gtranslate as GT
+    from dspages.multilang import translate as TR
+    from dspages.multilang import gtranslate as GT
     from dspages.layout import legacy
     pdf = tmp_path / "f_ru.pdf"
     with pymupdf.open() as d:

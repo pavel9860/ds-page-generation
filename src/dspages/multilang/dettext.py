@@ -98,7 +98,7 @@ class Values:
     def _digits(self, s):
         sc = NATIVE_DIGITS.get(self.lang)
         if sc and self.rng.random() < 0.5:
-            from hwsynth.pagegen.canvas import native_digits
+            from dspages.pagegen.canvas import native_digits
             m = {str(i): chr(0x06F0 + i) for i in range(10)} if sc == "Persian" else native_digits(sc)
             return "".join(m.get(c, c) for c in s)
         return s

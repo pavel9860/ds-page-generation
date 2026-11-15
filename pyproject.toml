@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ds-page-generation"
-version = "0.2.0"
+version = "0.2.1"
 description = "Synthetic document photos with exact UV and 3D maps: layouts, physical page geometry, rendering"
 readme = "README.md"
 license = "Apache-2.0"
@@ -30,7 +30,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-xdist>=3.5", "matplotlib>=3.8"]
 export = ["ultralytics>=8.3"]
-multilang = ["hwsynth[pages]", "faker>=30", "requests>=2.31", "regex>=2024.0", "wordfreq>=3.1", "ftfy>=6.2"]   # dspages.multilang
+multilang = ["hwsynth", "faker>=30", "requests>=2.31", "regex>=2024.0", "wordfreq>=3.1", "ftfy>=6.2"]   # dspages.multilang
+pagegen = ["hwsynth"]                                                              # dspages.pagegen: handwritten pages, filled forms
 hand = ["hwsynth", "regex>=2023.0", "scikit-image>=0.22", "tesserocr>=2.7"]       # handwritten pages (dspages.hand)
 
 [project.scripts]

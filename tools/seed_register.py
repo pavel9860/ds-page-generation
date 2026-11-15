@@ -1,8 +1,8 @@
 """The generated seed pages of a run (tools/seed_run.sh: hw/ = hand pages of hw and notes texts, filled/ = filled forms) into the corpus: each page as
 Layouts/generated/<sha12>_<lang>.jpg (768 x 1024, JPEG 90, as the embedded pages), registered by dspages.ingest (ids above the largest) and merged into
 emb_out, hw_det and scan_pct as ingest run RUN (no dspages.ingest place: the files stay in generated/).
-  boxes   from the layout, in the detector's units (one box per line): hand pages hwdet.handpages.line_boxes of the written words, no print;
-          filled forms hwdet.filledforms.fill_window (hand boxes, print lines of the form)
+  boxes   from the layout, in the detector's units (one box per line): hand pages dspages.multilang.handpages.line_boxes of the written words, no print;
+          filled forms dspages.multilang.filledforms.fill_window (hand boxes, print lines of the form)
   fill / pic  dspages.fillpic detector;  embedding  the vectors of tools/shift_test.py embed (run/emb_*.npz), pages without one embedded here
 Layouts/generated/generated.csv: file, cls (hw / notes / filled), lang, seed, page (the seed layout of seed_pick), src (language of a translated seed), hw, text, fill, pic.
 
@@ -30,7 +30,7 @@ GEN = LAYOUTS / "generated"
 
 def hand_pages(run):
     """(image, cls, lang, layout, page, hw, text) of the hand pages (layout = the seed document); notes are the pages of the notes texts."""
-    from hwdet.handpages import line_boxes
+    from dspages.multilang.handpages import line_boxes
     notes = {(t["doc"], t["page"], t["lang"]) for t in map(json.loads, open(P.OUT / "notes.jsonl"))}
     for m in map(json.loads, open(run / "hw" / "meta_0.jsonl")):
         f = run / "hw" / "pages" / f"{m['i']:05d}.jpg"
@@ -41,7 +41,7 @@ def hand_pages(run):
 
 def form_pages(run):
     """(image, 'filled', lang, layout, page, hw, text) of the filled forms; layout = the form page filled (its translation when the seed was translated)."""
-    from hwdet.filledforms import fill_window
+    from dspages.multilang.filledforms import fill_window
     meta = json.loads((run / "work" / "forms_work" / "meta.json").read_text())
     answers = json.loads((run / "filled" / "answers.json").read_text())
     for fid, ans in answers.items():

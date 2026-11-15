@@ -163,7 +163,7 @@ def paragraph_pool(job):
     """(layouts, lang, out_dir, files) -> {role"""
     layouts, lang, out, nfiles = job
     import pymupdf
-    from hwsynth.pagegen.source import scripts_of
+    from dspages.pagegen.source import scripts_of
 
     from .langcheck import check_text, clean_ok, repair
     from .translate import paragraphs

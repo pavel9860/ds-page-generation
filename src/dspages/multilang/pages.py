@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 import cv2
 import numpy as np
 import pymupdf
-from hwsynth.pagegen.paper import blend, degrade, free_mask, page_segments
+from dspages.pagegen.paper import blend, degrade, free_mask, page_segments
 
 from . import bank
 from .config import HW, PRINT, Config

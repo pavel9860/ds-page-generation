@@ -5,8 +5,8 @@ import random
 from dataclasses import replace
 from pathlib import Path
 
-from hwsynth.pagegen import forms
-from hwsynth.pagegen.hand import writing_height
+from dspages.pagegen import forms
+from dspages.pagegen.hand import writing_height
 from PIL import Image
 
 from .config import LANGDS as C

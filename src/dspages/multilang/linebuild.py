@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import pymupdf
-from hwsynth.pagegen.source import well_formed
+from dspages.pagegen.source import well_formed
 
 from .buckets import BUCKETS
 from .config import LANGDS as D

@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 import cv2
 import numpy as np
-from hwsynth.pagegen.canvas import line_boxes, new_writer
+from dspages.pagegen.canvas import line_boxes, new_writer
 
 from . import textpool
 from .config import Config

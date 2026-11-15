@@ -4,8 +4,8 @@ import os
 from collections import defaultdict
 from pathlib import Path
 
-from hwsynth.pagegen.handfonts import can_write
-from hwsynth.pagegen.source import scripts_of
+from dspages.pagegen.handfonts import can_write
+from dspages.pagegen.source import scripts_of
 
 from .buckets import BUCKETS
 from .config import LANGDS as C
