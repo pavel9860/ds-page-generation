@@ -108,7 +108,7 @@ def translated(blocks, lg, sl=DONOR):
     """The blocks with their texts translated by Google Translate (hwdet.gtranslate), structure and boxes kept; None when the text is garbled (more than LOST of the blocks lost)."""
     if str(HWDET) not in sys.path:
         sys.path.insert(0, str(HWDET))
-    from hwdet import gtranslate as GT
+    from dspages.multilang import gtranslate as GT
     rows = [b[4].get("rows") if len(b) > 4 and isinstance(b[4], dict) else None for b in blocks]     # the cells of a table block are its text
     src = [b[1] for b in blocks] + [c for r in rows if r for row in r for c in row]
     tr = GT.lines(src, lg, sl)

@@ -86,4 +86,20 @@ rasterized, never restyled.
 
 ## License
 
-[CC BY-NC 4.0](LICENSE)
+[Apache-2.0](LICENSE), see [NOTICE](NOTICE) for third-party data and models; versions up to 0.1.0 were CC BY-NC 4.0.
+
+## multilang: multilingual document data (`dspages.multilang`)
+
+Text sources and page composition for document models in 90 languages, moved here from
+[handwriting-print-detector](https://github.com/pavel9860/handwriting-print-detector) at 0.2.0.
+`pip install "ds-page-generation[multilang,hand]"`; data roots come from `MULTILANG_ROOT` (or the single overrides in
+`dspages/multilang/paths.py`).
+
+| area | modules |
+|---|---|
+| text | `textpool`, `linebank`, `linebuild` (short lines per language), `langcheck` (encoding / OCR / language checks), `dettext`, `formfill` (answers for form fields) |
+| translation | `gtranslate` (Google Translate over HTTP), `translate` (translated pages for missing languages), `langdoc` |
+| pages | `realpages`, `pagesearch`, `langpages`, `synthpages`, `detlayouts`, `filledforms`, `notes` (reader notes on printed pages), `handpages`, `pages` (composer), `bank` / `realbank` (handwriting line banks), `hwlines`, `hwpick`, `pictures` |
+| language dataset | `buckets` (language classes), `bucketing`, `langds`, `inventory` |
+
+Drivers live in `tools/multilang/{forms,translation,langds}`; tests in `tests/multilang`.

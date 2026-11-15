@@ -20,10 +20,10 @@ KNN_K, KNN_MIN, KNN_MIN_LANG = 15, 0.5, 20
 
 
 def garbled(text):
-    """True for text a PDF extraction corrupted, whatever the page's language label says: Google Translate (source language auto-detected; hwdet.gtranslate.lines,
+    """True for text a PDF extraction corrupted, whatever the page's language label says: Google Translate (source language auto-detected; dspages.multilang.gtranslate.lines,
     the browser where tools/seed_texts.py is imported) gives English whose word count (ICU word breaks: Chinese, Japanese, Thai ... have no spaces) is not
     comparable with the input's (COMPARABLE). No answer from Google is an error, not a verdict."""
-    from hwdet import gtranslate as GT
+    from dspages.multilang import gtranslate as GT
     t = " ".join(text.split())[:TEXT_CHARS]
     if not words(t):
         return True

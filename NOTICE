@@ -1,0 +1,11 @@
+ds-page-generation (dspages)
+Copyright 2026 pavel9860
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE).
+Redistributions must keep this NOTICE and credit the original project:
+https://github.com/pavel9860/ds-page-generation
+
+Third-party material keeps its own license and is NOT covered by Apache-2.0:
+- Source documents, fonts, corpora and model weights downloaded or referenced by the tools (see RESOURCES.md) keep the
+  terms of their publishers; the generated data inherits restrictions of the inputs used to make it.
+- Ultralytics YOLO (used by optional detectors) is AGPL-3.0 or Ultralytics Enterprise License.

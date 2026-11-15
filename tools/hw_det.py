@@ -26,7 +26,7 @@ UV = Path(PATHS.uvtm)
 LAYOUTS = Path(PATHS.layouts)
 HW = UV / "Labels" / "hw_detection"
 EMB = UV / "Labels" / "embedding" / "emb_out"
-WEIGHTS = Path("/run/media/p/D/BUISNESS/handwriting_detection/models/yolo26s-ds3k3250v3.pt")
+WEIGHTS = Path("/run/media/p/D/BUISNESS/handwriting_detection/models/hwdet-s-1.0.0.pt")
 CONF, CHECK, STEP = 0.25, 16, 10                     # conf floor; check group; shard number step of a new group
 HEX = re.compile(r"(?<![0-9a-f])[0-9a-f]{12}(?![0-9a-f])")
 

@@ -10,5 +10,5 @@ ACQ = LAYOUTS / "acquired"                         # pdf/<sha12>.pdf (dspages.ac
 LENS = ACQ / "lens"
 ACQ_DB = INFO / "acquire" / "acquire.sqlite"
 PARQUET = INFO / "scan_pct.parquet"
-HW_WEIGHTS = Path("/run/media/p/D/BUISNESS/handwriting_detection/models/yolo26s-ds3k3250v3.pt")
+HW_WEIGHTS = Path("/run/media/p/D/BUISNESS/handwriting_detection/models/hwdet-s-1.0.0.pt")
 LANG_MODELS = CC_ROOT / "models" / "langmodels"

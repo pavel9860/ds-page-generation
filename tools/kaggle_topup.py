@@ -19,7 +19,7 @@ from dspages.hand.config import PATHS
 
 WORK = Path(PATHS.layouts) / "archive" / "info" / "pages_topup" / "kaggle"
 EMBED = Path("/run/media/p/D/BUISNESS/corpus_collecting/pagetype/embed_kaggle.py")
-WEIGHTS = Path("/run/media/p/D/BUISNESS/handwriting_detection/models/yolo26s-ds3k3250v3.pt")
+WEIGHTS = Path("/run/media/p/D/BUISNESS/handwriting_detection/models/hwdet-s-1.0.0.pt")
 WEIGHTS_DS = "pavel9860/hwdet-yolo26s-weights"
 RUNS = {"A": (18, 19), "B": (20, 21)}
 KAGGLE = [sys.executable, "-W", "ignore", "-m", "kaggle"]

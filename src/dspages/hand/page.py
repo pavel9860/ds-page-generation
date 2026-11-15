@@ -315,7 +315,7 @@ def _setup(plan, items):
     rng = np.random.default_rng(plan["seed"])
     pp = paper(plan["paper"], rng, plan.get("fmt", "a4"), plan.get("dense", False))
     w = H.sample_writer(plan["persona"], plan["style"], seed=plan["wseed"])
-    from hwdet.pagegen.handfonts import Restricted
+    from hwsynth.pagegen.handfonts import Restricted
     w.fonts = Restricted(w.fonts)                                 # the realistic fonts of each script (one policy with the filled forms)
     w.pen = Pen.sample(np.random.default_rng(plan["seed"] + 7), {plan["pen"]: 1})
     w.pen.width *= plan.get("pen_scale", 1.0)

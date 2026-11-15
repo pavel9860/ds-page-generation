@@ -1,0 +1,59 @@
+"""Classes of the page-language classifier"""
+BUCKETS = {
+    "iberian": "es ca gl pt",
+    "french": "fr", "italian": "it", "romanian": "ro",
+    "west_germanic": "en", "german": "de", "dutch_afrikaans": "nl af",
+    "scandinavian": "da no nb sv",
+    "south_slavic_latin": "hr bs sl",
+    "west_slavic": "cs sk pl",
+    "malay": "id ms tl fil",
+    "swahili_zulu": "sw zu", "somali": "so",
+    "finnic_basque": "fi et eu",
+    "baltic": "lt lv",
+    "turkic_latin": "tr az uz",
+    "hungarian": "hu", "albanian": "sq", "welsh": "cy", "icelandic": "is", "haitian": "ht", "vietnamese": "vi", "irish": "ga",
+    "slavic_cyrillic": "ru uk be bg mk sr",
+    "turkic_cyrillic": "kk kz ky mn tg tj",
+    "greek": "el", "armenian": "hy", "georgian": "ka",
+    "arabic": "ar ckb ku ur fa ps sd ug",
+    "hebrew": "he yi", "thaana": "dv",
+    "devanagari_hindi": "hi mai", "devanagari_marathi": "mr ne sa",
+    "bengali": "bn as",
+    "gujarati": "gu", "gurmukhi": "pa", "tamil": "ta", "telugu": "te", "kannada_sinhala": "kn si", "malayalam": "ml", "oriya_meetei": "or mni",
+    "thai_lao": "th lo", "khmer_myanmar": "km my", "tibetan": "bo dz",
+    "chinese": "zh", "japanese": "ja", "korean": "ko", "ethiopic": "am ti",
+}
+OF = {lang: name for name, langs in BUCKETS.items() for lang in langs.split()}
+
+
+OTHER_SCRIPT = {
+    "sr": {"Latin": "south_slavic_latin"}, "bs": {"Cyrillic": "slavic_cyrillic"}, "uz": {"Cyrillic": "turkic_cyrillic"},
+    "az": {"Cyrillic": "turkic_cyrillic"}, "kk": {"Latin": "turkic_latin"}, "ku": {"Latin": "turkic_latin"},
+    "ug": {"Latin": "turkic_latin", "Cyrillic": "turkic_cyrillic"}, "tg": {"Latin": "turkic_latin"}, "pa": {"Arabic": "persian"},
+    "ms": {"Arabic": "persian"}, "sd": {"Devanagari": "devanagari_hindi"}, "mni": {"Bengali": "bengali"},
+}
+
+
+def bucket_of(lang, script=None):
+    """Class of a language code, by the script of the page for the languages written in more than one"""
+    return OTHER_SCRIPT.get(lang, {}).get(script) or OF.get(lang, lang)
+
+
+def members(bucket):
+    return BUCKETS.get(bucket, bucket).split()
+
+
+NAMES = dict(
+    af="Afrikaans", am="Amharic", ar="Arabic", **{"as": "Assamese"}, az="Azerbaijani", be="Belarusian", bg="Bulgarian", bo="Tibetan",
+    bs="Bosnian", ca="Catalan", ckb="Central Kurdish (Sorani, Arabic script)", cs="Czech", cy="Welsh", da="Danish", de="German",
+    dz="Dzongkha", el="Greek", en="English", es="Spanish", et="Estonian", eu="Basque", fa="Persian", fi="Finnish", fr="French",
+    ga="Irish", gl="Galician", gu="Gujarati", he="Hebrew", hi="Hindi", hr="Croatian", ht="Haitian Creole", hu="Hungarian",
+    hy="Armenian", id="Indonesian", is_="Icelandic", it="Italian", ja="Japanese", ka="Georgian", kk="Kazakh", km="Khmer",
+    kn="Kannada", ko="Korean", ku="Kurdish (Kurmanji, Latin script)", ky="Kyrgyz", lo="Lao", lt="Lithuanian", lv="Latvian",
+    mai="Maithili (Devanagari)", mk="Macedonian", ml="Malayalam", mn="Mongolian (Cyrillic)", mni="Manipuri (Meitei)", mr="Marathi",
+    ms="Malay", my="Burmese", ne="Nepali", nl="Dutch", no="Norwegian", **{"or": "Odia"}, pa="Punjabi (Gurmukhi)", pl="Polish",
+    ps="Pashto", pt="Portuguese", ro="Romanian", ru="Russian", sa="Sanskrit (Devanagari)", sd="Sindhi (Arabic script)", si="Sinhala",
+    sk="Slovak", sl="Slovenian", so="Somali", sq="Albanian", sr="Serbian", sv="Swedish", sw="Swahili", ta="Tamil", te="Telugu",
+    tg="Tajik", th="Thai", ti="Tigrinya", tl="Tagalog", ug="Uyghur (Arabic script)", uk="Ukrainian", ur="Urdu", uz="Uzbek",
+    vi="Vietnamese", yi="Yiddish", zh="Chinese", zu="Zulu")
+NAMES["is"] = NAMES.pop("is_")
