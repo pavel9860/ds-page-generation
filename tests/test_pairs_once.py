@@ -14,10 +14,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "tools"))
 ST = pytest.importorskip("shift_test")
+from conftest import needs_fonts, needs_tables
+
 from dspages import paths as _P  # noqa: E402
 from dspages.hand import rare  # noqa: E402
 from dspages.multilang import filledforms as FF  # noqa: E402
 from dspages.multilang import formfill as FO  # noqa: E402
+
+pytestmark = [needs_fonts, needs_tables]
 
 TEXT = [["p", "word " * 200, [0, 0, 100, 10], 10.0, {}]]
 

@@ -12,6 +12,7 @@ python -m dspages.prep.manifest --out <paths.manifest>
 
 import argparse
 import json
+import os
 import time
 import zlib
 from collections import Counter, defaultdict
@@ -37,6 +38,8 @@ LAYOUTS = Paths().layouts
 
 def _init():
     cv2.setNumThreads(1)
+    if not os.path.exists(Paths().jpeg_artifacts):  # optional list of PDF images with strong JPEG artifacts
+        return
     with open(Paths().jpeg_artifacts, encoding="utf-8") as f:
         for r in map(json.loads, f):
             _JPEG.setdefault(r["path"], set()).add(r["xref"])

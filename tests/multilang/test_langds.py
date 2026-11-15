@@ -221,6 +221,10 @@ def _pool(lang):
 
 def _make(kind, lang, tmp_path, seed=1):
     pytest.importorskip("hwsynth")
+    from hwsynth.config import Paths
+
+    if not any(Paths().fonts.glob("*.ttf")):
+        pytest.skip("hwsynth fonts not fetched")
     from dspages.multilang.synthpages import make_synth
 
     try:

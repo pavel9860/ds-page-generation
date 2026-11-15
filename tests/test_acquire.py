@@ -1,4 +1,7 @@
 import numpy as np
+import pytest
+
+pytest.importorskip("torch", reason="needs the corpus extra")
 
 from dspages.acquire import urlmodel
 from dspages.ingest import litefeat

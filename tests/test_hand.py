@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 
 pytest.importorskip("hwsynth")
+from conftest import needs_fonts
+
 from dspages.hand import check, langs, page, paper, plan, structure, util
+
+pytestmark = [needs_fonts]
 
 
 def blk(k, t, x0, y0, x1, y1, size=10.0):

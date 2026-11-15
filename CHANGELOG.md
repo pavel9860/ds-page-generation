@@ -2,6 +2,14 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions: [SemVer](https://semver.org/).
 
+## 0.3.1 (2026-11-15)
+### Fixed
+- Dependencies the code imports are declared: core `pandas`, `pyarrow`, `scikit-learn`, `threadpoolctl`, `uharfbuzz`,
+  `regex`; `multilang` adds `langdetect`; new extras `legacy` (`mini-racer`, Padma tables) and `corpus` (acquire,
+  ingest, fillpic: `duckdb`, `httpx`, `xgboost`, `torch`, `ultralytics`, `kaggle`).
+- Tests skip without the corpus, its legacy-font tables or hwsynth fonts (`needs_tables`, `needs_fonts`); the two
+  full-render CLI runs are `slow`. The JPEG-artifact list of `prep.manifest` is optional.
+
 ## 0.3.0 (2026-11-15)
 ### Changed
 - One place for data locations: `dspages/paths.py` (environment variables `DSPAGES_ROOT`, `DSPAGES_CORPUS`,

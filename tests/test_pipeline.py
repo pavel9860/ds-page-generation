@@ -136,6 +136,7 @@ def _raster_manifest(tmp_path, n, missing):
     return path
 
 
+@pytest.mark.slow
 def test_a_failing_sample_is_logged_and_the_run_goes_on_and_resumes(tmp_path):
     man = _raster_manifest(tmp_path, 4, missing={2})
     out = tmp_path / "run"
@@ -151,6 +152,7 @@ def test_a_failing_sample_is_logged_and_the_run_goes_on_and_resumes(tmp_path):
     assert sum(1 for _ in open(out / "meta.jsonl")) == len(done)
 
 
+@pytest.mark.slow
 def test_a_stopped_run_goes_on_and_a_run_of_another_manifest_or_size_is_refused(tmp_path):
     man = _raster_manifest(tmp_path, 4, missing=set())
     out = tmp_path / "run"

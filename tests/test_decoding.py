@@ -6,9 +6,12 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import needs_tables
 
 from dspages import paths as _P  # noqa: E402
 from dspages.layout import legacy_tables as LT
+
+pytestmark = [needs_tables]
 
 TE = Path(f"{_P.ROOT}/Layouts/text/8759dd7000d8_te.pdf")
 corpus = pytest.mark.skipif(not TE.exists(), reason="corpus not mounted")

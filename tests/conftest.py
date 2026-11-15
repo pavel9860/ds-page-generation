@@ -8,6 +8,24 @@ from dspages.config import get_preset
 DATA = Path(__file__).parent / "data"
 
 
+def _hwsynth_fonts():
+    try:
+        from hwsynth.config import Paths
+    except ImportError:
+        return False
+    return any(Paths().fonts.glob("*.ttf"))
+
+
+def _legacy_tables():
+    from dspages.paths import INFO
+
+    return (INFO / "legacy" / "tables").is_dir()
+
+
+needs_fonts = pytest.mark.skipif(not _hwsynth_fonts(), reason="hwsynth fonts not fetched")
+needs_tables = pytest.mark.skipif(not _legacy_tables(), reason="legacy-font tables of the corpus not on this machine")
+
+
 def small(name):
     """The preset on a coarse grid with few blend slices: same physics, fast."""
     P = get_preset(name)

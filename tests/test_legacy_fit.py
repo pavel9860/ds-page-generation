@@ -1,7 +1,11 @@
 import random
 
+from conftest import needs_tables
+
 from dspages.layout import legacy_fit as F
 from dspages.layout import legacy_tables as T
+
+pytestmark = [needs_tables]
 
 CIPHER = {"a": "ક", "b": "ખ", "c": "ગ", "d": "ઘ", "e": "ચ", "f": "છ", "g": "જ", "h": "ઝ", "i": "ટ", "j": "ઠ"}
 

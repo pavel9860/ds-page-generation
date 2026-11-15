@@ -1,3 +1,5 @@
+from conftest import needs_fonts
+
 """Line bank and field values"""
 
 import random
@@ -64,6 +66,7 @@ def test_email_ascii_and_date_formats():
     assert len({v.date() for _ in range(40)}) > 30
 
 
+@needs_fonts
 def test_page_note_from_a_full_bank():
     import numpy as np
 
