@@ -11,6 +11,7 @@ forms_filled the current models are least sure of, sampled by the language distr
 python tools/pagekind_border.py pick --out DIR [--n 300]
 python tools/pagekind_border.py label --out DIR
 """
+
 import argparse
 import json
 import shutil
@@ -26,12 +27,27 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import normalize
 
 sys.path.insert(0, str(Path(__file__).parent))
-import pagekind_eval as V                                    # noqa: E402
-from dspages.hand import corpus                               # noqa: E402
-from dspages.hand import pagekind as PK                       # noqa: E402
+import pagekind_eval as V  # noqa: E402
 
-SIX = ("plain", "poems", "formatted", "tables", "forms_blank", "forms_filled", "bureaucracy", "certificates", "flyers", "magazines",
-       "scientific", "maps", "blueprints", "music")         # labels kept from the agents; anything else is "skip"
+from dspages.hand import corpus  # noqa: E402
+from dspages.hand import pagekind as PK  # noqa: E402
+
+SIX = (
+    "plain",
+    "poems",
+    "formatted",
+    "tables",
+    "forms_blank",
+    "forms_filled",
+    "bureaucracy",
+    "certificates",
+    "flyers",
+    "magazines",
+    "scientific",
+    "maps",
+    "blueprints",
+    "music",
+)  # labels kept from the agents; anything else is "skip"
 ROOT = V.UV / "pagetype_labelled"
 NEW_EMB = V.CACHE / "pagekind_new_embeddings.npz"
 
@@ -39,8 +55,13 @@ NEW_EMB = V.CACHE / "pagekind_new_embeddings.npz"
 def labelled():
     """(embeddings, folder class, stem) of every labelled image that has an embedding (the folders are the labels)."""
     pe = V.page_embeddings()
-    rows = [(pe[f.stem], c.name, f.stem) for c in sorted(ROOT.iterdir()) if c.is_dir() and c.name != "cache" for f in c.glob("*.jpg")
-            if f.stem in pe]
+    rows = [
+        (pe[f.stem], c.name, f.stem)
+        for c in sorted(ROOT.iterdir())
+        if c.is_dir() and c.name != "cache"
+        for f in c.glob("*.jpg")
+        if f.stem in pe
+    ]
     return np.array([r[0] for r in rows]), [r[1] for r in rows], {r[2] for r in rows}
 
 
@@ -48,7 +69,11 @@ def render(pdf, no, out, long=1024):
     page = pymupdf.open(pdf)[no]
     z = long / max(page.rect.width, page.rect.height)
     pix = page.get_pixmap(matrix=pymupdf.Matrix(z, z), colorspace=pymupdf.csRGB, alpha=False)
-    cv2.imwrite(str(out), np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, 3)[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, 90])
+    cv2.imwrite(
+        str(out),
+        np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, 3)[..., ::-1],
+        [cv2.IMWRITE_JPEG_QUALITY, 90],
+    )
 
 
 def _fast(job):
@@ -64,23 +89,37 @@ def pick(out, n, seed=0):
     rng = np.random.default_rng(seed)
     E, lab, stems = labelled()
     classes = sorted(set(lab))
-    emb_model = LogisticRegression(C=0.3, max_iter=5000, class_weight="balanced").fit(normalize(E), [classes.index(c) for c in lab])
+    emb_model = LogisticRegression(C=0.3, max_iter=5000, class_weight="balanced").fit(
+        normalize(E), [classes.index(c) for c in lab]
+    )
     six = [classes.index(c) for c in SIX]
 
     db = corpus.connect()
     lang = corpus.languages(db)
-    paths = {d: p for d, p, _ in corpus.pdf_documents(db)}         # digital text layer (plan.cls == text)
-    used = {stem.split("_")[1] for stem in stems if len(stem.split("_")) > 1} | {corpus.doc_id(json.loads(l)["pdf"]) for l in open(V.SRC)}
+    paths = {d: p for d, p, _ in corpus.pdf_documents(db)}  # digital text layer (plan.cls == text)
+    used = {stem.split("_")[1] for stem in stems if len(stem.split("_")) > 1} | {
+        corpus.doc_id(json.loads(l)["pdf"]) for l in open(V.SRC)
+    }
     man = {r["id"]: corpus.doc_id(r["path"]) for r in map(json.loads, open(V.UV / "emb_out" / "manifest.jsonl"))}
     ids = np.load(V.UV / "emb_out" / "ids.npy")
-    keep = np.array([man.get(int(d)) in paths and man.get(int(d)) in lang and man.get(int(d)) not in used for d, _ in ids])
+    keep = np.array(
+        [man.get(int(d)) in paths and man.get(int(d)) in lang and man.get(int(d)) not in used for d, _ in ids]
+    )
     rows = np.flatnonzero(keep)
     emb = np.load(V.UV / "emb_out" / "embeddings.npy", mmap_mode="r")
-    P = np.vstack([emb_model.predict_proba(normalize(np.asarray(emb[rows[a:a + 20000]], np.float32))) for a in range(0, len(rows), 20000)])
+    P = np.vstack(
+        [
+            emb_model.predict_proba(normalize(np.asarray(emb[rows[a : a + 20000]], np.float32)))
+            for a in range(0, len(rows), 20000)
+        ]
+    )
     top2 = np.argsort(-P, 1)[:, :2]
     in_six = np.isin(top2, six).all(1)
     margin = P[np.arange(len(P)), top2[:, 0]] - P[np.arange(len(P)), top2[:, 1]]
-    print(f"{len(rows)} embedded pages of digital documents; {in_six.sum()} with both likeliest classes among the six", flush=True)
+    print(
+        f"{len(rows)} embedded pages of digital documents; {in_six.sum()} with both likeliest classes among the six",
+        flush=True,
+    )
 
     docs = [man[int(ids[r, 0])] for r in rows]
     share = Counter(lang[d] for d in set(docs))
@@ -95,7 +134,7 @@ def pick(out, n, seed=0):
         if k:
             ix = sorted(ix, key=lambda i: margin[i])
             seen, sel = set(), []
-            for i in ix:                                      # one page per document
+            for i in ix:  # one page per document
                 if docs[i] not in seen:
                     seen.add(docs[i])
                     sel.append(i)
@@ -125,20 +164,39 @@ def pick(out, n, seed=0):
     for k in np.argsort(m2):
         sel_by[lang[docs[short[k]]]].append(k)
     final = []
-    for lg, q in sorted(quota.items(), key=lambda kv: -kv[1]):       # largest remainder over the languages
-        final += sel_by.get(lg, [])[:int(q)]
-    rest = sorted((k for lg, ks in sel_by.items() for k in ks[int(quota.get(lg, 0)):]), key=lambda k: (-(quota[lang[docs[short[k]]]] % 1), m2[k]))
-    final += rest[:n - len(final)]
+    for lg, q in sorted(quota.items(), key=lambda kv: -kv[1]):  # largest remainder over the languages
+        final += sel_by.get(lg, [])[: int(q)]
+    rest = sorted(
+        (k for lg, ks in sel_by.items() for k in ks[int(quota.get(lg, 0)) :]),
+        key=lambda k: (-(quota[lang[docs[short[k]]]] % 1), m2[k]),
+    )
+    final += rest[: n - len(final)]
     rng.shuffle(final)
     with open(out / "candidates.jsonl", "w") as f:
         for j, k in enumerate(final):
             i = short[k]
             pdf, no = jobs[ok[k]]
             render(pdf, no, out / "img" / f"{j:04d}.jpg")
-            f.write(json.dumps(dict(k=j, doc=docs[i], lang=lang[docs[i]], pdf=pdf, page=no, emb_row=int(rows[i]),
-                                    p={c: round(float(v), 3) for c, v in zip(SIX, comb[k])}, margin=round(float(m2[k]), 3))) + "\n")
-    np.savez(out / "embeddings.npz", keys=np.array([str(j) for j in range(len(final))]),
-             X=np.array([np.asarray(emb[rows[short[k]]], np.float32) for k in final]))      # corpus page embedding of every candidate
+            f.write(
+                json.dumps(
+                    dict(
+                        k=j,
+                        doc=docs[i],
+                        lang=lang[docs[i]],
+                        pdf=pdf,
+                        page=no,
+                        emb_row=int(rows[i]),
+                        p={c: round(float(v), 3) for c, v in zip(SIX, comb[k])},
+                        margin=round(float(m2[k]), 3),
+                    )
+                )
+                + "\n"
+            )
+    np.savez(
+        out / "embeddings.npz",
+        keys=np.array([str(j) for j in range(len(final))]),
+        X=np.array([np.asarray(emb[rows[short[k]]], np.float32) for k in final]),
+    )  # corpus page embedding of every candidate
     print("languages:", Counter(lang[docs[short[k]]] for k in final).most_common(30))
     sheets(out)
 
@@ -147,16 +205,18 @@ def sheets(out, per=10):
     c = [json.loads(l) for l in open(out / "candidates.jsonl")]
     for s in range(0, len(c), per):
         ims = []
-        for r in c[s:s + per]:
+        for r in c[s : s + per]:
             im = cv2.imread(str(out / "img" / f"{r['k']:04d}.jpg"))
             h, w = im.shape[:2]
             z = min(400 / w, 560 / h)
             im = cv2.resize(im, (int(w * z), int(h * z)))
             canvas = np.full((560, 400, 3), 255, np.uint8)
-            canvas[:im.shape[0], :im.shape[1]] = im
+            canvas[: im.shape[0], : im.shape[1]] = im
             top = sorted(r["p"].items(), key=lambda kv: -kv[1])[:2]
             cv2.rectangle(canvas, (0, 0), (400, 20), (255, 255, 255), -1)
-            cv2.putText(canvas, f"{r['k']} {r['lang']} {top[0][0][:6]}/{top[1][0][:6]}", (3, 15), 0, 0.5, (0, 0, 255), 2)
+            cv2.putText(
+                canvas, f"{r['k']} {r['lang']} {top[0][0][:6]}/{top[1][0][:6]}", (3, 15), 0, 0.5, (0, 0, 255), 2
+            )
             ims.append(canvas)
         while len(ims) < per:
             ims.append(np.full((560, 400, 3), 255, np.uint8))
@@ -191,7 +251,11 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--n", type=int, default=300)
     a = ap.parse_args()
-    {"pick": lambda: pick(Path(a.out), a.n), "label": lambda: label(Path(a.out)), "sheets": lambda: sheets(Path(a.out))}[a.cmd]()
+    {
+        "pick": lambda: pick(Path(a.out), a.n),
+        "label": lambda: label(Path(a.out)),
+        "sheets": lambda: sheets(Path(a.out)),
+    }[a.cmd]()
 
 
 if __name__ == "__main__":

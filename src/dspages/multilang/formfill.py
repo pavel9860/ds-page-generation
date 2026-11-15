@@ -1,8 +1,9 @@
 """Answers for form fields, no model"""
+
 import random
 import re
 from collections import Counter
-from functools import lru_cache
+from functools import cache
 
 from . import linebank as LB
 from .config import FILL as C
@@ -13,11 +14,12 @@ _KEYS = [(kind, re.compile(rx)) for kind, rx in C.keys]
 _NUM = re.compile(C.numeric)
 
 
-@lru_cache(maxsize=None)
+@cache
 def script_of(lang):
     from hwsynth.scripts import text_script
+
     bank = LB.load(L.alias.get(lang, lang))
-    votes = Counter(s for t in bank.lines if (s := text_script(t)) != "Common")      # digits and punctuation tell no script
+    votes = Counter(s for t in bank.lines if (s := text_script(t)) != "Common")  # digits and punctuation tell no script
     return votes.most_common(1)[0][0] if votes else None
 
 
@@ -69,7 +71,7 @@ def fill_form(item, lang, used):
     stems, answers, prov = set(), {}, {}
     for box in item["boxes"]:
         n, kind = box["chars"], kind_of(box.get("label_en", ""))
-        for _ in range(C.tries):                                                     # a value that fits the field
+        for _ in range(C.tries):  # a value that fits the field
             if kind == "line":
                 got = (bank.pick(n, rng, used, stems, digits=False), "bank") if len(bank) else None
             elif kind == "number":
@@ -86,10 +88,15 @@ def fill_form(item, lang, used):
 def labels_en(items):
     """Each box's label translated into English (box label_en), one request per form: the field kinds are read in one language."""
     from . import gtranslate as GT
+
     for item in items:
         todo = [b for b in item["boxes"] if "label_en" not in b]
         if todo:
-            got = GT.lines([b.get("label") or "-" for b in todo], "en") if any(b.get("label") for b in todo) else [""] * len(todo)
+            got = (
+                GT.lines([b.get("label") or "-" for b in todo], "en")
+                if any(b.get("label") for b in todo)
+                else [""] * len(todo)
+            )
             for b, t in zip(todo, got):
                 b["label_en"] = (t or "") if b.get("label") else ""
     return items
@@ -112,5 +119,5 @@ def repeats(answers):
         within += sum(n - 1 for n in keys.values())
         openings += sum(n - 1 for n in Counter(LB.stem(v) for v in d.values() if v and len(v.split()) > 1).values())
         seen.update(keys)
-    cross = sum(1 for v, n in seen.items() if n > 1 and len(v) > 3 and not _NUM.match(v))         # a word, not a short code
+    cross = sum(1 for v, n in seen.items() if n > 1 and len(v) > 3 and not _NUM.match(v))  # a word, not a short code
     return dict(answers=total, extra_copies=within, same_opening=openings, cross_form=cross)

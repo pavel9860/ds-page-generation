@@ -1,10 +1,10 @@
 """Pinhole camera over the page: pose from the view pool, focal length and principal point so the page fills
 the frame. Table plane z = 0, page above it, all lengths in mm; camera axes x right, y down, z forward."""
+
 import numpy as np
 from numba import njit
 
 from ..config import CameraCfg
-
 
 
 def vertex_normals(X, Y, Z):
@@ -94,12 +94,16 @@ def views(P, N, c: CameraCfg, offset, first=False):
     reach = offset * float(max(np.ptp(P[..., 0]), np.ptp(P[..., 1])))
     k = np.arange(c.view_dirs)
     azs = k * np.pi * (3 - np.sqrt(5))
-    tilts = min(np.arcsin(min(1.0, reach / c.dist_mm[0])), np.radians(c.max_tilt_deg)) * np.sqrt((k + 0.5) / c.view_dirs)
+    tilts = min(np.arcsin(min(1.0, reach / c.dist_mm[0])), np.radians(c.max_tilt_deg)) * np.sqrt(
+        (k + 0.5) / c.view_dirs
+    )
     dirs = np.stack([np.sin(tilts) * np.cos(azs), np.sin(tilts) * np.sin(azs), np.cos(tilts)], -1)
     hi = np.minimum(c.dist_mm[1], reach / np.maximum(np.sin(tilts), 1e-9))
     s = c.view_step
     sub = lambda A: np.ascontiguousarray(A[::s, ::s].reshape(-1, 3), np.float64)
-    lo = np.maximum(_nearest(dirs, target, sub(P), sub(N), np.cos(np.radians(c.incidence_deg)), hi, first), c.dist_mm[0])
+    lo = np.maximum(
+        _nearest(dirs, target, sub(P), sub(N), np.cos(np.radians(c.incidence_deg)), hi, first), c.dist_mm[0]
+    )
     return target, dirs, tilts, azs, lo, hi
 
 
@@ -115,7 +119,7 @@ def _frame_region(rng, content, c: CameraCfg):
     size = np.tile(content[2:] - content[:2], 2)
     inner = np.clip(content + np.array([-1, -1, 1, 1]) * rng.uniform(*c.crop_margin, 4) * size, 0, 1)
     r = np.where(cut, inner, [0.0, 0.0, 1.0, 1.0])
-    k = int(r[2] - r[0] > r[3] - r[1])                      # the shorter axis: 0 u, 1 v
+    k = int(r[2] - r[0] > r[3] - r[1])  # the shorter axis: 0 u, 1 v
     length = r[3 - k] - r[1 - k]
     r[k] = np.clip(0.5 * (r[k] + r[k + 2] - length), 0.0, 1.0 - length)
     r[k + 2] = r[k] + length
@@ -144,7 +148,9 @@ def make_camera(rng, P, N, size, c: CameraCfg, content=(0.0, 0.0, 1.0, 1.0)):
     if ok.size:
         k = int(rng.choice(ok))
         dist = float(np.exp(rng.uniform(np.log(lo[k]), np.log(hi[k]))))
-        full = _nearest(dirs[k:k + 1], target, P, N, np.cos(np.radians(c.incidence_deg)), np.array([np.inf]), False)[0]
+        full = _nearest(dirs[k : k + 1], target, P, N, np.cos(np.radians(c.incidence_deg)), np.array([np.inf]), False)[
+            0
+        ]
         dist = max(dist, full) if np.isfinite(full) else dist
     else:
         k, dist = 0, float(c.dist_mm[1])
@@ -158,20 +164,32 @@ def make_camera(rng, P, N, size, c: CameraCfg, content=(0.0, 0.0, 1.0, 1.0)):
     sides = np.zeros(4, bool)
     if cut:
         region, sides = _frame_region(rng, content, c)
-        (i0, j0), (i1, j1) = np.floor(region[:2] * [nu - 1, nv - 1]).astype(int), np.ceil(region[2:] * [nu - 1, nv - 1]).astype(int)
+        (i0, j0), (i1, j1) = (
+            np.floor(region[:2] * [nu - 1, nv - 1]).astype(int),
+            np.ceil(region[2:] * [nu - 1, nv - 1]).astype(int),
+        )
         fill = 1.0
-        sub = xy.reshape(nv, nu, 2)[j0:j1 + 1, i0:i1 + 1].reshape(-1, 2)
+        sub = xy.reshape(nv, nu, 2)[j0 : j1 + 1, i0 : i1 + 1].reshape(-1, 2)
         lo, hi = sub.min(0), sub.max(0)
     else:
         lo, hi = xy.min(0), xy.max(0)
     f = fill * min(w / (hi[0] - lo[0]), h / (hi[1] - lo[1]))
     free = np.array([w, h]) - f * (hi - lo)
-    shift = np.where(sides[:2] == sides[2:], 0.0 if cut else c.shift * rng.uniform(-1, 1, 2), np.where(sides[:2], -1.0, 1.0))
+    shift = np.where(
+        sides[:2] == sides[2:], 0.0 if cut else c.shift * rng.uniform(-1, 1, 2), np.where(sides[:2], -1.0, 1.0)
+    )
     cx, cy = np.array([w, h]) / 2 - f * (lo + hi) / 2 + 0.5 * free * shift
     cam.update(f=float(f), cx=float(cx), cy=float(cy))
-    view = dict(dist_mm=float(dist), tilt_deg=float(np.degrees(tilts[k])), azimuth_deg=float(np.degrees(azs[k]) % 360),
-                roll_deg=float(np.degrees(roll)), fill=float(fill), fov_deg=float(np.degrees(2 * np.arctan(h / 2 / f))),
-                max_incidence_deg=float(np.degrees(np.arccos(np.clip(worst, -1, 1)))),
-                min_px_per_mm=float((f * np.clip(cos_k, 0, 1) / z).min()), cut=bool(cut),
-                cut_sides="".join(n for n, k in zip("LTRB", sides) if k))
+    view = dict(
+        dist_mm=float(dist),
+        tilt_deg=float(np.degrees(tilts[k])),
+        azimuth_deg=float(np.degrees(azs[k]) % 360),
+        roll_deg=float(np.degrees(roll)),
+        fill=float(fill),
+        fov_deg=float(np.degrees(2 * np.arctan(h / 2 / f))),
+        max_incidence_deg=float(np.degrees(np.arccos(np.clip(worst, -1, 1)))),
+        min_px_per_mm=float((f * np.clip(cos_k, 0, 1) / z).min()),
+        cut=bool(cut),
+        cut_sides="".join(n for n, k in zip("LTRB", sides) if k),
+    )
     return cam, view

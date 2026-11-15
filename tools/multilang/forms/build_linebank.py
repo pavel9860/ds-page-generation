@@ -1,4 +1,5 @@
 """Builds the line banks from the corpus (dspages.multilang.linebuild)"""
+
 import os
 import sys
 import time
@@ -13,5 +14,7 @@ if __name__ == "__main__":
     t = time.time()
     res = linebuild.build(LAYOUTS, pages=pages, langs=sys.argv[2:] or None)
     n = sorted(res.values())
-    print(f"{len(res)} languages in {time.time() - t:.0f}s; lines min {n[0]}, median {n[len(n) // 2]}, max {n[-1]}; under {LINEBANK.min_lines}: "
-          f"{sorted(l for l, k in res.items() if k < LINEBANK.min_lines)}")
+    print(
+        f"{len(res)} languages in {time.time() - t:.0f}s; lines min {n[0]}, median {n[len(n) // 2]}, max {n[-1]}; under {LINEBANK.min_lines}: "
+        f"{sorted(l for l, k in res.items() if k < LINEBANK.min_lines)}"
+    )

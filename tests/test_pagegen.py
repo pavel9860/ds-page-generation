@@ -1,4 +1,5 @@
 """pagegen: a handwritten page from a fixed seed, line metrics of form handwriting."""
+
 import random
 
 import pytest
@@ -10,9 +11,14 @@ from dspages.pagegen.hand import line_pitch, writing_height
 from dspages.pagegen.layouts import LAYOUTS
 from dspages.pagegen.page import handwritten_page
 
-POOL = {"heading": ["Meeting notes", "Next steps"],
-        "para": ["The committee agreed to move the review to the second week of March and to send the draft to all members."] * 6,
-        "item": ["send the draft", "collect the figures", "book the room"] * 3}
+POOL = {
+    "heading": ["Meeting notes", "Next steps"],
+    "para": [
+        "The committee agreed to move the review to the second week of March and to send the draft to all members."
+    ]
+    * 6,
+    "item": ["send the draft", "collect the figures", "book the room"] * 3,
+}
 
 
 def test_layouts_registered():

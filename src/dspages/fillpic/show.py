@@ -1,4 +1,5 @@
 """Overlay images (window red, ink tiles green, picture tiles blue) and values.csv of the detector on page sources; label images of the training pages."""
+
 import sqlite3
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -25,12 +26,14 @@ COLUMNS = ["set", "name", "fill", "pic", "sec"]
 def paste(m, win, shape):
     """The grid m stretched over the window (px of an image of `shape`), as a full bool mask of that shape."""
     x, y, w, h = win
-    big = cv2.resize(m.astype(np.uint8), (max(int(round(w)), 1), max(int(round(h)), 1)), interpolation=cv2.INTER_NEAREST)
+    big = cv2.resize(
+        m.astype(np.uint8), (max(int(round(w)), 1), max(int(round(h)), 1)), interpolation=cv2.INTER_NEAREST
+    )
     out = np.zeros(shape, bool)
     x0, y0 = int(round(x)), int(round(y))
     a, b, c, d = max(x0, 0), min(x0 + big.shape[1], shape[1]), max(y0, 0), min(y0 + big.shape[0], shape[0])
     if b > a and d > c:
-        out[c:d, a:b] = big[c - y0:d - y0, a - x0:b - x0] > 0
+        out[c:d, a:b] = big[c - y0 : d - y0, a - x0 : b - x0] > 0
     return out
 
 
@@ -43,7 +46,10 @@ def title_strip(img, text):
 def preview(gray, cfg=CONFIG):
     side = cfg.geometry.mask_side
     s = side / max(gray.shape)
-    return cv2.cvtColor(cv2.resize(gray, (round(gray.shape[1] * s), round(gray.shape[0] * s)), interpolation=cv2.INTER_AREA), cv2.COLOR_GRAY2BGR)
+    return cv2.cvtColor(
+        cv2.resize(gray, (round(gray.shape[1] * s), round(gray.shape[0] * s)), interpolation=cv2.INTER_AREA),
+        cv2.COLOR_GRAY2BGR,
+    )
 
 
 def process(det, kind, name, gray, out):
@@ -110,7 +116,13 @@ def hw_new_pages(n, out, cfg=CONFIG):
     first = np.array([f.stem.rsplit("_", 1)[1] in cfg.languages.cjk + cfg.languages.rare for f, _ in pages])
     order = np.random.default_rng(cfg.train.seed).permutation(len(pages))
     order = np.concatenate([order[first[order]], order[~first[order]]])[:n]
-    print(int(first.sum()), "pages of Japanese / Chinese / Korean / rare-script documents,", len(pages), "not done", flush=True)
+    print(
+        int(first.sum()),
+        "pages of Japanese / Chinese / Korean / rare-script documents,",
+        len(pages),
+        "not done",
+        flush=True,
+    )
     for k in order:
         f, i = pages[k]
         yield f"{f.stem}_{i}", render(f, i)
@@ -130,6 +142,7 @@ def used_pages(out):
 def random_pages(n, seed, digital, out):
     """n random embedded pages (digital ones too if `digital`) that are in no earlier output and not in the training set."""
     from .paths import EMB
+
     skip = used_pages(out)
     ids = np.load(EMB / "ids.npy")
     man = doc_paths()
@@ -173,18 +186,41 @@ def label_image(path, number, title, cfg=CONFIG):
     for tiles, col in ((has_ink & ~text, (0, 200, 0)), (text, (0, 140, 255))):
         p = paste(tiles, win, mask.shape)
         img[p] = 0.7 * img[p] + 0.3 * np.array(col, np.float32)
-    share = cv2.resize(pic.astype(np.float32), (max(int(round(win[2])), 1), max(int(round(win[3])), 1)), interpolation=cv2.INTER_NEAREST)
+    share = cv2.resize(
+        pic.astype(np.float32),
+        (max(int(round(win[2])), 1), max(int(round(win[3])), 1)),
+        interpolation=cv2.INTER_NEAREST,
+    )
     x0, y0 = int(round(win[0])), int(round(win[1]))
-    a, b, c, d = max(x0, 0), min(x0 + share.shape[1], mask.shape[1]), max(y0, 0), min(y0 + share.shape[0], mask.shape[0])
+    a, b, c, d = (
+        max(x0, 0),
+        min(x0 + share.shape[1], mask.shape[1]),
+        max(y0, 0),
+        min(y0 + share.shape[0], mask.shape[0]),
+    )
     if b > a and d > c:
-        al = 0.6 * share[c - y0:d - y0, a - x0:b - x0, None]
+        al = 0.6 * share[c - y0 : d - y0, a - x0 : b - x0, None]
         img[c:d, a:b] = (1 - al) * img[c:d, a:b] + al * np.array([255, 0, 0], np.float32)
     img = img.astype(np.uint8)
     for k in range(g + 1):
         t = k / g
-        cv2.line(img, (int(win[0] + t * win[2]), int(win[1])), (int(win[0] + t * win[2]), int(win[1] + win[3])), (150, 150, 150), 1)
-        cv2.line(img, (int(win[0]), int(win[1] + t * win[3])), (int(win[0] + win[2]), int(win[1] + t * win[3])), (150, 150, 150), 1)
-    return title_strip(img, f"{title} label fill {has_ink.mean():.2f} text tiles {text.mean():.2f} pic {pic.mean():.2f}")
+        cv2.line(
+            img,
+            (int(win[0] + t * win[2]), int(win[1])),
+            (int(win[0] + t * win[2]), int(win[1] + win[3])),
+            (150, 150, 150),
+            1,
+        )
+        cv2.line(
+            img,
+            (int(win[0]), int(win[1] + t * win[3])),
+            (int(win[0] + win[2]), int(win[1] + t * win[3])),
+            (150, 150, 150),
+            1,
+        )
+    return title_strip(
+        img, f"{title} label fill {has_ink.mean():.2f} text tiles {text.mean():.2f} pic {pic.mean():.2f}"
+    )
 
 
 def _label_job(job):
@@ -201,7 +237,16 @@ def _label_job(job):
 def labels(n=4000, cfg=CONFIG):
     """Label images of n training pages -> tests/scan_detector_samples."""
     out = TESTS / "scan_detector_samples"
-    jobs = [(p, k, str(out), f"{Path(p).stem}_{k}", f"{p.replace(str(LAYOUTS) + '/', '').split('/')[0]} {Path(p).stem} p{k}") for p, k in sorted(train_pages())[:n]]
+    jobs = [
+        (
+            p,
+            k,
+            str(out),
+            f"{Path(p).stem}_{k}",
+            f"{p.replace(str(LAYOUTS) + '/', '').split('/')[0]} {Path(p).stem} p{k}",
+        )
+        for p, k in sorted(train_pages())[:n]
+    ]
     out.mkdir(parents=True, exist_ok=True)
     with ProcessPoolExecutor(cfg.train.workers) as ex:
         done = sum(ex.map(_label_job, jobs, chunksize=4))

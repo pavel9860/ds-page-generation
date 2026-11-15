@@ -1,4 +1,5 @@
 """Pages taken out of the corpus tables: embeddings (emb_out), hw_det, scan_pct (+ parquet). One backup `*.bak` of each file (state before)."""
+
 import csv
 import os
 import re

@@ -1,17 +1,19 @@
 """All parameters of the pipeline. Units: geometry in metres, layout and camera in mm, images in px."""
-import os
+
 from dataclasses import dataclass, field, replace
 
 G = 9.81
-UVTM = os.environ.get("DSPAGES_UVTM", "/run/media/p/D/ML_DS/UVTM")          # the data root (the same variable as hand.config)
+from .paths import ROOT
+
+UVTM = str(ROOT)
 
 
 @dataclass(frozen=True)
 class Paths:
     layouts: str = f"{UVTM}/Layouts"
     manifest: str = f"{UVTM}/Layouts/manifest_pages.jsonl"
-    files: str = f"{UVTM}/Layouts/archive/info/manifest_files.jsonl"   # listing of the source files
-    jpeg_artifacts: str = f"{UVTM}/Layouts/archive/info/jpeg_grid_above3_at_1024x1440.jsonl"   # PDF images (path, xref) with strong JPEG artifacts
+    files: str = f"{UVTM}/Layouts/archive/info/manifest_files.jsonl"  # listing of the source files
+    jpeg_artifacts: str = f"{UVTM}/Layouts/archive/info/jpeg_grid_above3_at_1024x1440.jsonl"  # PDF images (path, xref) with strong JPEG artifacts
     out: str = f"{UVTM}/dspages"
     font_dirs: tuple = ("/usr/share/fonts", "/usr/local/share/fonts", "~/.fonts")
 
@@ -21,51 +23,69 @@ class SortCfg:
     input_dir: str = f"{UVTM}/Layouts/corpus_add/pdf"
     extensions: tuple = (".jpg", ".jpeg", ".png", ".pdf")
     max_pdf_pages: int = 40
-    keys: tuple = (                                 # (key, name, folder of Paths.layouts)
-        ("w", "filled forms", "filled_forms"), ("f", "forms", "forms"), ("m", "magazines", "magazines"),
-        ("t", "tables", "tables"), ("s", "scientific papers", "scientific_paper"), ("e", "exams", "exams"),
-        ("h", "handwritten", "handwritten"), ("d", "delete (trash)", "trash"), ("b", "bureaucracy", "bureaucracy"),
-        ("c", "certificates", "bureaucracy"), ("o", "books", "books_pdf"), ("l", "flyers", "flyers"),
-        ("r", "receipts", "receipts"), ("p", "maps and blueprints", "maps_blueprints"),
+    keys: tuple = (  # (key, name, folder of Paths.layouts)
+        ("w", "filled forms", "filled_forms"),
+        ("f", "forms", "forms"),
+        ("m", "magazines", "magazines"),
+        ("t", "tables", "tables"),
+        ("s", "scientific papers", "scientific_paper"),
+        ("e", "exams", "exams"),
+        ("h", "handwritten", "handwritten"),
+        ("d", "delete (trash)", "trash"),
+        ("b", "bureaucracy", "bureaucracy"),
+        ("c", "certificates", "bureaucracy"),
+        ("o", "books", "books_pdf"),
+        ("l", "flyers", "flyers"),
+        ("r", "receipts", "receipts"),
+        ("p", "maps and blueprints", "maps_blueprints"),
     )
 
 
 @dataclass(frozen=True)
 class PaperCfg:
-    gsm: tuple = (50, 60, 80, 100, 120)             # paper types, g/m2, drawn uniformly
-    open_gsm: tuple = (50.0, 70.0)                  # open book pages, g/m2, uniform
+    gsm: tuple = (50, 60, 80, 100, 120)  # paper types, g/m2, drawn uniformly
+    open_gsm: tuple = (50.0, 70.0)  # open book pages, g/m2, uniform
     ref_gsm: float = 80.0
-    ref_bending: float = 0.688e-3                   # N m, at ref_gsm; bending ~ thickness^3 ~ gsm^3
-    ref_membrane: float = 4.0e5                     # N/m, at ref_gsm; membrane ~ gsm
+    ref_bending: float = 0.688e-3  # N m, at ref_gsm; bending ~ thickness^3 ~ gsm^3
+    ref_membrane: float = 4.0e5  # N/m, at ref_gsm; membrane ~ gsm
     poisson: float = 0.3
 
 
 def paper_props(p: PaperCfg, gsm):
     r = gsm / p.ref_gsm
-    return dict(gsm=float(gsm), q=gsm * 1e-3 * G, bending=p.ref_bending * r ** 3,
-                membrane=p.ref_membrane * r, poisson=p.poisson)
+    return dict(
+        gsm=float(gsm), q=gsm * 1e-3 * G, bending=p.ref_bending * r**3, membrane=p.ref_membrane * r, poisson=p.poisson
+    )
 
 
 @dataclass(frozen=True)
 class SceneCfg:
-    combos: tuple = (                               # (clamp, n_supports, folds, crumple): weight; clamp "book",
-                                                    # "open":
+    combos: tuple = (  # (clamp, n_supports, folds, crumple): weight; clamp "book",
+        # "open":
         ((False, 0, True, False), 0.16),
-        ((False, 1, False, False), 0.09), ((False, 2, False, False), 0.09), ((False, 3, False, False), 0.05),
-        ((False, 1, True, False), 0.09), ((False, 2, True, False), 0.09), ((False, 3, True, False), 0.04),
-        ((True, 0, False, False), 0.09), ((True, 1, False, False), 0.05), ((True, 2, False, False), 0.03),
-        ((True, 0, True, False), 0.06), ((True, 1, True, False), 0.04),
-        ((False, 0, False, True), 0.0463),            # crumple
-        (("book", 0, False, False), 0.3288),          # book page: 24% of all
-        (("open", 0, False, False), 0.1395))          # open book: 10% of all
-    book_deg: tuple = (10.0, 45.0)                  # book page: spine edge angle; the rest lies on a plane of
-    book_h: tuple = (0.0, 0.040)                    # height book_h (<= book_reach of the rise to it) from
-    book_plane: tuple = (0.4, 0.8)                  # book_plane of the length on
+        ((False, 1, False, False), 0.09),
+        ((False, 2, False, False), 0.09),
+        ((False, 3, False, False), 0.05),
+        ((False, 1, True, False), 0.09),
+        ((False, 2, True, False), 0.09),
+        ((False, 3, True, False), 0.04),
+        ((True, 0, False, False), 0.09),
+        ((True, 1, False, False), 0.05),
+        ((True, 2, False, False), 0.03),
+        ((True, 0, True, False), 0.06),
+        ((True, 1, True, False), 0.04),
+        ((False, 0, False, True), 0.0463),  # crumple
+        (("book", 0, False, False), 0.3288),  # book page: 24% of all
+        (("open", 0, False, False), 0.1395),
+    )  # open book: 10% of all
+    book_deg: tuple = (10.0, 45.0)  # book page: spine edge angle; the rest lies on a plane of
+    book_h: tuple = (0.0, 0.040)  # height book_h (<= book_reach of the rise to it) from
+    book_plane: tuple = (0.4, 0.8)  # book_plane of the length on
     book_reach: float = 0.8
-    open_deg: tuple = (10.0, 60.0)                  # open book: each half a book page from the spine (its angle there,
-    open_h: tuple = (0.0, 0.020)                    # its page block of height open_h beyond open_plane of the half),
-    open_plane: tuple = (0.3, 0.9)                  # drawn apart for the two halves; the angle at end b within
-    open_side_b_deg: float = 20.0                   # open_side_b_deg of end a's
+    open_deg: tuple = (10.0, 60.0)  # open book: each half a book page from the spine (its angle there,
+    open_h: tuple = (0.0, 0.020)  # its page block of height open_h beyond open_plane of the half),
+    open_plane: tuple = (0.3, 0.9)  # drawn apart for the two halves; the angle at end b within
+    open_side_b_deg: float = 20.0  # open_side_b_deg of end a's
     clamp_deg: tuple = (5.0, 35.0)
     clamp_free_len: float = 0.03
     support_edge: float = 0.05
@@ -109,50 +129,51 @@ class ShallowCreaseCfg:
 
 @dataclass(frozen=True)
 class DeepCreaseCfg:
-    levels: tuple = (("medium", 0.55), ("heavy", 0.45))   # crumpled pages (no bends or folds)
-    on_bends_prob: float = 0.1                    # light creases on top of bends and folds
+    levels: tuple = (("medium", 0.55), ("heavy", 0.45))  # crumpled pages (no bends or folds)
+    on_bends_prob: float = 0.1  # light creases on top of bends and folds
     coverage: dict = field(default_factory=lambda: {"light": (0.1, 0.4), "medium": (0.3, 0.8), "heavy": (0.6, 1.0)})
-    max_scale_mm: dict = field(default_factory=lambda: {"light": (30.0, 90.0), "medium": (25.0, 80.0),
-                                                        "heavy": (15.0, 70.0)})   # page's largest crease length
-    scale_ratio: tuple = (1.0, 5.0)               # largest / smallest local crease length on the page
-    region_mm: tuple = (40.0, 120.0)              # size of the regions of equal scale / coverage
-    density: float = 1.2                          # ridges per local length^2 of covered area
+    max_scale_mm: dict = field(
+        default_factory=lambda: {"light": (30.0, 90.0), "medium": (25.0, 80.0), "heavy": (15.0, 70.0)}
+    )  # page's largest crease length
+    scale_ratio: tuple = (1.0, 5.0)  # largest / smallest local crease length on the page
+    region_mm: tuple = (40.0, 120.0)  # size of the regions of equal scale / coverage
+    density: float = 1.2  # ridges per local length^2 of covered area
     k: dict = field(default_factory=lambda: {"light": (0.2, 0.6), "medium": (0.5, 1.2), "heavy": (0.7, 1.4)})
-    max_depth_mm: dict = field(default_factory=lambda: {"light": 5.0, "medium": 8.0, "heavy": 15.0})   # valley to peak
+    max_depth_mm: dict = field(default_factory=lambda: {"light": 5.0, "medium": 8.0, "heavy": 15.0})  # valley to peak
     broad_n: dict = field(default_factory=lambda: {"light": (0, 2), "medium": (1, 3), "heavy": (2, 5)})
-    max_length_mm: float = 150.0                 # longest crease; the shortest is the 3D grid pitch
-    broad_length_mm: tuple = (80.0, 150.0)       # large creases: long, wide, low angle
-    broad_spread: tuple = (4.0, 12.0)            # width multiplier of the crease profile
-    broad_depth_frac: tuple = (0.2, 1.0)         # depth as a fraction of max_depth_mm
+    max_length_mm: float = 150.0  # longest crease; the shortest is the 3D grid pitch
+    broad_length_mm: tuple = (80.0, 150.0)  # large creases: long, wide, low angle
+    broad_spread: tuple = (4.0, 12.0)  # width multiplier of the crease profile
+    broad_depth_frac: tuple = (0.2, 1.0)  # depth as a fraction of max_depth_mm
     kink_deg: float = 25.0
 
 
 @dataclass(frozen=True)
 class WaterCfg:
-    prob: float = 0.1                             # share of all pages water-damaged (cockled), drawn among pages
-                                                  # without creases (crumple, shallow, deep)
-    scale: tuple = (1.0, 1.0)                     # x the band rms of a real water-damaged page (creases.cockle)
-    cover: tuple = (0.3, 1.0)                     # wet share of the page (creases.cockle.mask), drawn per page;
-                                                  # real wet pages: 8 x 6 tiles above half the max rms 17 / 28 / 48 % (p10/50/90)
-    region: float = 200.0                         # nodes: correlation length of the wet-part field
-    dry: float = 0.3                              # cockle amplitude kept outside the wet part (real max / min tile rms ~8)
+    prob: float = 0.1  # share of all pages water-damaged (cockled), drawn among pages
+    # without creases (crumple, shallow, deep)
+    scale: tuple = (1.0, 1.0)  # x the band rms of a real water-damaged page (creases.cockle)
+    cover: tuple = (0.3, 1.0)  # wet share of the page (creases.cockle.mask), drawn per page;
+    # real wet pages: 8 x 6 tiles above half the max rms 17 / 28 / 48 % (p10/50/90)
+    region: float = 200.0  # nodes: correlation length of the wet-part field
+    dry: float = 0.3  # cockle amplitude kept outside the wet part (real max / min tile rms ~8)
 
 
 @dataclass(frozen=True)
 class GeometryCfg:
-    sheet_mm: tuple = (210.0, 297.0)                # (width, height)
-    mesh: tuple = (256, 360)                        # page grid nodes (u across, v down): layout page_px / 4; the
-                                                    # 3D and UV maps are this grid
-    work_scale: int = 1                             # the surface is worked out on a grid this much finer than mesh
+    sheet_mm: tuple = (210.0, 297.0)  # (width, height)
+    mesh: tuple = (256, 360)  # page grid nodes (u across, v down): layout page_px / 4; the
+    # 3D and UV maps are this grid
+    work_scale: int = 1  # the surface is worked out on a grid this much finer than mesh
     strip_segments: int = 150
     two_profile_prob: float = 0.5
     n_slices: int = 9
     along_long_prob: float = 0.5
-    bend_dir_deg: float = 45.0                      # bend direction within +-bend_dir_deg of a page axis, density
-    bend_floor: float = 0.1                         # cos(2 dir) + bend_floor; book pages: spine on the long side
+    bend_dir_deg: float = 45.0  # bend direction within +-bend_dir_deg of a page axis, density
+    bend_floor: float = 0.1  # cos(2 dir) + bend_floor; book pages: spine on the long side
     support_frac: tuple = (0.2, 1.0)
     shell_nodes: tuple = (21, 29)
-    view_tries: int = 5                             # surfaces drawn until one has a possible camera view (CameraCfg)
+    view_tries: int = 5  # surfaces drawn until one has a possible camera view (CameraCfg)
     scene: SceneCfg = SceneCfg()
     shallow: ShallowCreaseCfg = ShallowCreaseCfg()
     deep: DeepCreaseCfg = DeepCreaseCfg()
@@ -173,29 +194,30 @@ def _fx(prob, **params):
 class GridCfg:
     fine_mm: float = 2.5
     heavy_every: int = 4
-    fine_width_mm: float = 0.254                    # 3 px at 300 dpi
+    fine_width_mm: float = 0.254  # 3 px at 300 dpi
     heavy_width_mm: float = 0.508
 
 
 @dataclass(frozen=True)
 class PictureCfg:
-    model: str = "~/.cache/dspages/yolov11n-doclaynet.onnx"   # python -m dspages.prep.layout_model
+    model: str = "~/.cache/dspages/yolov11n-doclaynet.onnx"  # python -m dspages.prep.layout_model
     weights_url: str = "https://huggingface.co/hantian/yolo-doclaynet/resolve/main/yolov11n-doclaynet.pt"  # AGPL-3.0
-    imgsz: int = 1024                               # colour input: small photos are missed at 640 or in gray
-    picture_class: int = 6                          # DocLayNet "Picture"
+    imgsz: int = 1024  # colour input: small photos are missed at 640 or in gray
+    picture_class: int = 6  # DocLayNet "Picture"
     conf: float = 0.3
     iou: float = 0.5
-    large_area: float = 0.3                         # boxes over this page share need large_conf (whole forms
-    large_conf: float = 0.75                        # come out as one low-score picture)
-    fill_patch: int = 10                            # also pictures: patches (px of the 512 px content mask) mostly
-    fill_need: float = 0.6                          # (fill_need) darker than fill_paper of the way from ink (1st
-    fill_paper: float = 0.8                         # percentile) to paper (90th): artwork and dark blocks the
-                                                    # detector does not know
+    large_area: float = 0.3  # boxes over this page share need large_conf (whole forms
+    large_conf: float = 0.75  # come out as one low-score picture)
+    fill_patch: int = 10  # also pictures: patches (px of the 512 px content mask) mostly
+    fill_need: float = 0.6  # (fill_need) darker than fill_paper of the way from ink (1st
+    fill_paper: float = 0.8  # percentile) to paper (90th): artwork and dark blocks the
+    # detector does not know
 
 
 @dataclass(frozen=True)
 class RefontCfg:
     """Numbers of the page restyling (layout/refont.py): thresholds of the page analysis, spacing and limits."""
+
     sheet_pt_w: float = 210.0 / 25.4 * 72
     head_ratio: float = 1.18
     header_pt: int = 45
@@ -243,29 +265,35 @@ class RefontCfg:
     justify_fill: float = 0.85
     edge_tol: float = 0.03
     size_step: int = 4
-    touch_pt: float = 1.5                           # pictures this close to each other are tiles of one picture
-    figure_reach_pt: float = 8.0                    # rules this near a figure, mostly inside its reach, belong to it (the axes of a plot)
-    figure_share: float = 0.9                       # the share of such a rule (its length) that lies in the reach
-    turn_floor: float = 0.7                         # the fixed rows (and their text) of a turned page shrink to at most this scale, then its figures do
-    frame_give: float = 0.85                        # a frame of a turned page may take this share of the height that keeps its text before the fixed rows shrink
-    figure_floor: float = 0.5                       # the figures of a turned page shrink to at most this scale to leave room for the text
-    turn_gap_min: float = 0.3                       # the frames and gaps of a turned page are compressed to at least this scale before its fixed rows are
-    turn_gap_max: float = 1.5                       # and stretched to at most this
-    container_cover: float = 0.2                    # a group of curves that text covers this share of is a box that holds text (a callout), not a figure
-    figure_rounds: int = 3                          # times the reach is grown with what joined
-    tile_cover: float = 0.9                         # when together they cover this share of their bounding box
-    tab_max_em: float = 4.0                         # widest gap after a list marker that still joins the marker to its text
-    word_margin: float = 0.1                        # a gap between two characters wider than this x the new one's width or height is a space (pdfminer LAParams)
-    gap_reach: float = 3.0                          # lines (in font sizes) above and below a wide gap that tell its kind:
-    gap_cross: float = 0.5                          # this share with ink over it makes it a justified space, not a gutter
-    letter_gray: int = 128                          # drawings as letters are dark fills (a white box in a line is a field)
-    ink_level: int = 250                            # gray below which a picture's pixel shows something
-    cell_share: float = 0.25                        # a box (filled or closed drawing) up to this share of the page holds cells,
-                                                    # not flowing text
-    field_em: float = 3.0                           # a box at most this many font sizes high on a line's level is its field
-    marker_em: float = 1.5                          # a shape this small just before a line is its radio button or check box
-    balance_px: float = 2.0                         # precision of the column balance of a section
-    dot_pt: float = 3.0                             # a picture no larger is a dot (of a dotted frame): nothing cleared under it
+    touch_pt: float = 1.5  # pictures this close to each other are tiles of one picture
+    figure_reach_pt: float = 8.0  # rules this near a figure, mostly inside its reach, belong to it (the axes of a plot)
+    figure_share: float = 0.9  # the share of such a rule (its length) that lies in the reach
+    turn_floor: float = (
+        0.7  # the fixed rows (and their text) of a turned page shrink to at most this scale, then its figures do
+    )
+    frame_give: float = 0.85  # a frame of a turned page may take this share of the height that keeps its text before the fixed rows shrink
+    figure_floor: float = 0.5  # the figures of a turned page shrink to at most this scale to leave room for the text
+    turn_gap_min: float = (
+        0.3  # the frames and gaps of a turned page are compressed to at least this scale before its fixed rows are
+    )
+    turn_gap_max: float = 1.5  # and stretched to at most this
+    container_cover: float = (
+        0.2  # a group of curves that text covers this share of is a box that holds text (a callout), not a figure
+    )
+    figure_rounds: int = 3  # times the reach is grown with what joined
+    tile_cover: float = 0.9  # when together they cover this share of their bounding box
+    tab_max_em: float = 4.0  # widest gap after a list marker that still joins the marker to its text
+    word_margin: float = 0.1  # a gap between two characters wider than this x the new one's width or height is a space (pdfminer LAParams)
+    gap_reach: float = 3.0  # lines (in font sizes) above and below a wide gap that tell its kind:
+    gap_cross: float = 0.5  # this share with ink over it makes it a justified space, not a gutter
+    letter_gray: int = 128  # drawings as letters are dark fills (a white box in a line is a field)
+    ink_level: int = 250  # gray below which a picture's pixel shows something
+    cell_share: float = 0.25  # a box (filled or closed drawing) up to this share of the page holds cells,
+    # not flowing text
+    field_em: float = 3.0  # a box at most this many font sizes high on a line's level is its field
+    marker_em: float = 1.5  # a shape this small just before a line is its radio button or check box
+    balance_px: float = 2.0  # precision of the column balance of a section
+    dot_pt: float = 3.0  # a picture no larger is a dot (of a dotted frame): nothing cleared under it
     glyph_gap: float = 0.3
     min_noto_cmap: int = 40
     min_text_chars: int = 150
@@ -275,23 +303,25 @@ class RefontCfg:
     gap_body: float = 1.5
     text_image_share: float = 0.4
     align_inset: float = 0.1
-    right_share: float = 0.5                        # widest share of its column a right-flush one-line block covers
-    letter_em: float = 1.5                          # a drawing no larger than this many line heights, inside a line, is a letter
-    letter_cover: float = 0.3                       # share of a span the letter drawings cover that makes it bold
-    contain_share: float = 0.5                      # share of a block inside another one that makes the other hold it
-    min_lead: float = 0.9                           # lines are at least this share of the font's own height apart
-    min_line_em: float = 3.0                        # shortest line (in line heights) set beside an obstacle
-    frame_gap: float = 2.5                          # lines of gap that end a text frame
-    frame_lines: int = 6                            # lines a run of body paragraphs needs to be a text frame
-    paragraph_lines: int = 3                        # and a paragraph of this many lines
-    frame_slack: float = 0.3                        # share of a line a frame may be overrun by
-    descent_room: float = 1.0                       # a box's text may reach this share of its descent below it (the letters' tails are not cut)
-    core_share: float = 0.75                        # a later line of a box of which the baseline, and this share of its ascent above it, do not fit the box is dropped
-    line_asc_em: float = 1.0                        # a line reaches at most this far above its baseline (the claim of its font is capped)
-    line_desc_em: float = 0.3                       # and this far below
-    overprint_pt: float = 16.0                      # a line is compared with the lines starting within this height of it
-    over_picture_share: float = 0.5                 # text lines inside pictures: more means a scan with hidden text
-    line_em: float = 1.2                            # line height of a font without metrics
+    right_share: float = 0.5  # widest share of its column a right-flush one-line block covers
+    letter_em: float = 1.5  # a drawing no larger than this many line heights, inside a line, is a letter
+    letter_cover: float = 0.3  # share of a span the letter drawings cover that makes it bold
+    contain_share: float = 0.5  # share of a block inside another one that makes the other hold it
+    min_lead: float = 0.9  # lines are at least this share of the font's own height apart
+    min_line_em: float = 3.0  # shortest line (in line heights) set beside an obstacle
+    frame_gap: float = 2.5  # lines of gap that end a text frame
+    frame_lines: int = 6  # lines a run of body paragraphs needs to be a text frame
+    paragraph_lines: int = 3  # and a paragraph of this many lines
+    frame_slack: float = 0.3  # share of a line a frame may be overrun by
+    descent_room: float = (
+        1.0  # a box's text may reach this share of its descent below it (the letters' tails are not cut)
+    )
+    core_share: float = 0.75  # a later line of a box of which the baseline, and this share of its ascent above it, do not fit the box is dropped
+    line_asc_em: float = 1.0  # a line reaches at most this far above its baseline (the claim of its font is capped)
+    line_desc_em: float = 0.3  # and this far below
+    overprint_pt: float = 16.0  # a line is compared with the lines starting within this height of it
+    over_picture_share: float = 0.5  # text lines inside pictures: more means a scan with hidden text
+    line_em: float = 1.2  # line height of a font without metrics
     join_back_em: float = 0.1
     join_ahead_em: float = 1.6
     script_share: float = 0.15
@@ -306,12 +336,14 @@ class RefontCfg:
     indent_min_em: float = 0.5
     indent_max_em: float = 4.0
     edge_match_em: float = 0.6
-    icon_chars: int = 3                             # a source glyph run of at most this many icon characters is one icon: only its own ink is kept
-    glyph_ink: int = 16                             # a source glyph run is laid over the sheet where it differs this much from its own background
-    edge_snap_px: float = 8.0                       # a drawing just outside the sheet (a frame line at the content box's edge) is drawn at the edge
-    flush_words: int = 5                            # a one-line block of a turned page is justified from this many words
-    open_pitch_em: float = 3.4                      # lines of a sentence that goes on may be this far apart (wide line spacing)
-    leader_min: int = 4                             # a run of this many equal dots, dashes or underscores is a filler that grows with its box
+    icon_chars: int = 3  # a source glyph run of at most this many icon characters is one icon: only its own ink is kept
+    glyph_ink: int = 16  # a source glyph run is laid over the sheet where it differs this much from its own background
+    edge_snap_px: float = (
+        8.0  # a drawing just outside the sheet (a frame line at the content box's edge) is drawn at the edge
+    )
+    flush_words: int = 5  # a one-line block of a turned page is justified from this many words
+    open_pitch_em: float = 3.4  # lines of a sentence that goes on may be this far apart (wide line spacing)
+    leader_min: int = 4  # a run of this many equal dots, dashes or underscores is a filler that grows with its box
     full_line: float = 0.8
     pitch_tol: float = 1.2
     min_width_em: float = 8.0
@@ -329,73 +361,131 @@ class RefontCfg:
 @dataclass(frozen=True)
 class LayoutCfg:
     sheet_mm: tuple = (210.0, 297.0)
-    page_px: tuple = (1024, 1440)                   # flat page and photo (width, height)
-    margin_frac: tuple = (0.0, 0.10)                # blank margin around the content, per side, of the sheet
-    cut_margin_frac: tuple = (0.12, 0.20)           # the margin of restyled pages whose frame cuts the page (room around the content)
-    min_fill: float = 0.75                          # fraction of the content window's patches with ink
+    page_px: tuple = (1024, 1440)  # flat page and photo (width, height)
+    margin_frac: tuple = (0.0, 0.10)  # blank margin around the content, per side, of the sheet
+    cut_margin_frac: tuple = (
+        0.12,
+        0.20,
+    )  # the margin of restyled pages whose frame cuts the page (room around the content)
+    min_fill: float = 0.75  # fraction of the content window's patches with ink
     fill_grid: int = 16
-    max_image: float = 0.25                         # max share of the window covered by pictures
+    max_image: float = 0.25  # max share of the window covered by pictures
     pictures: PictureCfg = PictureCfg()
-    max_zoom: float = 4.0                           # PDF re-render limit for a 1:1 window
-    manifest_pages: int = 20000                     # pages the manifest collects, shared by script_mix
-    pages_per_pdf: int = 10                         # pages of one PDF (books: doc_share of their group's pages)
-    book_pages_max: int = 100                       # and at most this
-    tries_per_page: int = 3                         # pages checked per page taken
+    max_zoom: float = 4.0  # PDF re-render limit for a 1:1 window
+    manifest_pages: int = 20000  # pages the manifest collects, shared by script_mix
+    pages_per_pdf: int = 10  # pages of one PDF (books: doc_share of their group's pages)
+    book_pages_max: int = 100  # and at most this
+    tries_per_page: int = 3  # pages checked per page taken
     doc_share: float = 0.02
-    min_content_area: float = 0.01                  # content box of a raster page: share of the page, at least
-    max_blank_margin: float = 0.50                  # and blank margin share, at most
-    check_px: int = 800                             # longest side of the render the raster checks run on
+    min_content_area: float = 0.01  # content box of a raster page: share of the page, at least
+    max_blank_margin: float = 0.50  # and blank margin share, at most
+    check_px: int = 800  # longest side of the render the raster checks run on
     script_mix: tuple = (("latin", 0.4), ("unknown", 0.12), ("cyrillic", 0.18), ("cjk", 0.12), ("other", 0.18))
-    scripts: dict = field(default_factory=lambda: {
-        "cyrillic": ("cyr", "bg", "ru", "uk", "sr", "mk", "be", "kk", "ky", "tg", "mn", "kz", "tj"),
-        "cjk": ("zh", "ja", "ko"),
-        "other": ("el", "he", "ar", "fa", "hi", "bn", "th", "ka", "hy", "ta", "te", "ur", "gu", "kn", "ml", "pa",
-                  "or", "si", "km", "lo", "my", "am", "as", "mni", "mr", "sa", "bo", "ckb", "ku", "ps", "ne", "mai", "sd"),
-        "unknown": ("unknown", None)})
-    sources: tuple = ("books_pdf", "bureaucracy", "exams", "other_docs", "scientific_paper", "forms", "tables", "certificates",
-                      "sheet_music")   # folders of Paths.layouts the listing takes
-    raster_only: tuple = ("certificates", "sheet_music")   # folders whose PDFs are never restyled, only rasterized
-    use_all: tuple = ("unknown",)                   # groups taking all their raster pages, outside script_mix
-    rotate180_prob: float = 0.3                     # pages (any kind) turned half a circle, at the end of the layout
-    grid_prob: float = 0.0                          # printed grid page instead of the manifest entry
+    scripts: dict = field(
+        default_factory=lambda: {
+            "cyrillic": ("cyr", "bg", "ru", "uk", "sr", "mk", "be", "kk", "ky", "tg", "mn", "kz", "tj"),
+            "cjk": ("zh", "ja", "ko"),
+            "other": (
+                "el",
+                "he",
+                "ar",
+                "fa",
+                "hi",
+                "bn",
+                "th",
+                "ka",
+                "hy",
+                "ta",
+                "te",
+                "ur",
+                "gu",
+                "kn",
+                "ml",
+                "pa",
+                "or",
+                "si",
+                "km",
+                "lo",
+                "my",
+                "am",
+                "as",
+                "mni",
+                "mr",
+                "sa",
+                "bo",
+                "ckb",
+                "ku",
+                "ps",
+                "ne",
+                "mai",
+                "sd",
+            ),
+            "unknown": ("unknown", None),
+        }
+    )
+    sources: tuple = (
+        "books_pdf",
+        "bureaucracy",
+        "exams",
+        "other_docs",
+        "scientific_paper",
+        "forms",
+        "tables",
+        "certificates",
+        "sheet_music",
+    )  # folders of Paths.layouts the listing takes
+    raster_only: tuple = ("certificates", "sheet_music")  # folders whose PDFs are never restyled, only rasterized
+    use_all: tuple = ("unknown",)  # groups taking all their raster pages, outside script_mix
+    rotate180_prob: float = 0.3  # pages (any kind) turned half a circle, at the end of the layout
+    grid_prob: float = 0.0  # printed grid page instead of the manifest entry
     grid: GridCfg = GridCfg()
-    font_pt: tuple = (10.0, 16.0)                   # body size on the sheet of the restyled pages (set at their source
-    open_font_pt: tuple = (12.0, 18.0)              # sizes, only the fonts change); on an open book
-    noise_scale: tuple = (0.6, 1.5)                 # factor of the paper and photo noise feature sizes, one per page
-    paper_tone: tuple = (0.88, 0.97)                # paper reflectance
+    font_pt: tuple = (10.0, 16.0)  # body size on the sheet of the restyled pages (set at their source
+    open_font_pt: tuple = (12.0, 18.0)  # sizes, only the fonts change); on an open book
+    noise_scale: tuple = (0.6, 1.5)  # factor of the paper and photo noise feature sizes, one per page
+    paper_tone: tuple = (0.88, 0.97)  # paper reflectance
     ink_tone: tuple = (0.04, 0.18)
-    effects: dict = field(default_factory=lambda: {
-        "paper_texture": _fx(1.0, fiber_amp=(0.0, 0.02), fiber_mm=(0.3, 1.5), fiber_stretch=(1.0, 8.0),
-                             cloud_amp=(0.0, 0.02), cloud_mm=(2.0, 80.0), fleck_prob=0.2, fleck_amp=(0.03, 0.15),
-                             grain_amp=(0.0, 0.012)),
-        "yellowing": _fx(0.15, strength=(0.02, 0.08), edge_mm=(5.0, 40.0)),
-        "print_spread": _fx(0.5, sigma_px=(0.3, 1.0), gain=(-0.2, 0.2)),
-        "ink_fade": _fx(0.3, strength=(0.03, 0.2), scale_mm=(5.0, 100.0)),
-        "toner_speckle": _fx(0.3, density=(1e-5, 1e-4), size_px=(1, 3)),
-        "banding": _fx(0.15, period_mm=(1.0, 20.0), amp=(0.005, 0.03)),
-        "show_through": _fx(0.15, strength=(0.01, 0.05), blur_px=(1.0, 5.0)),
-        "stains": _fx(0.1, n=(1, 3), size_mm=(5.0, 60.0), strength=(0.02, 0.08)),
-        "old_creases": _fx(0.25, darken=(0.01, 0.05), shade=(0.01, 0.06), ink_loss=(0.0, 0.2)),
-        "local_blur": _fx(0.25, n=(1, 3), size_mm=(15.0, 70.0), sigma_px=(0.8, 3.5)),
-    })
+    effects: dict = field(
+        default_factory=lambda: {
+            "paper_texture": _fx(
+                1.0,
+                fiber_amp=(0.0, 0.02),
+                fiber_mm=(0.3, 1.5),
+                fiber_stretch=(1.0, 8.0),
+                cloud_amp=(0.0, 0.02),
+                cloud_mm=(2.0, 80.0),
+                fleck_prob=0.2,
+                fleck_amp=(0.03, 0.15),
+                grain_amp=(0.0, 0.012),
+            ),
+            "yellowing": _fx(0.15, strength=(0.02, 0.08), edge_mm=(5.0, 40.0)),
+            "print_spread": _fx(0.5, sigma_px=(0.3, 1.0), gain=(-0.2, 0.2)),
+            "ink_fade": _fx(0.3, strength=(0.03, 0.2), scale_mm=(5.0, 100.0)),
+            "toner_speckle": _fx(0.3, density=(1e-5, 1e-4), size_px=(1, 3)),
+            "banding": _fx(0.15, period_mm=(1.0, 20.0), amp=(0.005, 0.03)),
+            "show_through": _fx(0.15, strength=(0.01, 0.05), blur_px=(1.0, 5.0)),
+            "stains": _fx(0.1, n=(1, 3), size_mm=(5.0, 60.0), strength=(0.02, 0.08)),
+            "old_creases": _fx(0.25, darken=(0.01, 0.05), shade=(0.01, 0.06), ink_loss=(0.0, 0.2)),
+            "local_blur": _fx(0.25, n=(1, 3), size_mm=(15.0, 70.0), sigma_px=(0.8, 3.5)),
+        }
+    )
 
 
 @dataclass(frozen=True)
 class CameraCfg:
-    dist_mm: tuple = (200.0, 400.0)                 # camera to page centre (the tilt follows from the page's shape)
+    dist_mm: tuple = (200.0, 400.0)  # camera to page centre (the tilt follows from the page's shape)
     roll_deg: tuple = (-4.8, 4.8)
-    fill: tuple = (0.93, 1.0)                       # page bbox to frame, along the tighter side
-    max_offset: float = 0.3                         # camera's horizontal offset from the page centre / page size
-    side_offset: float = 0.5                        # the offset allowed when no view within max_offset sees all the page
-    shift: float = 0.3                              # page centre offset, fraction of the free space
-    max_tilt_deg: float = 20.0                      # view direction to the table normal
-    incidence_deg: float = 65.0                     # max view angle to the surface normal, anywhere on the page
-    view_dirs: int = 256                            # view directions spread evenly over the tilts the offsets allow
-    view_step: int = 4                              # the views are worked out on every 4th node of the page grid
-    frames: tuple = (("page", 0.7), ("sides", 0.15), ("inside", 0.15))   # the plan's frame of a photo: the whole page,
-                                                    # some sides cut, all four cut (the page edges barely in view)
-    frame: str = "page"                             # this photo's (sample_preset sets it)
-    crop_margin: tuple = (0.0, 0.05)                # page in view beyond the content per cut side, share of the content box's side
+    fill: tuple = (0.93, 1.0)  # page bbox to frame, along the tighter side
+    max_offset: float = 0.3  # camera's horizontal offset from the page centre / page size
+    side_offset: float = 0.5  # the offset allowed when no view within max_offset sees all the page
+    shift: float = 0.3  # page centre offset, fraction of the free space
+    max_tilt_deg: float = 20.0  # view direction to the table normal
+    incidence_deg: float = 65.0  # max view angle to the surface normal, anywhere on the page
+    view_dirs: int = 256  # view directions spread evenly over the tilts the offsets allow
+    view_step: int = 4  # the views are worked out on every 4th node of the page grid
+    frames: tuple = (("page", 0.7), ("sides", 0.15), ("inside", 0.15))  # the plan's frame of a photo: the whole page,
+    # some sides cut, all four cut (the page edges barely in view)
+    frame: str = "page"  # this photo's (sample_preset sets it)
+    crop_margin: tuple = (0.0, 0.05)  # page in view beyond the content per cut side, share of the content box's side
 
 
 @dataclass(frozen=True)
@@ -403,7 +493,7 @@ class LightCfg:
     ambient: tuple = (0.05, 0.35)
     dist_mm: tuple = (300.0, 2000.0)
     elev_deg: tuple = (20.0, 80.0)
-    sharp_prob: float = 0.4                         # point light with hard cast shadows, else area light
+    sharp_prob: float = 0.4  # point light with hard cast shadows, else area light
     area_mm: tuple = (100.0, 600.0)
     specular: tuple = (0.0, 0.15)
     shininess: tuple = (8.0, 40.0)
@@ -411,19 +501,21 @@ class LightCfg:
 
 @dataclass(frozen=True)
 class RenderCfg:
-    background: str = "texture"                     # "black" or "texture"
-    black_prob: float = 0.2                         # black background share under "texture"
+    background: str = "texture"  # "black" or "texture"
+    black_prob: float = 0.2  # black background share under "texture"
     camera: CameraCfg = CameraCfg()
     light: LightCfg = LightCfg()
-    effects: dict = field(default_factory=lambda: {
-        "shading": _fx(1.0),
-        "vignetting": _fx(0.5, strength=(0.05, 0.35)),
-        "defocus": _fx(0.5, coc_px=(0.3, 1.0)),
-        "motion_blur": _fx(0.12, length_px=(2.0, 10.0)),
-        "exposure": _fx(1.0, ev=(-0.6, 0.4), gamma=(0.85, 1.2)),
-        "iso_noise": _fx(0.9, iso=(50.0, 3200.0)),
-        "jpeg": _fx(0.8, quality=(45, 95)),
-    })
+    effects: dict = field(
+        default_factory=lambda: {
+            "shading": _fx(1.0),
+            "vignetting": _fx(0.5, strength=(0.05, 0.35)),
+            "defocus": _fx(0.5, coc_px=(0.3, 1.0)),
+            "motion_blur": _fx(0.12, length_px=(2.0, 10.0)),
+            "exposure": _fx(1.0, ev=(-0.6, 0.4), gamma=(0.85, 1.2)),
+            "iso_noise": _fx(0.9, iso=(50.0, 3200.0)),
+            "jpeg": _fx(0.8, quality=(45, 95)),
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -455,3 +547,17 @@ PRESETS = {"demo": _demo(), "full": Preset("full")}
 
 def get_preset(name: str, **overrides) -> Preset:
     return replace(PRESETS[name], **overrides)
+
+
+# curate
+MIN_FORMS = 10  # a cluster with fewer form pages is not a form cluster
+RATIO = 2**0.5  # page h / w of the set (A4); other pages are cropped to it
+MAX_CROP = 0.15  # at most this share of a side is cropped, else the page is out
+MIN_NATIVE = 1000  # long side px of a raster page under this: too coarse
+PIC_OUT = 0.10  # the pages with the highest picture score (this share of the pool) are out
+DUP_SIM = (
+    0.95  # cosine above this (1536-d page vectors: pooled | mid-layer patch mean): the same page or template / series
+)
+
+# noise
+C_COARSE = 4.0  # feature size, in pixels, from which noise is evaluated on a coarser grid

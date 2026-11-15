@@ -1,11 +1,12 @@
 """Handwriting of forms and notes: one writer at one font size."""
+
 import random
 
 import numpy as np
-
 from hwsynth.config import GlyphCfg
 from hwsynth.fonts import em_per_xh
 from hwsynth.scripts import text_script
+
 from .canvas import PAGE_MM, Hand, Strip, count_words
 from .config import PAGE, GenCfg
 
@@ -37,6 +38,7 @@ class FontHand(Hand):
         """The ink of the line cropped to its extent, at page resolution."""
         if text not in self.cache:
             import hwsynth as H
+
             written = self._cover(text)
             script = text_script(written)
             script = "Latin" if script == "Common" else script
@@ -47,13 +49,23 @@ class FontHand(Hand):
             else:
                 xh = self.row_mm / em_per_xh(font, script, GlyphCfg().px)
                 self.writer.p["size"] = xh
-                pen = self.writer.pen                                    # hwsynth writes no x-height below 5 pen widths / 4 pen edges (page.write): small
-                pen.width, pen.edge = min(pen.width, xh / 5), min(pen.edge, xh / 4)    # writing takes a finer pen instead of growing
-                s = H.write(written, self.writer, width_mm=min(1800.0, 14 + 14.0 * len(text)), dpi=self.px_mm * 25.4, ruled=False,
-                            scan=False, image=False)
+                pen = self.writer.pen  # hwsynth writes no x-height below 5 pen widths / 4 pen edges (page.write): small
+                pen.width, pen.edge = (
+                    min(pen.width, xh / 5),
+                    min(pen.edge, xh / 4),
+                )  # writing takes a finer pen instead of growing
+                s = H.write(
+                    written,
+                    self.writer,
+                    width_mm=min(1800.0, 14 + 14.0 * len(text)),
+                    dpi=self.px_mm * 25.4,
+                    ruled=False,
+                    scan=False,
+                    image=False,
+                )
                 ys, xs = np.nonzero(s.ink > self.cfg.crop_ink)
                 if len(ys):
-                    raw = s.ink[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+                    raw = s.ink[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
                 elif any(c.isdigit() for c in text) and self._localize(text) != text:
                     raw = self._raw(self._localize(text))
                 else:

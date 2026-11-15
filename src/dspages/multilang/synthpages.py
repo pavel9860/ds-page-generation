@@ -1,4 +1,5 @@
 """Synthetic pages of every type of the language dataset from a language's own text (the text pool: real lines of its documents; the translated documents for the languages without a pool): plain and formatted text, tables, forms, magazine pages (headline, two columns, a pull quote), flyers (headline, bands, a box, short blocks), handwritten pages and, from a form written to a PDF, filled forms."""
+
 import hashlib
 import json
 import random
@@ -24,13 +25,20 @@ def load_pools(lang, out, trans_dir=None, part=None):
     f = Path(out) / "paras" / f"{C.alias.get(lang, lang)}.json"
     pool = json.loads(f.read_text()) if f.exists() else {}
     from .langcheck import clean_ok, repair
+
     lang = C.alias.get(lang, lang)
-    pool = {k: [x.strip() for x in map(repair, pool.get(k, [])) if x.strip() and clean_ok(x, lang)] for k in ("p", "h", "li")}
+    pool = {
+        k: [x.strip() for x in map(repair, pool.get(k, [])) if x.strip() and clean_ok(x, lang)]
+        for k in ("p", "h", "li")
+    }
     if len(pool["p"]) < 40 and trans_dir:
         for g in sorted(Path(trans_dir).glob(f"out_{lang}_?.json")):
             for v in json.loads(g.read_text()).values():
-                pool["p"] += [x.strip() for x in re.sub(r"(?<=[.。।؟!?։]) +|(?<=[。।])", "\n", v).splitlines()
-                              if len(x.strip()) >= 30 and "_" not in x and clean_ok(x, lang, 0.25)]
+                pool["p"] += [
+                    x.strip()
+                    for x in re.sub(r"(?<=[.。।؟!?։]) +|(?<=[。।])", "\n", v).splitlines()
+                    if len(x.strip()) >= 30 and "_" not in x and clean_ok(x, lang, 0.25)
+                ]
     if part:
         pool = {k: [x for x in v if part_of(x) == part] for k, v in pool.items()}
     pool.update(field_pool(lang, trans_dir))
@@ -73,14 +81,22 @@ class Text:
 
     def _cut(self, t, lo, hi):
         if not self.sep:
-            return t[:self.rng.randint(lo * 3, hi * 3)]
-        return " ".join(t.split()[:self.rng.randint(lo, hi)])
+            return t[: self.rng.randint(lo * 3, hi * 3)]
+        return " ".join(t.split()[: self.rng.randint(lo, hi)])
 
     def heading(self):
-        return self.rng.choice(self.pool["h"] or self.pool["li"] or self.pool["p"]) if (self.pool["h"] or self.pool["li"]) else self.words(2, 6)
+        return (
+            self.rng.choice(self.pool["h"] or self.pool["li"] or self.pool["p"])
+            if (self.pool["h"] or self.pool["li"])
+            else self.words(2, 6)
+        )
 
     def item(self):
-        return self.rng.choice(self.pool["li"] or self.pool["h"]) if (self.pool["li"] or self.pool["h"]) else self.words(3, 8)
+        return (
+            self.rng.choice(self.pool["li"] or self.pool["h"])
+            if (self.pool["li"] or self.pool["h"])
+            else self.words(3, 8)
+        )
 
     def words(self, lo, hi):
         src = self.pool["h"] + self.pool["li"] or self.pool["p"]
@@ -100,12 +116,19 @@ class Text:
 
     def num(self):
         r = self.rng
-        return r.choice([f"{r.randint(1, 999)}", f"{r.randint(1, 99)}.{r.randint(0, 99):02d}", f"{r.randint(1, 28):02d}.{r.randint(1, 12):02d}.{r.randint(1990, 2024)}"])
+        return r.choice(
+            [
+                f"{r.randint(1, 999)}",
+                f"{r.randint(1, 99)}.{r.randint(0, 99):02d}",
+                f"{r.randint(1, 28):02d}.{r.randint(1, 12):02d}.{r.randint(1990, 2024)}",
+            ]
+        )
 
 
 def common_chars(pool, share=0.995):
     """The characters that make up `share` of the pool's text, as a string"""
     from collections import Counter
+
     c = Counter(ch for k in ("p", "h", "li") for x in pool[k] for ch in x if not ch.isspace())
     out, tot, run = [], sum(c.values()), 0
     for ch, n in c.most_common():
@@ -123,8 +146,13 @@ def body_of(kind, T, n):
         out = []
         for _ in range(n):
             k = r.random()
-            out.append(f"<h2>{_E(T.heading())}</h2>" if k < 0.15 else f'<p class="li">{r.choice(["•", "–", f"{r.randint(1, 9)}."])} {_E(T.item())}</p>'
-                       if k < 0.35 else f"<p>{_E(T.para())}</p>")
+            out.append(
+                f"<h2>{_E(T.heading())}</h2>"
+                if k < 0.15
+                else f'<p class="li">{r.choice(["•", "–", f"{r.randint(1, 9)}."])} {_E(T.item())}</p>'
+                if k < 0.35
+                else f"<p>{_E(T.para())}</p>"
+            )
         return "".join(out)
     if kind == "table":
         cols = r.randint(3, 5)
@@ -132,7 +160,10 @@ def body_of(kind, T, n):
         num = {c for c in range(len(heads)) if r.random() < 0.4}
         head = "".join(f"<td><b>{_E(h)}</b></td>" for h in heads)
         cell = (lambda: r.choice(T.pool["cells"])) if T.pool["cells"] else (lambda: T.words(1, 3))
-        body = "".join("<tr>" + "".join(f"<td>{_E(T.num() if c in num else cell())}</td>" for c in range(len(heads))) + "</tr>" for _ in range(n))
+        body = "".join(
+            "<tr>" + "".join(f"<td>{_E(T.num() if c in num else cell())}</td>" for c in range(len(heads))) + "</tr>"
+            for _ in range(n)
+        )
         title = r.choice(T.pool["titles_table"]) if T.pool["titles_table"] else T.heading()
         return f"<h2>{_E(title)}</h2><table><tr>{head}</tr>{body}</table>"
     if kind == "form":
@@ -144,19 +175,24 @@ def body_of(kind, T, n):
     if kind == "magazine":
         cols = ["".join(f"<p>{_E(T.para())}</p>" for _ in range(n)) for _ in range(2)]
         quote = f'<table class="box"><tr><td class="bx"><b>{_E(T.item())}</b></td></tr></table>'
-        return (f"<h1>{_E(T.heading())}</h1><p><i>{_E(T.item())}</i></p><table><tr><td class=\"col\">{cols[0]}{quote}</td>"
-                f"<td class=\"col\">{cols[1]}</td></tr></table>")
+        return (
+            f'<h1>{_E(T.heading())}</h1><p><i>{_E(T.item())}</i></p><table><tr><td class="col">{cols[0]}{quote}</td>'
+            f'<td class="col">{cols[1]}</td></tr></table>'
+        )
     if kind == "flyer":
         items = "".join(f'<p class="li">• {_E(T.item())}</p>' for _ in range(n))
-        return (f'<table class="box"><tr><td class="band"><h1>{_E(T.heading())}</h1></td></tr></table><h2>{_E(T.heading())}</h2>'
-                f'<p>{_E(T.para())}</p>{items}<table class="box"><tr><td class="bx"><b>{_E(T.item())}</b><br>{_E(T.num())} {_E(T.num())}</td></tr></table>'
-                f"<p>{_E(T.item())}</p>")
+        return (
+            f'<table class="box"><tr><td class="band"><h1>{_E(T.heading())}</h1></td></tr></table><h2>{_E(T.heading())}</h2>'
+            f'<p>{_E(T.para())}</p>{items}<table class="box"><tr><td class="bx"><b>{_E(T.item())}</b><br>{_E(T.num())} {_E(T.num())}</td></tr></table>'
+            f"<p>{_E(T.item())}</p>"
+        )
     raise ValueError(kind)
 
 
 def line_boxes(pdf):
     """Boxes of the printed lines of a rendered page in the 1024 px window"""
     from hwsynth.scripts import text_script
+
     k = C.side / C.pt
     out = []
     with pymupdf.open("pdf", pdf) as doc:
@@ -173,6 +209,7 @@ def make_synth(job):
     kind, lang, seed, out, pool, split = job
     from hwsynth.scripts import text_script
     from hwsynth.writer import _index
+
     rng = random.Random(f"{split}{kind}{lang}{seed}")
     try:
         script = text_script(" ".join(pool["p"][:6])[:600] or "a")
@@ -181,12 +218,21 @@ def make_synth(job):
         d = Path(out) / "synth" / split / kind / lang
         d.mkdir(parents=True, exist_ok=True)
         f = d / f"{rid}.jpg"
-        row = dict(id=rid, file=f"synth/{split}/{kind}/{lang}/{rid}.jpg", lang=lang, type=kind, scan=False, lang_status="synthetic",
-                   split=split, script=script)
+        row = dict(
+            id=rid,
+            file=f"synth/{split}/{kind}/{lang}/{rid}.jpg",
+            lang=lang,
+            type=kind,
+            scan=False,
+            lang_status="synthetic",
+            split=split,
+            script=script,
+        )
         if kind == "handwritten":
             rl = [("h", T.heading())] if rng.random() < 0.5 else []
             rl += [("p", T.para()) for _ in range(30)]
             import numpy as np
+
             hb = []
             page = D.hand_page(rl, D.writer_of(rng), rng, boxes=hb, rtl=lang in D.RTL)
             if not hb:
@@ -204,20 +250,37 @@ def make_synth(job):
         fixed = (round(fs, 1), m, lead)
         best = None
         for n in range(1, C.max_units[kind] + 1):
-            pdf = D.page_pdf(body_of(kind, Text(pool, random.Random(f"{rid}"), script), n), font, lang, rng, None, fixed=fixed, shrink=False)
+            pdf = D.page_pdf(
+                body_of(kind, Text(pool, random.Random(f"{rid}"), script), n),
+                font,
+                lang,
+                rng,
+                None,
+                fixed=fixed,
+                shrink=False,
+            )
             if pdf is None:
                 break
             best = (n, pdf)
         if best is None:
             return None
         n = max(1, round(best[0] * rng.uniform(0.85, 1.0)))
-        pdf = D.page_pdf(body_of(kind, Text(pool, random.Random(f"{rid}"), script), n), font, lang, rng, None, fixed=fixed, shrink=False)
+        pdf = D.page_pdf(
+            body_of(kind, Text(pool, random.Random(f"{rid}"), script), n),
+            font,
+            lang,
+            rng,
+            None,
+            fixed=fixed,
+            shrink=False,
+        )
         with pymupdf.open("pdf", pdf) as d:
             pix = d[0].get_pixmap(dpi=C.dpi, colorspace=pymupdf.csGRAY)
             Image.frombytes("L", (pix.width, pix.height), pix.samples).resize((C.side, C.side)).save(f, quality=88)
         return dict(row, boxes=line_boxes(pdf), font_pt=fixed[0], margin_pt=round(m, 1))
     except Exception:
         import os
+
         if os.environ.get("HWDEBUG"):
             raise
         return None

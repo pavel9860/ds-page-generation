@@ -1,4 +1,5 @@
 """Small helpers shared by the workers."""
+
 import signal
 from contextlib import contextmanager
 

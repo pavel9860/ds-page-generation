@@ -11,14 +11,13 @@ Solved by SQP: each step is a convex QP (quadprog) over all obstacle inequalitie
 inside the step. The gravity curvature enters the QP Hessian with its absolute value (a descent direction far
 from equilibrium); steps rotate no segment by more than MAX_DPHI.
 """
+
 import numpy as np
 import quadprog
 
-MAX_STEPS = 200
-MAX_DPHI = 0.2
-STEP_TOL = 1e-5                 # m: stop when no node moves more than this in a step (a contact switching on and off
-                                # at the table can leave a cycle of about 1 um)
-REG = 1e-9
+from .config import MAX_DPHI, MAX_STEPS, REG, STEP_TOL  # noqa: F401
+
+# at the table can leave a cycle of about 1 um)
 
 
 def _nodes(y, h):
@@ -33,8 +32,14 @@ def _lower_hull_support(x, gap):
     """Two lower-hull nodes of (x, gap) bracketing the centre of mass: where the rigid strip rests."""
     hull = []
     for i in np.argsort(x):
-        while len(hull) > 1 and ((x[hull[-1]] - x[hull[-2]]) * (gap[i] - gap[hull[-2]])
-                                 - (gap[hull[-1]] - gap[hull[-2]]) * (x[i] - x[hull[-2]])) <= 0:
+        while (
+            len(hull) > 1
+            and (
+                (x[hull[-1]] - x[hull[-2]]) * (gap[i] - gap[hull[-2]])
+                - (gap[hull[-1]] - gap[hull[-2]]) * (x[i] - x[hull[-2]])
+            )
+            <= 0
+        ):
             hull.pop()
         hull.append(i)
     k = next((m for m in range(len(hull) - 1) if x[hull[m + 1]] >= x.mean()), len(hull) - 2)
@@ -45,7 +50,7 @@ def _rest(folds, b, h, n, clamp):
     """Initial state: the rigidly folded strip, clamped or resting on its two supporting obstacle nodes."""
     phi = np.zeros(n)
     for s, th, _ in folds:
-        phi[int(round(s / h)):] += th
+        phi[int(round(s / h)) :] += th
     if clamp is not None:
         return np.append(phi + clamp, 0.0)
     y = np.append(phi, 0.0)
@@ -94,16 +99,16 @@ def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150, y0=None,
     wtail = np.cumsum(w[::-1])[::-1][1:]
     nf = len(free)
     m = nf + len(sj)
-    rows = np.zeros((m, n + 1))                    # constraint rows over node heights: table nodes, supports
+    rows = np.zeros((m, n + 1))  # constraint rows over node heights: table nodes, supports
     rows[np.arange(nf), free] = 1.0
     rows[nf + np.arange(len(sj)), sj] = 1 - sw
     rows[nf + np.arange(len(sj)), sj + 1] = sw
-    B = rows[:, 1:][:, ::-1].cumsum(1)[:, ::-1]   # d(row) / d(sin phi_i) / h: weight of nodes beyond segment i
+    B = rows[:, 1:][:, ::-1].cumsum(1)[:, ::-1]  # d(row) / d(sin phi_i) / h: weight of nodes beyond segment i
     bound = np.concatenate([floor[free], sh])
     lam = np.zeros(m)
     Ct = np.zeros((n + 1, len(E) + m))
-    Ct[:, :len(E)] = E.T
-    Ct[n, len(E):] = 1.0
+    Ct[:, : len(E)] = E.T
+    Ct[n, len(E) :] = 1.0
     for _ in range(MAX_STEPS):
         c, s = np.cos(y[:-1]), np.sin(y[:-1])
         r = D / h * (np.diff(y[:-1]) - h * kbar)
@@ -115,12 +120,13 @@ def solve_strip(length, q, d, folds=(), supports=(), clamp=None, n=150, y0=None,
         tail = wtail - (lam @ B)
         H = H0.copy()
         H[idx, idx] += np.abs(h * s * tail)
-        Ct[:n, len(E):] = (B * (h * c)).T
-        dy, _, _, _, mult, _ = quadprog.solve_qp(H, -g, Ct, np.concatenate([-E @ y, bound - rows @ _nodes(y, h)]),
-                                                 len(E))
+        Ct[:n, len(E) :] = (B * (h * c)).T
+        dy, _, _, _, mult, _ = quadprog.solve_qp(
+            H, -g, Ct, np.concatenate([-E @ y, bound - rows @ _nodes(y, h)]), len(E)
+        )
         a = min(1.0, MAX_DPHI / max(np.abs(dy[:-1]).max(), 1e-300))
         y = y + a * dy
-        lam = (1 - a) * lam + a * mult[len(E):]
+        lam = (1 - a) * lam + a * mult[len(E) :]
         dz = dy[-1] + h * np.concatenate([[0.0], np.cumsum(c * dy[:-1])])
         dx = h * np.concatenate([[0.0], np.cumsum(-s * dy[:-1])])
         if a * max(np.abs(dz).max(), np.abs(dx).max()) < STEP_TOL:

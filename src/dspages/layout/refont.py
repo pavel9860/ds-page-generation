@@ -2,59 +2,72 @@
 columns, alignment, bold/italic and heading/body hierarchy; rules, boxes and pictures follow the text they sit next to.
 The text of the following pages flows in, so the page stays full. Fonts come from find_fonts, matched to the
 page's scripts by the real glyph coverage of every font file that is drawn with."""
+
 import bisect
-import io
-import re
 import glob
+import io
 import os
+import re
 import statistics
 import struct
 import unicodedata
 from collections import Counter, defaultdict
-from functools import lru_cache
+from functools import cache, lru_cache
 
 import cv2
 import numpy as np
-import regex
 import pymupdf
+import regex
+from fontTools import agl
+from fontTools.ttLib import TTFont, TTLibError
 from numba import njit
+from PIL import Image, ImageDraw, ImageFont
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-from PIL import Image, ImageDraw, ImageFont
 
 from ..config import RefontCfg
 from . import indic, legacy, reffonts
+from .config import GSUB_ROUNDS, STYLE_OF, THAI_PUA, TRACE_NAME  # noqa: F401
 from .text import _font_cmap, find_fonts, font_info, save_font_info
-from fontTools import agl
-from fontTools.ttLib import TTFont, TTLibError
 
 C = RefontCfg()
-TEXT_FLAGS = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES      # lines only: pictures come from get_image_info
-STYLE_OF = {"": 0, "regular": 0, "roman": 0, "book": 0, "bold": 1, "italic": 2, "oblique": 2, "bolditalic": 3,
-            "boldoblique": 3}
+TEXT_FLAGS = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES  # lines only: pictures come from get_image_info
 LEADING_VOWELS = "เแโไใ"
 JOINERS = "‌‍"
 NO_SPACE_SCRIPTS = ("THAI", "LAO", "KHMER", "MYANMAR", "CJK", "HIRAGANA", "KATAKANA", "HANGUL", "IDEOGRAPHIC")
 CJK_NAMES = ("hiragana", "katakana", "hangul", "bopomofo", "ideographic")
-BELOW_FEATURES = {"blwf", "pstf", "vatu"}        # GSUB features of the below / post-base consonant forms (ra-phala ...): virama + consonant
-GSUB_ROUNDS = 8                 # passes over a font's substitutions to name the glyphs made from glyphs made from mapped ones
-SYMBOL_FONTS = ("wingding", "webding", "symbol", "dingbat", "zapf")    # fonts whose letters are pictures: set as the page's glyph
-NOTO_PREFIXES = ("notosans", "notoserif", "noto")      # longest first: NotoKufiArabic, NotoTraditionalNushu are script fonts too
+BELOW_FEATURES = {
+    "blwf",
+    "pstf",
+    "vatu",
+}  # GSUB features of the below / post-base consonant forms (ra-phala ...): virama + consonant
+SYMBOL_FONTS = (
+    "wingding",
+    "webding",
+    "symbol",
+    "dingbat",
+    "zapf",
+)  # fonts whose letters are pictures: set as the page's glyph
+NOTO_PREFIXES = (
+    "notosans",
+    "notoserif",
+    "noto",
+)  # longest first: NotoKufiArabic, NotoTraditionalNushu are script fonts too
 TERMINAL = tuple(".;:!?…。")
 LEADERS = set(".…_-–—=")
 ENTRY_END = re.compile(r"(\.{3,}|…{2,}|_{4,}|(\. ){4,})\s*[\divxlcIVXLC]*\s*$")
 _T = np.arange(1, C.bezier_steps + 1)[:, None] / C.bezier_steps
-BEZIER = np.hstack([(1 - _T) ** 3, 3 * (1 - _T) ** 2 * _T, 3 * (1 - _T) * _T ** 2, _T ** 3])     # cubic Bezier weights per step
-MATH_LETTERS = {cp: unicodedata.normalize("NFKC", chr(cp)) for cp in range(0x1D400, 0x1D800)
-                if len(unicodedata.normalize("NFKC", chr(cp))) == 1 and unicodedata.normalize("NFKC", chr(cp)) != chr(cp)}
+BEZIER = np.hstack(
+    [(1 - _T) ** 3, 3 * (1 - _T) ** 2 * _T, 3 * (1 - _T) * _T**2, _T**3]
+)  # cubic Bezier weights per step
+MATH_LETTERS = {
+    cp: unicodedata.normalize("NFKC", chr(cp))
+    for cp in range(0x1D400, 0x1D800)
+    if len(unicodedata.normalize("NFKC", chr(cp))) == 1 and unicodedata.normalize("NFKC", chr(cp)) != chr(cp)
+}
 ITEM = re.compile(r"\s*(\d{1,3}[.)]\s*|[•·▪■◦○●∙–—*-]\s+)\S")
-VALUE = re.compile(r"[\s.…·_\-–—\d/,:()%+]+")                # a table value: numbers, leaders
+VALUE = re.compile(r"[\s.…·_\-–—\d/,:()%+]+")  # a table value: numbers, leaders
 MARKER = re.compile(r"[(\[]?(\d{1,3}|[ivxIVX]{1,4}|[a-zA-Zа-яА-Я])[.)\]]?|[•·▪■□◦○●∙\-–—*]")
-THAI_PUA = {0xF700: 0x0E10, 0xF701: 0x0E34, 0xF702: 0x0E35, 0xF703: 0x0E36, 0xF704: 0x0E37, 0xF705: 0x0E48,
-            0xF706: 0x0E49, 0xF707: 0x0E4A, 0xF708: 0x0E4B, 0xF709: 0x0E4C, 0xF70A: 0x0E48, 0xF70B: 0x0E49,
-            0xF70C: 0x0E4A, 0xF70D: 0x0E4B, 0xF70E: 0x0E4C, 0xF70F: 0x0E0D, 0xF710: 0x0E31, 0xF711: 0x0E4D,
-            0xF712: 0x0E47, 0xF713: 0x0E48, 0xF714: 0x0E49, 0xF715: 0x0E4A, 0xF716: 0x0E4B, 0xF717: 0x0E4C,
-            0xF718: 0x0E38, 0xF719: 0x0E39, 0xF71A: 0x0E3A}
 
 
 def _rtl_char(ch):
@@ -82,8 +95,10 @@ def _gray_f(c):
 
 def span_style(s):
     n = s["font"].lower()
-    return (bool(s["flags"] & 16) or any(k in n for k in ("bold", "black", "heavy")),
-            bool(s["flags"] & 2) or "italic" in n or "oblique" in n)
+    return (
+        bool(s["flags"] & 16) or any(k in n for k in ("bold", "black", "heavy")),
+        bool(s["flags"] & 2) or "italic" in n or "oblique" in n,
+    )
 
 
 def span_mono(s):
@@ -94,8 +109,19 @@ def _tilted(l):
     """A tilted line is one picture-like glyph run: set as a pixmap of the page."""
     first = l["spans"][0]
     box = pymupdf.Rect(l["bbox"])
-    span = dict(text="\ufffc", size=round(first["size"] * C.size_step) / C.size_step, gray=_gray(first["color"]), bold=False,
-                italic=False, mono=False, nat=_nat(first), glyph=box, tall=True, bbox=box, font=first["font"])
+    span = dict(
+        text="\ufffc",
+        size=round(first["size"] * C.size_step) / C.size_step,
+        gray=_gray(first["color"]),
+        bold=False,
+        italic=False,
+        mono=False,
+        nat=_nat(first),
+        glyph=box,
+        tall=True,
+        bbox=box,
+        font=first["font"],
+    )
     return [dict(bbox=box, spans=[span])]
 
 
@@ -127,6 +153,7 @@ def _winansi_only(cmap):
             return ord(bytes([k]).decode("cp1252")) if k < 256 else None
         except UnicodeDecodeError:
             return None
+
     return bool(pairs) and all(winansi(k) == u for k, u in pairs)
 
 
@@ -139,13 +166,20 @@ def symbolic_fonts(page):
     def ref(key):
         n = int(key[1].split()[0]) if key[0] == "xref" else 0
         return n if 0 < n < doc.xref_length() else 0
+
     for xref, _, kind, base, *_ in page.get_fonts():
         name = base.split("+")[-1]
-        desc = ref(doc.xref_get_key(xref, "FontDescriptor")) if kind == "TrueType" and 0 < xref < doc.xref_length() else 0
+        desc = (
+            ref(doc.xref_get_key(xref, "FontDescriptor")) if kind == "TrueType" and 0 < xref < doc.xref_length() else 0
+        )
         ff = ref(doc.xref_get_key(desc, "FontFile2")) if desc else 0
         subs = _cmap_subtables(doc.xref_stream(ff) or b"") if ff else set()
         tu = ref(doc.xref_get_key(xref, "ToUnicode")) if 0 < xref < doc.xref_length() else 0
-        legacy = (3, 0) in subs and not subs & {(3, 1), (3, 10), (0, 3), (0, 4)} and (not tu or _winansi_only(doc.xref_stream(tu) or b""))
+        legacy = (
+            (3, 0) in subs
+            and not subs & {(3, 1), (3, 10), (0, 3), (0, 4)}
+            and (not tu or _winansi_only(doc.xref_stream(tu) or b""))
+        )
         (bad if legacy else ok).add(name)
     return bad - ok
 
@@ -181,8 +215,19 @@ def _span(s, text, symbolic):
     marks = [c for c in text if _icon(c) or not c.isspace()]
     icon = bool(marks) and all(_icon(c) for c in marks) and len(marks) <= C.icon_chars
     glyph = pymupdf.Rect(s["bbox"]) if symbol or icon or (marks and all(_icon(c) for c in marks)) else None
-    return dict(text=text, size=round(s["size"] * C.size_step) / C.size_step, gray=_gray(s["color"]), bold=bold, italic=italic,
-                mono=span_mono(s), nat=_nat(s), glyph=glyph, icon=icon, bbox=_ink(s), font=s["font"])
+    return dict(
+        text=text,
+        size=round(s["size"] * C.size_step) / C.size_step,
+        gray=_gray(s["color"]),
+        bold=bold,
+        italic=italic,
+        mono=span_mono(s),
+        nat=_nat(s),
+        glyph=glyph,
+        icon=icon,
+        bbox=_ink(s),
+        font=s["font"],
+    )
 
 
 def _chars_text(s):
@@ -191,11 +236,21 @@ def _chars_text(s):
     out, prev, right = [], None, None
     for ch in s["chars"]:
         c = ch["c"]
-        if (prev is not None and c != " " and prev["c"] != " " and not unicodedata.category(c[:1] or " ").startswith("M")
-                and ch["bbox"][0] - right > C.word_margin * max(ch["bbox"][2] - ch["bbox"][0], ch["bbox"][3] - ch["bbox"][1])):
+        if (
+            prev is not None
+            and c != " "
+            and prev["c"] != " "
+            and not unicodedata.category(c[:1] or " ").startswith("M")
+            and ch["bbox"][0] - right
+            > C.word_margin * max(ch["bbox"][2] - ch["bbox"][0], ch["bbox"][3] - ch["bbox"][1])
+        ):
             out.append(" ")
         out.append(c)
-        right = ch["bbox"][2] if right is None or not unicodedata.category(c[:1] or " ").startswith("M") else max(right, ch["bbox"][2])     # the cluster's right edge
+        right = (
+            ch["bbox"][2]
+            if right is None or not unicodedata.category(c[:1] or " ").startswith("M")
+            else max(right, ch["bbox"][2])
+        )  # the cluster's right edge
         prev = ch
     return "".join(out)
 
@@ -204,12 +259,14 @@ def _spans(l, symbolic, visual=False):
     spans = []
     for s in l["spans"]:
         text = _chars_text(s).replace("\x00", "").replace("\xa0", " ").translate(THAI_PUA).translate(MATH_LETTERS)
-        if visual and not s.get("logical"):                           # a span decoded by a table is in logical order already
+        if visual and not s.get("logical"):  # a span decoded by a table is in logical order already
             text = indic.to_logical(text)
         text = text.replace(indic.REPH, "")
         if (text.strip() or any(_icon(c) for c in text)) and round(s["size"] * C.size_step) > 0:
             spans.append(_span(s, text, symbolic))
-        elif text and spans and not spans[-1]["text"].endswith(" "):           # a space set in a font of its own: the words it parts stay apart
+        elif (
+            text and spans and not spans[-1]["text"].endswith(" ")
+        ):  # a space set in a font of its own: the words it parts stay apart
             spans[-1]["text"] += " "
     return spans
 
@@ -218,7 +275,9 @@ def _line_index(rows):
     """Arrays of a page's lines [(box, spans)] for _crossed: line boxes (n, 4), line sizes, span extents (m, 2) and lines."""
     box = np.array([tuple(b) for b, _ in rows], float).reshape(-1, 4)
     size = np.array([max(s["size"] for s in sp) for _, sp in rows], float)
-    spans = np.array([(s["bbox"].x0, s["bbox"].x1, k) for k, (_, sp) in enumerate(rows) for s in sp], float).reshape(-1, 3)
+    spans = np.array([(s["bbox"].x0, s["bbox"].x1, k) for k, (_, sp) in enumerate(rows) for s in sp], float).reshape(
+        -1, 3
+    )
     return box, size, spans[:, :2], spans[:, 2].astype(int)
 
 
@@ -228,7 +287,13 @@ def _crossed(a, b, y, size, index):
     columns does not count). index: _line_index of the page."""
     box, sizes, ext, line = index
     dy = np.abs((box[:, 1] + box[:, 3]) / 2 - y)
-    near = (dy > 0) & (dy < C.gap_reach * size) & (box[:, 0] < a) & (box[:, 2] > b) & (np.abs(sizes - size) <= C.same_size_pt)
+    near = (
+        (dy > 0)
+        & (dy < C.gap_reach * size)
+        & (box[:, 0] < a)
+        & (box[:, 2] > b)
+        & (np.abs(sizes - size) <= C.same_size_pt)
+    )
     n = int(near.sum())
     if n < 2:
         return False
@@ -247,13 +312,17 @@ def _runs(l, spans, rows):
         if runs:
             last = runs[-1][-1]["bbox"]
             gap = max(span["bbox"].x0 - last.x1, last.x0 - span["bbox"].x1)
-            far = gap > C.split_em * span["size"] and not _wide_space("".join(s["text"] for s in runs[-1]), last.x1, span["bbox"].x0,
-                                                                       y, span["size"], rows)
+            far = gap > C.split_em * span["size"] and not _wide_space(
+                "".join(s["text"] for s in runs[-1]), last.x1, span["bbox"].x0, y, span["size"], rows
+            )
         if not runs or far:
             runs.append([])
         runs[-1].append(span)
     y0, y1 = l["bbox"][1], l["bbox"][3]
-    out = [dict(bbox=pymupdf.Rect(min(sp["bbox"].x0 for sp in run), y0, max(sp["bbox"].x1 for sp in run), y1), spans=run) for run in runs]
+    out = [
+        dict(bbox=pymupdf.Rect(min(sp["bbox"].x0 for sp in run), y0, max(sp["bbox"].x1 for sp in run), y1), spans=run)
+        for run in runs
+    ]
     tabbed = len(out) > 1 and min(r["bbox"].width for r in out) < C.min_width_em * max(s["size"] for s in spans)
     for r in out:
         r["tabbed"] = tabbed
@@ -266,15 +335,25 @@ def _embolden(line, over):
         word = o["text"].strip()
         for k, sp in enumerate(line["spans"]):
             width = sp["bbox"].width
-            if width <= 0 or min(sp["bbox"].x1, o["bbox"].x1) - max(sp["bbox"].x0, o["bbox"].x0) < 0.5 * min(width, o["bbox"].width):
+            if width <= 0 or min(sp["bbox"].x1, o["bbox"].x1) - max(sp["bbox"].x0, o["bbox"].x0) < 0.5 * min(
+                width, o["bbox"].width
+            ):
                 continue
             at = sp["text"].find(word)
             if at < 0:
                 continue
             n = len(sp["text"])
             edge = lambda c: sp["bbox"].x0 + width * c / n
-            parts = [(sp["text"][:at], 0, at, sp["bold"]), (word, at, at + len(word), True), (sp["text"][at + len(word):], at + len(word), n, sp["bold"])]
-            line["spans"][k:k + 1] = [dict(sp, text=t, bold=b, bbox=pymupdf.Rect(edge(a), sp["bbox"].y0, edge(z), sp["bbox"].y1)) for t, a, z, b in parts if t]
+            parts = [
+                (sp["text"][:at], 0, at, sp["bold"]),
+                (word, at, at + len(word), True),
+                (sp["text"][at + len(word) :], at + len(word), n, sp["bold"]),
+            ]
+            line["spans"][k : k + 1] = [
+                dict(sp, text=t, bold=b, bbox=pymupdf.Rect(edge(a), sp["bbox"].y0, edge(z), sp["bbox"].y1))
+                for t, a, z, b in parts
+                if t
+            ]
             break
 
 
@@ -286,12 +365,14 @@ def _overprint(segs):
     text = ["".join(_text(l).split()) for l in segs]
     area = [l["bbox"].get_area() for l in segs]
     bins = [round(l["bbox"].y0 / C.overprint_pt) for l in segs]
-    kept, rows = [], defaultdict(list)                                # the kept lines (indices), and by row bin
+    kept, rows = [], defaultdict(list)  # the kept lines (indices), and by row bin
     for i in sorted(range(len(segs)), key=lambda i: -area[i]):
         under = None
         near = rows[bins[i] - 1] + rows[bins[i]] + rows[bins[i] + 1] if area[i] > 0 else []
         if near:
-            k = np.array(near)                                        # the overlap with every line near, at once; the first that holds the words is the one under
+            k = np.array(
+                near
+            )  # the overlap with every line near, at once; the first that holds the words is the one under
             w = np.minimum(box[i, 2], box[k, 2]) - np.maximum(box[i, 0], box[k, 0])
             h = np.minimum(box[i, 3], box[k, 3]) - np.maximum(box[i, 1], box[k, 1])
             hit = k[(w > 0) & (h > 0) & (w * h >= C.duplicate_overlap * area[i])]
@@ -312,10 +393,13 @@ def _cmap_pairs(raw, off):
     if fmt == 4:
         n = struct.unpack_from(">H", raw, off + 6)[0] // 2
         end, start = struct.unpack_from(f">{n}H", raw, off + 14), struct.unpack_from(f">{n}H", raw, off + 16 + 2 * n)
-        delta, rng = struct.unpack_from(f">{n}h", raw, off + 16 + 4 * n), struct.unpack_from(f">{n}H", raw, off + 16 + 6 * n)
+        delta, rng = (
+            struct.unpack_from(f">{n}h", raw, off + 16 + 4 * n),
+            struct.unpack_from(f">{n}H", raw, off + 16 + 6 * n),
+        )
         out = []
         for i in range(n):
-            for c in range(start[i], min(end[i], 0xFFFE) + 1):                           # 0xFFFF ends the table, its offset points nowhere
+            for c in range(start[i], min(end[i], 0xFFFE) + 1):  # 0xFFFF ends the table, its offset points nowhere
                 if rng[i] == 0:
                     out.append((c, (c + delta[i]) & 0xFFFF))
                 else:
@@ -328,7 +412,11 @@ def _cmap_pairs(raw, off):
     if fmt == 12:
         n = struct.unpack_from(">L", raw, off + 12)[0]
         groups = struct.unpack_from(f">{3 * n}L", raw, off + 16)
-        return [(c, groups[3 * i + 2] + c - groups[3 * i]) for i in range(n) for c in range(groups[3 * i], min(groups[3 * i + 1], 0x10FFFF) + 1)]
+        return [
+            (c, groups[3 * i + 2] + c - groups[3 * i])
+            for i in range(n)
+            for c in range(groups[3 * i], min(groups[3 * i + 1], 0x10FFFF) + 1)
+        ]
     return []
 
 
@@ -340,9 +428,11 @@ def _unicode_cmap(raw):
         if len(raw) < 12 + 8 * i:
             break
         platform, encoding, off = struct.unpack_from(">HHL", raw, 4 + 8 * i)
-        if platform == 0 or (platform == 3 and encoding in (0, 1, 10)):                  # as fontTools counts a table as Unicode (the Symbol cmap too)
+        if platform == 0 or (
+            platform == 3 and encoding in (0, 1, 10)
+        ):  # as fontTools counts a table as Unicode (the Symbol cmap too)
             try:
-                out += [(c, g) for c, g in _cmap_pairs(raw, off) if g]                  # glyph 0 (.notdef) is no mapping
+                out += [(c, g) for c, g in _cmap_pairs(raw, off) if g]  # glyph 0 (.notdef) is no mapping
             except struct.error:
                 pass
     return out
@@ -352,7 +442,7 @@ def _pua(u):
     return 0xE000 <= u <= 0xF8FF or u >= 0xF0000
 
 
-CID_TO_UNICODE = "/usr/share/poppler/cidToUnicode"                   # poppler-data: Unicode of each CID of the Adobe character collections (a hex code a line)
+CID_TO_UNICODE = "/usr/share/poppler/cidToUnicode"  # poppler-data: Unicode of each CID of the Adobe character collections (a hex code a line)
 
 
 class _CidText(dict):
@@ -376,6 +466,7 @@ def _font_glyph_text(data):
     collection's CID table the text."""
     if data[:2] == b"\x01\x00":
         from fontTools.cffLib import CFFFontSet
+
         try:
             cff = CFFFontSet()
             cff.decompile(io.BytesIO(data), None)
@@ -384,7 +475,9 @@ def _font_glyph_text(data):
         except Exception:
             return {}, frozenset(), 0
         uni = _cid_unicode(ros[1]) if ros and ros[0] == "Adobe" else []
-        cid = [int(n[3:]) for n in names if n.startswith("cid") and n[3:].isdigit()]   # a CID font's glyphs are numbered by CID (as the text trace gives them)
+        cid = [
+            int(n[3:]) for n in names if n.startswith("cid") and n[3:].isdigit()
+        ]  # a CID font's glyphs are numbered by CID (as the text trace gives them)
         text = _CidText({c: chr(uni[c]) for c in cid if c < len(uni) and uni[c] >= 0x20})
         return text, frozenset(text), max(cid, default=-1) + 1
     f = TTFont(io.BytesIO(data), lazy=True)
@@ -399,11 +492,13 @@ def _font_glyph_text(data):
     gid = {name: i for i, name in enumerate(order)}
     text = {}
     for u, g in _unicode_cmap(f.reader["cmap"]) if "cmap" in f.reader.tables else ():
-        if 0x80 <= u < 0xA0:                                           # a C1 control: the byte code of an 8-bit cmap, its cp1252 character
+        if 0x80 <= u < 0xA0:  # a C1 control: the byte code of an 8-bit cmap, its cp1252 character
             u = ord(bytes([u]).decode("cp1252", "ignore") or "\0")
-        if g < n and not _pua(u) and u >= 0x20:                        # a private-use code names no letter: the glyph's text comes from GSUB
+        if g < n and not _pua(u) and u >= 0x20:  # a private-use code names no letter: the glyph's text comes from GSUB
             text.setdefault(g, chr(u))
-    for g, name in enumerate(order):                                   # a glyph the cmap leaves out: its name (Adobe Glyph List: uni0E33, periodcentered)
+    for g, name in enumerate(
+        order
+    ):  # a glyph the cmap leaves out: its name (Adobe Glyph List: uni0E33, periodcentered)
         if g not in text and not re.fullmatch(r"(glyph|cid|gid|index|g)\d+|\.notdef", name):
             t = agl.toUnicode(name)
             if t and not any(_pua(ord(c)) for c in t):
@@ -421,7 +516,11 @@ def _font_glyph_text(data):
             for st in lk.SubTable:
                 st = st.ExtSubTable if lk.LookupType == 7 else st
                 if getattr(st, "LookupType", lk.LookupType) == 4:
-                    subs += [([first, *lg.Component], lg.LigGlyph, "below" if li in below else "reph" if li in reph else "") for first, ligs in st.ligatures.items() for lg in ligs]
+                    subs += [
+                        ([first, *lg.Component], lg.LigGlyph, "below" if li in below else "reph" if li in reph else "")
+                        for first, ligs in st.ligatures.items()
+                        for lg in ligs
+                    ]
                 elif getattr(st, "LookupType", lk.LookupType) == 1:
                     subs += [([a], b, "reph" if li in reph else "") for a, b in st.mapping.items()]
     except (TTLibError, KeyError, ValueError, IndexError, AssertionError, struct.error):
@@ -432,10 +531,15 @@ def _font_glyph_text(data):
             d = gid.get(dst)
             if d is not None and d not in text and all(gid.get(g) in text for g in src):
                 t = "".join(text[gid[g]] for g in src)
-                if low == "below" and len(t) == 2 and unicodedata.category(t[0]) == "Lo" and unicodedata.category(t[1]) == "Mn":
-                    t = t[1] + t[0]                                    # a below / post-base form (ra + virama in the font's order) stands for virama + ra
+                if (
+                    low == "below"
+                    and len(t) == 2
+                    and unicodedata.category(t[0]) == "Lo"
+                    and unicodedata.category(t[1]) == "Mn"
+                ):
+                    t = t[1] + t[0]  # a below / post-base form (ra + virama in the font's order) stands for virama + ra
                 elif low == "reph":
-                    t = indic.REPH + t                                 # drawn after the syllable it stands on: indic.to_logical puts it before
+                    t = indic.REPH + t  # drawn after the syllable it stands on: indic.to_logical puts it before
                 text[d] = t
                 grown = True
         if not grown:
@@ -446,6 +550,7 @@ def _font_glyph_text(data):
 class Glyphs(dict):
     """_glyph_texts' result; logical: the keys whose text is in logical order already (words ordered by the reference font's shaping);
     unverified: words whose shaping matched no order of their glyph texts."""
+
     def __init__(self):
         super().__init__()
         self.logical, self.unverified, self.trace = set(), 0, {}
@@ -454,10 +559,14 @@ class Glyphs(dict):
 def _codepage(own, mapped):
     """An 8-bit code page font (Cyrillic, Greek, Arabic ... at the Latin-1 positions of its cmap): its program names a Latin letter, its text map
     the letter of the other script the code stands for; the text map is right, not wrong."""
-    return len(own) == 1 and len(mapped) == 1 and own.isalpha() and ord(own) < 0x250 and mapped.isalpha() and ord(mapped) >= 0x370
-
-
-TRACE_NAME = 24                                                       # characters of a font name MuPDF keeps in a text trace
+    return (
+        len(own) == 1
+        and len(mapped) == 1
+        and own.isalpha()
+        and ord(own) < 0x250
+        and mapped.isalpha()
+        and ord(mapped) >= 0x370
+    )
 
 
 def _glyph_texts(page):
@@ -467,26 +576,37 @@ def _glyph_texts(page):
     as it is). Glyphs at one origin (a mark on its letter) give their texts in order; the text is in drawing order (an Indic
     prefix sign before its consonant), as a text map gives it."""
     doc, programs, refs = page.parent, defaultdict(list), defaultdict(list)
-    known = doc.__dict__.setdefault("_glyph_programs", {})            # xref -> glyph texts of its font program (None: none), read once per document
-    known_ref = doc.__dict__.setdefault("_glyph_refs", {})            # xref -> glyph texts read through a reference font (reffonts), {} for none
+    known = doc.__dict__.setdefault(
+        "_glyph_programs", {}
+    )  # xref -> glyph texts of its font program (None: none), read once per document
+    known_ref = doc.__dict__.setdefault(
+        "_glyph_refs", {}
+    )  # xref -> glyph texts read through a reference font (reffonts), {} for none
     traces, out = legacy.typed_traces(page), Glyphs()
-    for tr in traces:                                                 # the codes typed where the text map gives no text (legacy.typed_traces)
+    for tr in traces:  # the codes typed where the text map gives no text (legacy.typed_traces)
         for i in tr.get("typed", ()):
             u, g, o, _ = tr["chars"][i]
             out[(tr["font"], round(o[0], 1), round(o[1], 1))] = chr(u)
-    out.trace = {(tr["font"], round(o[0], 1), round(o[1], 1)): chr(u) for tr in traces for u, g, o, _ in tr["chars"] if g > 0 and not legacy._no_text(u)}
+    out.trace = {
+        (tr["font"], round(o[0], 1), round(o[1], 1)): chr(u)
+        for tr in traces
+        for u, g, o, _ in tr["chars"]
+        if g > 0 and not legacy._no_text(u)
+    }
     fonts = [f for f in page.get_fonts() if f[1] in ("ttf", "otf", "cid") and 0 < f[0] < doc.xref_length()]
-    if not fonts:                                                     # no run has a program to read
+    if not fonts:  # no run has a program to read
         return out
-    used = {tr["font"] for tr in traces}                              # only the fonts the text of the page is set in (the resources list more)
-    nm = lambda base: base.split("+")[-1][:TRACE_NAME]                # the name as the trace gives it (MuPDF cuts it)
+    used = {tr["font"] for tr in traces}  # only the fonts the text of the page is set in (the resources list more)
+    nm = lambda base: base.split("+")[-1][:TRACE_NAME]  # the name as the trace gives it (MuPDF cuts it)
     for xref, ext, kind, base, *_ in fonts:
         if nm(base) in used:
             if xref not in known:
                 known[xref] = None
                 try:
                     data = doc.extract_font(xref)[3]
-                except pymupdf.mupdf.FzErrorFormat:                  # the font file of a broken PDF is not a stream: the text of the page is read without it
+                except (
+                    pymupdf.mupdf.FzErrorFormat
+                ):  # the font file of a broken PDF is not a stream: the text of the page is read without it
                     data = None
                 if data:
                     known[xref] = _font_glyph_text(data)
@@ -501,13 +621,17 @@ def _glyph_texts(page):
         chars = [(chr(u), g, o) for u, g, o, _ in tr["chars"] if g > 0]
         ink = [(c, g) for c, g, _ in chars if not c.isspace()]
         ref, path = max(refs.get(tr["font"], ()), key=lambda r: sum(g in r[0] for _, g in ink), default=(None, None))
-        if ref and ink and sum(g in ref for _, g in ink) >= 0.9 * len(ink):          # the full font names the glyphs: exact, before any map
+        if (
+            ref and ink and sum(g in ref for _, g in ink) >= 0.9 * len(ink)
+        ):  # the full font names the glyphs: exact, before any map
             words, drawn, mine = [[]], set(), set()
             em = tr["size"] or 1
             for u, g, o, b in tr["chars"]:
                 key = (tr["font"], round(o[0], 1), round(o[1], 1))
-                t, rg = ref.get(g, (chr(u), None))                    # the reference's text (the map may call a letter a space)
-                if g <= 0 or (key, g) in drawn:                       # a 2nd character the text map gives one glyph, a glyph drawn again (fake bold)
+                t, rg = ref.get(g, (chr(u), None))  # the reference's text (the map may call a letter a space)
+                if (
+                    g <= 0 or (key, g) in drawn
+                ):  # a 2nd character the text map gives one glyph, a glyph drawn again (fake bold)
                     words[-1].append((key, "", None, 0))
                 elif t.isspace():
                     words += [[(key, " ", None, 0)], []]
@@ -516,34 +640,57 @@ def _glyph_texts(page):
                 drawn.add((key, g))
             for w in words:
                 pieces = [(t, rg, x) for _, t, rg, x in w if rg is not None]
-                text, ok = reffonts.word(path, pieces) if pieces and len(pieces) == sum(bool(t) for _, t, _, _ in w) else ("".join(t for _, t, _, _ in w), True)
+                text, ok = (
+                    reffonts.word(path, pieces)
+                    if pieces and len(pieces) == sum(bool(t) for _, t, _, _ in w)
+                    else ("".join(t for _, t, _, _ in w), True)
+                )
                 out.unverified += not ok
                 for k, (key, _, _, _) in enumerate(w):
-                    if key in mine:                                   # two glyphs of this run at one place (a word after a zero-width space)
+                    if key in mine:  # two glyphs of this run at one place (a word after a zero-width space)
                         out[key] += text if k == 0 else ""
-                    elif key not in out:                              # (a key of an earlier run: the same text drawn again, fake bold)
+                    elif key not in out:  # (a key of an earlier run: the same text drawn again, fake bold)
                         out[key] = text if k == 0 else ""
                         out.logical.add(key)
                         mine.add(key)
             continue
 
-        clusters = []                                                 # the text map's characters of each glyph: a glyph the map gives several characters
-        for u, g, o, _ in tr["chars"]:                                # (a conjunct: pa + virama + ra on one glyph) keeps them all where the program
-            if g > 0:                                                 # names it no text
+        clusters = []  # the text map's characters of each glyph: a glyph the map gives several characters
+        for u, g, o, _ in tr["chars"]:  # (a conjunct: pa + virama + ra on one glyph) keeps them all where the program
+            if g > 0:  # names it no text
                 clusters.append([chr(u), g, o])
-            elif clusters and unicodedata.category(chr(u))[0] in "LM":     # a letter or mark of the cluster (a hyphenation point the map adds is no part)
+            elif (
+                clusters and unicodedata.category(chr(u))[0] in "LM"
+            ):  # a letter or mark of the cluster (a hyphenation point the map adds is no part)
                 clusters[-1][0] += chr(u)
 
         def agree(p):
             text, direct, n = p
-            return -1 if any(g >= n for _, g, _ in chars) else sum(text.get(g) == c or c == "\ufffd" for c, g, _ in chars)   # U+FFFD says nothing
+            return (
+                -1 if any(g >= n for _, g, _ in chars) else sum(text.get(g) == c or c == "\ufffd" for c, g, _ in chars)
+            )  # U+FFFD says nothing
+
         best = max(programs.get(tr["font"], ()), key=agree, default=None)
-        if best is None or 2 * agree(best) <= len(chars):               # the program of its name the map mostly agrees with (subsets share a name)
+        if best is None or 2 * agree(best) <= len(
+            chars
+        ):  # the program of its name the map mostly agrees with (subsets share a name)
             continue
         text, direct, _ = best
-        if any(g in text and text[g] != c and (g in direct or _pua(ord(c)) or not c.isalpha()) and not _codepage(text[g], c) for c, g, _ in chars):   # a wrong map: a glyph the cmap
+        if any(
+            g in text
+            and text[g] != c
+            and (g in direct or _pua(ord(c)) or not c.isalpha())
+            and not _codepage(text[g], c)
+            for c, g, _ in chars
+        ):  # a wrong map: a glyph the cmap
             # names otherwise, a private-use code, or a sign (@ $ _) where the program's GSUB makes a conjunct
-            ts = [((tr["font"], round(o[0], 1), round(o[1], 1)), text.get(g, c) if c == "\ufffd" or not isinstance(text, _CidText) else c) for c, g, o in clusters]
+            ts = [
+                (
+                    (tr["font"], round(o[0], 1), round(o[1], 1)),
+                    text.get(g, c) if c == "\ufffd" or not isinstance(text, _CidText) else c,
+                )
+                for c, g, o in clusters
+            ]
             run = {}
             for key, t in ts:
                 run[key] = run.get(key, "") + t
@@ -562,42 +709,70 @@ def _one_cluster(c, n):
 def extract_segments(page, textpage=None, fix_fonts=True):
     """Text lines of a page, each cut into one segment per run. fix_fonts: the text of the runs whose font has a wrong text map is read from the font
     program (_glyph_texts); it matters for old and rare fonts and costs a good part of a page."""
-    lines = [l for b in page.get_text("rawdict", flags=TEXT_FLAGS, textpage=textpage)["blocks"] for l in b.get("lines", [])]
-    if legacy.LANG.get():                                              # text drawn as glyph outlines (filled paths) is read like a legacy font without a program
+    lines = [
+        l for b in page.get_text("rawdict", flags=TEXT_FLAGS, textpage=textpage)["blocks"] for l in b.get("lines", [])
+    ]
+    if legacy.LANG.get():  # text drawn as glyph outlines (filled paths) is read like a legacy font without a program
         lines += legacy.path_lines(page)
     symbolic = symbolic_fonts(page)
     fixed = _glyph_texts(page) if fix_fonts else {}
-    trace = getattr(fixed, "trace", {})                                # the character the glyph trace gives where the text extraction gives U+FFFD
-    drawn, tabled = set(fixed) - getattr(fixed, "logical", set()), set(getattr(fixed, "logical", set()))                                  # glyph texts in drawing order: put in logical order with the text left as it is
-    if legacy.LANG.get():                                              # a document with a known Indic language: its legacy-font runs are read by glyph shape
+    trace = getattr(fixed, "trace", {})  # the character the glyph trace gives where the text extraction gives U+FFFD
+    drawn, tabled = (
+        set(fixed) - getattr(fixed, "logical", set()),
+        set(getattr(fixed, "logical", set())),
+    )  # glyph texts in drawing order: put in logical order with the text left as it is
+    if legacy.LANG.get():  # a document with a known Indic language: its legacy-font runs are read by glyph shape
         lf = legacy.fixed(page, legacy.LANG.get())
-        if lf.guess:                                                   # a shape guess only where the text stays broken: no program text, no known code (Thai PUA)
-            shown = {(sp["font"], round(ch["origin"][0], 1), round(ch["origin"][1], 1)): ch["c"] for l in lines for sp in l["spans"] for ch in sp["chars"]}
+        if lf.guess:  # a shape guess only where the text stays broken: no program text, no known code (Thai PUA)
+            shown = {
+                (sp["font"], round(ch["origin"][0], 1), round(ch["origin"][1], 1)): ch["c"]
+                for l in lines
+                for sp in l["spans"]
+                for ch in sp["chars"]
+            }
             seen = lambda k: trace.get(k, "\ufffd") if shown.get(k, "\ufffd") == "\ufffd" else shown[k]
-            drop = {k for k in lf.guess if k in fixed or k not in shown or not (seen(k) == "\ufffd" or legacy.misread(seen(k), None)) or ord(seen(k)) in THAI_PUA
-                    or ord(seen(k)) < 0x20}                            # a C0 control is whitespace or a format code (a space), not a lost letter
+            drop = {
+                k
+                for k in lf.guess
+                if k in fixed
+                or k not in shown
+                or not (seen(k) == "\ufffd" or legacy.misread(seen(k), None))
+                or ord(seen(k)) in THAI_PUA
+                or ord(seen(k)) < 0x20
+            }  # a C0 control is whitespace or a format code (a space), not a lost letter
             for k in drop:
                 del lf[k]
-        tabled |= set(lf) - lf.fitted - drawn                          # decoded by a table or code page: logical order already
-        fixed = {**fixed, **{k: v for k, v in lf.items() if k not in fixed or k not in lf.fitted}}   # tables and code pages first, the font program's glyph text before the shape fit
-    untouched = []                                                     # the text the fixes do not replace: the fixed text is in logical order already
+        tabled |= set(lf) - lf.fitted - drawn  # decoded by a table or code page: logical order already
+        fixed = {
+            **fixed,
+            **{k: v for k, v in lf.items() if k not in fixed or k not in lf.fitted},
+        }  # tables and code pages first, the font program's glyph text before the shape fit
+    untouched = []  # the text the fixes do not replace: the fixed text is in logical order already
     for l in lines:
         for sp in l["spans"]:
             for ch in sp["chars"]:
-                if ord(ch["c"]) < 0x20:                              # a control code no glyph name or trace reads (a tab glyph before dot leaders): a space
+                if (
+                    ord(ch["c"]) < 0x20
+                ):  # a control code no glyph name or trace reads (a tab glyph before dot leaders): a space
                     ch["c"] = " "
         cs = [c for sp in l["spans"] for c in sp["chars"]]
-        unknown = {id(c) for i, c in enumerate(cs) if c["c"] == "\ufffd" and any(_one_cluster(c, cs[j]) for j in (i - 1, i + 1) if 0 <= j < len(cs))}
+        unknown = {
+            id(c)
+            for i, c in enumerate(cs)
+            if c["c"] == "\ufffd" and any(_one_cluster(c, cs[j]) for j in (i - 1, i + 1) if 0 <= j < len(cs))
+        }
         for sp in l["spans"]:
             seen, after = set(), False
             for ch in sp["chars"]:
                 key = (sp["font"], round(ch["origin"][0], 1), round(ch["origin"][1], 1))
-                if id(ch) in unknown:                                  # U+FFFD ("text unknown", as a producer's map or ActualText writes it) on a
-                    ch["c"] = ""                                       # piece of a glyph cluster whose text a neighbour carries
+                if id(ch) in unknown:  # U+FFFD ("text unknown", as a producer's map or ActualText writes it) on a
+                    ch["c"] = ""  # piece of a glyph cluster whose text a neighbour carries
                     continue
-                if ch["c"] == "\ufffd":                               # a glyph of its own: the character the glyph trace gives it
+                if ch["c"] == "\ufffd":  # a glyph of its own: the character the glyph trace gives it
                     ch["c"] = trace.get(key, "\ufffd")
-                if key not in fixed and after and ch["bbox"][2] - ch["bbox"][0] < 1e-3:      # a zero-width 2nd character the text map gives a fixed glyph: in its text
+                if (
+                    key not in fixed and after and ch["bbox"][2] - ch["bbox"][0] < 1e-3
+                ):  # a zero-width 2nd character the text map gives a fixed glyph: in its text
                     ch["c"] = ""
                     continue
                 after = key in fixed
@@ -648,15 +823,22 @@ def column_intervals(segs):
     body = cnt.most_common(1)[0][0] if cnt else 0.0
     lefts = Counter(round(l["bbox"].x0 / C.edge_bin) for l in segs)
     rights = Counter(round(l["bbox"].x1 / C.edge_bin) for l in segs)
-    spans = sorted((l["bbox"].x0, l["bbox"].x1) for l in segs
-                   if _rsize(l) <= C.body_band * body and l["bbox"].width >= C.column_line * _rsize(l)
-                   and (lefts[round(l["bbox"].x0 / C.edge_bin)] >= C.edge_lines or rights[round(l["bbox"].x1 / C.edge_bin)] >= C.edge_lines))
+    spans = sorted(
+        (l["bbox"].x0, l["bbox"].x1)
+        for l in segs
+        if _rsize(l) <= C.body_band * body
+        and l["bbox"].width >= C.column_line * _rsize(l)
+        and (
+            lefts[round(l["bbox"].x0 / C.edge_bin)] >= C.edge_lines
+            or rights[round(l["bbox"].x1 / C.edge_bin)] >= C.edge_lines
+        )
+    )
     if not spans:
         return []
     lo, hi = int(min(x0 for x0, _ in spans)), int(max(x1 for _, x1 in spans)) + 1
     cover = np.zeros(hi - lo + 1)
     for x0, x1 in spans:
-        cover[int(x0) - lo:int(x1) - lo + 1] += 1
+        cover[int(x0) - lo : int(x1) - lo + 1] += 1
     solid = cover >= C.gutter_cover * cover.max()
     cols, start = [], None
     for i, on in enumerate(list(solid) + [False]):
@@ -680,7 +862,9 @@ def column_intervals(segs):
 
 def column_of(bbox, cols):
     """Index of the column a box lies in; None when it spans several columns or lies in none."""
-    hits = [i for i, (a, z) in enumerate(cols) if min(bbox.x1, z) - max(bbox.x0, a) >= C.column_hit * max(bbox.width, 1.0)]
+    hits = [
+        i for i, (a, z) in enumerate(cols) if min(bbox.x1, z) - max(bbox.x0, a) >= C.column_hit * max(bbox.width, 1.0)
+    ]
     return hits[0] if len(hits) == 1 else None
 
 
@@ -688,7 +872,9 @@ def _wide_space(prev, x1, x0, y, size, near):
     """Whether a gap x1..x0 after the text `prev` on a line is a space that joins (it follows a list marker and is no wider
     than a tab, or the lines around it have ink over it: justified text)."""
     gap = x0 - x1
-    return gap > 0 and ((gap < C.tab_max_em * size and MARKER.fullmatch(prev.strip()) is not None) or _crossed(x1, x0, y, size, near))
+    return gap > 0 and (
+        (gap < C.tab_max_em * size and MARKER.fullmatch(prev.strip()) is not None) or _crossed(x1, x0, y, size, near)
+    )
 
 
 def join_rows(segs, cols, vlines=()):
@@ -706,12 +892,15 @@ def join_rows(segs, cols, vlines=()):
         for k in range(key - C.row_reach, key + C.row_reach + 1):
             for r in buckets.get(k, ()):
                 x1, (py0, py1, psz) = r["x1"], r["last"]
-                if not (-C.join_back_em * sz < lx0 - x1 < C.join_ahead_em * sz
-                        or _wide_space(_text(r["segs"][-1]), x1, lx0, (ly0 + ly1) / 2, sz, near)):
+                if not (
+                    -C.join_back_em * sz < lx0 - x1 < C.join_ahead_em * sz
+                    or _wide_space(_text(r["segs"][-1]), x1, lx0, (ly0 + ly1) / 2, sz, near)
+                ):
                     continue
                 small = min(py1 - py0, ly1 - ly0)
                 inline = abs((py0 + py1) / 2 - (ly0 + ly1) / 2) < C.inline_share * sz or (
-                    min(sz, psz) < C.superscript_ratio * max(sz, psz) and min(py1, ly1) - max(py0, ly0) >= 0.5 * small)
+                    min(sz, psz) < C.superscript_ratio * max(sz, psz) and min(py1, ly1) - max(py0, ly0) >= 0.5 * small
+                )
                 if not inline or not (col is None or r["col"] is None or col == r["col"]):
                     continue
                 mid = ly0 + 0.5 * (ly1 - ly0)
@@ -741,9 +930,14 @@ def join_rows(segs, cols, vlines=()):
         for b in buckets[int(((a["bbox"].y0 + a["bbox"].y1) / 2) // C.row_bin)]:
             sz = max(_rsize(a), _rsize(b))
             narrow = min((a, b), key=lambda r: r["bbox"].width)
-            if (b is not a and min(a["bbox"].y1, b["bbox"].y1) - max(a["bbox"].y0, b["bbox"].y0) > 0.5 * min(a["bbox"].height, b["bbox"].height)
-                    and (a["bbox"].x1 <= b["bbox"].x0 or b["bbox"].x1 <= a["bbox"].x0) and narrow["bbox"].width < C.min_width_em * sz
-                    and (a["col"] is None or b["col"] is None or a["col"] == b["col"] or VALUE.fullmatch(_text(narrow)))):
+            if (
+                b is not a
+                and min(a["bbox"].y1, b["bbox"].y1) - max(a["bbox"].y0, b["bbox"].y0)
+                > 0.5 * min(a["bbox"].height, b["bbox"].height)
+                and (a["bbox"].x1 <= b["bbox"].x0 or b["bbox"].x1 <= a["bbox"].x0)
+                and narrow["bbox"].width < C.min_width_em * sz
+                and (a["col"] is None or b["col"] is None or a["col"] == b["col"] or VALUE.fullmatch(_text(narrow)))
+            ):
                 a["tabbed"] = b["tabbed"] = True
     return sorted(rows, key=lambda r: (r["bbox"].y0, r["bbox"].x0))
 
@@ -755,10 +949,23 @@ def _form_marks(rows, shapes):
         return
     for r in rows:
         bb, sz = r["bbox"], _rsize(r)
-        over = np.minimum(shapes[:, 3], bb.y1) - np.maximum(shapes[:, 1], bb.y0) > 0.5 * np.minimum(shapes[:, 3] - shapes[:, 1], bb.height)
+        over = np.minimum(shapes[:, 3], bb.y1) - np.maximum(shapes[:, 1], bb.y0) > 0.5 * np.minimum(
+            shapes[:, 3] - shapes[:, 1], bb.height
+        )
         h, w = shapes[:, 3] - shapes[:, 1], shapes[:, 2] - shapes[:, 0]
-        field = over & (h <= C.field_em * sz) & (w > C.marker_em * sz) & ((shapes[:, 0] >= bb.x1 - 1) | (shapes[:, 2] <= bb.x0 + 1))
-        mark = over & (h <= C.marker_em * sz) & (w <= C.marker_em * sz) & (bb.x0 - shapes[:, 2] >= -1) & (bb.x0 - shapes[:, 2] < C.marker_em * sz)
+        field = (
+            over
+            & (h <= C.field_em * sz)
+            & (w > C.marker_em * sz)
+            & ((shapes[:, 0] >= bb.x1 - 1) | (shapes[:, 2] <= bb.x0 + 1))
+        )
+        mark = (
+            over
+            & (h <= C.marker_em * sz)
+            & (w <= C.marker_em * sz)
+            & (bb.x0 - shapes[:, 2] >= -1)
+            & (bb.x0 - shapes[:, 2] < C.marker_em * sz)
+        )
         r["tabbed"] = r.get("tabbed", False) or bool(field.any())
         r["marked"] = bool(mark.any())
 
@@ -777,31 +984,65 @@ def paragraphs(segs, rules=((), ()), shapes=()):
         k = round(r["bbox"].x0 / C.para_bin)
         W = max(colw[(round(sz), j)] for j in (k - 1, k, k + 1))
         passed = []
-        for b in reversed(blocks[-C.lookback:]):
+        for b in reversed(blocks[-C.lookback :]):
             last = b["lines"][-1]["bbox"]
             pitch = r["bbox"].y0 - last.y0
             ref = b["pitch"] if len(b["lines"]) > 1 else C.single_pitch_em * sz
             edge = abs(r["bbox"].x0 - last.x0) < 3 or abs(r["bbox"].x1 - last.x1) < 3
-            ruled = any(y0 <= y <= y1 and x0 < min(last.x1, r["bbox"].x1) and x1 > max(last.x0, r["bbox"].x0) for y, x0, x1 in rules[1]
-                        for y0, y1 in [(last.y1 - 0.5 * sz, r["bbox"].y0 + 0.5 * sz)])
+            ruled = any(
+                y0 <= y <= y1 and x0 < min(last.x1, r["bbox"].x1) and x1 > max(last.x0, r["bbox"].x0)
+                for y, x0, x1 in rules[1]
+                for y0, y1 in [(last.y1 - 0.5 * sz, r["bbox"].y0 + 0.5 * sz)]
+            )
             open_end = not _text(b["lines"][-1]).rstrip().endswith(TERMINAL)
-            first_ltr = (len(b["lines"]) == 1 and C.indent_min_em * sz < last.x0 - r["bbox"].x0 < C.indent_max_em * sz
-                         and (abs(last.x1 - r["bbox"].x1) < C.edge_match_em * sz + 3 or (r["bbox"].x1 < last.x1 and open_end)))
-            first_rtl = (len(b["lines"]) == 1 and C.indent_min_em * sz < r["bbox"].x1 - last.x1 < C.indent_max_em * sz
-                         and (abs(last.x0 - r["bbox"].x0) < C.edge_match_em * sz + 3 or (r["bbox"].x0 > last.x0 and open_end)))
-            indented = len(b["lines"]) >= 2 and C.indent_min_em * sz < ((last.x1 - r["bbox"].x1) if is_rtl(_text(r)) else (r["bbox"].x0 - last.x0)) < C.indent_max_em * sz
-            step_ltr = (len(b["lines"]) <= C.indent_lines and all(l["bbox"].x0 > r["bbox"].x0 + 0.5 * sz for l in b["lines"])
-                        and abs(last.x1 - r["bbox"].x1) < C.edge_match_em * sz + 3)
-            step_rtl = (len(b["lines"]) <= C.indent_lines and all(l["bbox"].x1 < r["bbox"].x1 - 0.5 * sz for l in b["lines"])
-                        and abs(last.x0 - r["bbox"].x0) < C.edge_match_em * sz + 3)
-            entry = ENTRY_END.search(_text(b["lines"][-1])) is not None      # a contents entry or form field: complete
+            first_ltr = (
+                len(b["lines"]) == 1
+                and C.indent_min_em * sz < last.x0 - r["bbox"].x0 < C.indent_max_em * sz
+                and (abs(last.x1 - r["bbox"].x1) < C.edge_match_em * sz + 3 or (r["bbox"].x1 < last.x1 and open_end))
+            )
+            first_rtl = (
+                len(b["lines"]) == 1
+                and C.indent_min_em * sz < r["bbox"].x1 - last.x1 < C.indent_max_em * sz
+                and (abs(last.x0 - r["bbox"].x0) < C.edge_match_em * sz + 3 or (r["bbox"].x0 > last.x0 and open_end))
+            )
+            indented = (
+                len(b["lines"]) >= 2
+                and C.indent_min_em * sz
+                < ((last.x1 - r["bbox"].x1) if is_rtl(_text(r)) else (r["bbox"].x0 - last.x0))
+                < C.indent_max_em * sz
+            )
+            step_ltr = (
+                len(b["lines"]) <= C.indent_lines
+                and all(l["bbox"].x0 > r["bbox"].x0 + 0.5 * sz for l in b["lines"])
+                and abs(last.x1 - r["bbox"].x1) < C.edge_match_em * sz + 3
+            )
+            step_rtl = (
+                len(b["lines"]) <= C.indent_lines
+                and all(l["bbox"].x1 < r["bbox"].x1 - 0.5 * sz for l in b["lines"])
+                and abs(last.x0 - r["bbox"].x0) < C.edge_match_em * sz + 3
+            )
+            entry = ENTRY_END.search(_text(b["lines"][-1])) is not None  # a contents entry or form field: complete
             goes_on = open_end and last.width > C.full_line * b["W"] and _text(r).lstrip()[:1].islower()
-            if (abs(_rsize(b["lines"][-1]) - sz) < C.same_size_pt and (edge or first_ltr or first_rtl or step_ltr or step_rtl) and b["col"] == r["col"]
-                    and not ruled and not indented and not r.get("marked") and not r.get("tabbed") and not b["lines"][-1].get("tabbed")
-                    and r["spans"][0]["glyph"] is None and not (ITEM.match(_text(r)) and (not open_end or last.width < C.full_line * b["W"]))
-                    and C.indent_min_em * sz < pitch < (C.open_pitch_em * sz if goes_on else ref * C.pitch_tol) and b["W"] > C.min_width_em * sz
-                    and not any(o["bbox"].x1 > r["bbox"].x0 and o["bbox"].x0 < r["bbox"].x1 for o in passed) and not entry
-                    and (last.width > C.full_line * b["W"] or (last.width > C.ragged_fill * b["W"] and not _text(b["lines"][-1]).rstrip().endswith(TERMINAL)))):
+            if (
+                abs(_rsize(b["lines"][-1]) - sz) < C.same_size_pt
+                and (edge or first_ltr or first_rtl or step_ltr or step_rtl)
+                and b["col"] == r["col"]
+                and not ruled
+                and not indented
+                and not r.get("marked")
+                and not r.get("tabbed")
+                and not b["lines"][-1].get("tabbed")
+                and r["spans"][0]["glyph"] is None
+                and not (ITEM.match(_text(r)) and (not open_end or last.width < C.full_line * b["W"]))
+                and C.indent_min_em * sz < pitch < (C.open_pitch_em * sz if goes_on else ref * C.pitch_tol)
+                and b["W"] > C.min_width_em * sz
+                and not any(o["bbox"].x1 > r["bbox"].x0 and o["bbox"].x0 < r["bbox"].x1 for o in passed)
+                and not entry
+                and (
+                    last.width > C.full_line * b["W"]
+                    or (last.width > C.ragged_fill * b["W"] and not _text(b["lines"][-1]).rstrip().endswith(TERMINAL))
+                )
+            ):
                 if len(b["lines"]) == 1:
                     b["pitch"] = pitch
                 b["lines"].append(r)
@@ -815,21 +1056,38 @@ def paragraphs(segs, rules=((), ()), shapes=()):
         b["size"] = max(_rsize(l) for l in b["lines"])
         b["align"], edge = _align(b)
         if b["align"] == "justify":
-            b["bbox"] = pymupdf.Rect(edge, b["bbox"].y0, b["bbox"].x1, b["bbox"].y1) if b["rtl"] else pymupdf.Rect(
-                b["bbox"].x0, b["bbox"].y0, edge, b["bbox"].y1)
+            b["bbox"] = (
+                pymupdf.Rect(edge, b["bbox"].y0, b["bbox"].x1, b["bbox"].y1)
+                if b["rtl"]
+                else pymupdf.Rect(b["bbox"].x0, b["bbox"].y0, edge, b["bbox"].y1)
+            )
         b["colspan"] = cols[b["col"]] if b["col"] is not None else None
         if b["align"] != "justify" and len(b["lines"]) >= C.ragged_lines:
             ends = sorted(l["bbox"].x0 if b["rtl"] else l["bbox"].x1 for l in b["lines"])
-            cut = ends[int((1 - C.ragged_percentile) * (len(ends) - 1))] if b["rtl"] else ends[int(C.ragged_percentile * (len(ends) - 1))]
-            b["bbox"] = pymupdf.Rect(max(b["bbox"].x0, cut), b["bbox"].y0, b["bbox"].x1, b["bbox"].y1) if b["rtl"] else pymupdf.Rect(
-                b["bbox"].x0, b["bbox"].y0, min(b["bbox"].x1, cut), b["bbox"].y1)
+            cut = (
+                ends[int((1 - C.ragged_percentile) * (len(ends) - 1))]
+                if b["rtl"]
+                else ends[int(C.ragged_percentile * (len(ends) - 1))]
+            )
+            b["bbox"] = (
+                pymupdf.Rect(max(b["bbox"].x0, cut), b["bbox"].y0, b["bbox"].x1, b["bbox"].y1)
+                if b["rtl"]
+                else pymupdf.Rect(b["bbox"].x0, b["bbox"].y0, min(b["bbox"].x1, cut), b["bbox"].y1)
+            )
         if b["colspan"] is not None:
-            clamped = pymupdf.Rect(max(b["bbox"].x0, b["colspan"][0]), b["bbox"].y0, min(b["bbox"].x1, b["colspan"][1]), b["bbox"].y1)
+            clamped = pymupdf.Rect(
+                max(b["bbox"].x0, b["colspan"][0]), b["bbox"].y0, min(b["bbox"].x1, b["colspan"][1]), b["bbox"].y1
+            )
             if clamped.width >= C.trim_max * b["bbox"].width:
                 b["bbox"] = clamped
         nat = statistics.median(s["nat"] for l in b["lines"] for s in l["spans"])
-        pitch = (statistics.median(b["lines"][i + 1]["bbox"].y0 - b["lines"][i]["bbox"].y0
-                                   for i in range(len(b["lines"]) - 1)) if len(b["lines"]) > 1 else b["size"] * nat)
+        pitch = (
+            statistics.median(
+                b["lines"][i + 1]["bbox"].y0 - b["lines"][i]["bbox"].y0 for i in range(len(b["lines"]) - 1)
+            )
+            if len(b["lines"]) > 1
+            else b["size"] * nat
+        )
         b["lead"] = min(max(pitch / (b["size"] * nat), 1.0), C.max_lead)
         b["src_pitch"] = pitch
     return blocks
@@ -867,7 +1125,10 @@ def _align(b):
     return "right" if rtl else "left", None
 
 
-RENAMED = {"notoloopedthai": "notosansthailooped", "notoloopedlao": "notosanslaolooped"}   # Noto families renamed by their newer releases
+RENAMED = {
+    "notoloopedthai": "notosansthailooped",
+    "notoloopedlao": "notosanslaolooped",
+}  # Noto families renamed by their newer releases
 
 
 def _family_key(path):
@@ -879,7 +1140,7 @@ def _family_script(key):
     prefix = next((p for p in NOTO_PREFIXES if key.startswith(p)), None)
     if prefix is None:
         return ""
-    rest = key[len(prefix):].replace("display", "").replace("ui", "")
+    rest = key[len(prefix) :].replace("display", "").replace("ui", "")
     return "" if rest == "mono" else rest
 
 
@@ -889,20 +1150,31 @@ def families(fonts):
     for p in fonts:
         base = os.path.splitext(os.path.basename(p))[0].split("[")[0]
         suffix = base.split("-", 1)[1].lower() if "-" in base else ""
-        styles = ({2 * (suffix == "italic"): C.regular_weight, 2 * (suffix == "italic") + 1: C.bold_weight} if font_info(p)[2]
-                  else {STYLE_OF[suffix]: None} if suffix in STYLE_OF else {})
-        for st, wght in styles.items():                       # one file of a family and style in several places: the newest version (as fontconfig)
+        styles = (
+            {2 * (suffix == "italic"): C.regular_weight, 2 * (suffix == "italic") + 1: C.bold_weight}
+            if font_info(p)[2]
+            else {STYLE_OF[suffix]: None}
+            if suffix in STYLE_OF
+            else {}
+        )
+        for (
+            st,
+            wght,
+        ) in styles.items():  # one file of a family and style in several places: the newest version (as fontconfig)
             have = fam[_family_key(p)].get(st)
             if have is None or _revision(p) > _revision(have[0]):
                 fam[_family_key(p)][st] = (p, wght)
     save_font_info()
     fam = {k: v for k, v in fam.items() if 0 in v}
-    return {k: v for k, v in fam.items() if RENAMED.get(k) not in fam}       # a family released again under a new name: the new release only
+    return {
+        k: v for k, v in fam.items() if RENAMED.get(k) not in fam
+    }  # a family released again under a new name: the new release only
 
 
-@lru_cache(maxsize=None)
+@cache
 def _revision(path):
     from fontTools.ttLib import TTFont
+
     return TTFont(path, lazy=True, fontNumber=0)["head"].fontRevision
 
 
@@ -923,10 +1195,16 @@ def pick_family(rng, fams, chars, bold=False, italic=False, need=(), choice=None
         if rest == "" or any(s in rest for s in scripts):
             cmap = _font_cmap(style_file(v, bold, italic)[0])
             styled = all(int(b) + 2 * int(i) in v for b, i in need)
-            score[k] = (len(main & cmap), styled, len(cps & cmap))             # the letters of the page's own scripts, then the styles it needs, then all its characters
+            score[k] = (
+                len(main & cmap),
+                styled,
+                len(cps & cmap),
+            )  # the letters of the page's own scripts, then the styles it needs, then all its characters
     best = max(score.values())
     pool = sorted(k for k, s in score.items() if s == best)
-    return pool[rng.integers(0, len(pool)) if choice is None else choice % len(pool)]        # choice: a chosen family of the fitting ones (a balanced design)
+    return pool[
+        rng.integers(0, len(pool)) if choice is None else choice % len(pool)
+    ]  # choice: a chosen family of the fitting ones (a balanced design)
 
 
 def font(path, px, wght):
@@ -938,8 +1216,12 @@ def _font(path, px, wght):
     f = ImageFont.truetype(path, max(px, 1.0), layout_engine=ImageFont.Layout.RAQM)
     f.key = (path, px, wght)
     if wght is not None:
-        f.set_variation_by_axes([min(max(wght, a["minimum"]), a["maximum"]) if a["name"] in (b"Weight", "Weight")
-                                 else a["default"] for a in f.get_variation_axes()])
+        f.set_variation_by_axes(
+            [
+                min(max(wght, a["minimum"]), a["maximum"]) if a["name"] in (b"Weight", "Weight") else a["default"]
+                for a in f.get_variation_axes()
+            ]
+        )
     return f
 
 
@@ -960,8 +1242,11 @@ class Typesetter:
         self.prose = {k: v for k, v in fams.items() if not font_info(v[0][0])[1]}
         self.mono = {k: v for k, v in fams.items() if font_info(v[0][0])[1]}
         hk, bk = pick or (None, None)
-        self.role = {"head": pick_family(rng, self.prose, chars, need=need, choice=hk), "body": pick_family(rng, self.prose, chars, need=need, choice=bk),
-                     "mono": pick_family(rng, self.mono, chars)}
+        self.role = {
+            "head": pick_family(rng, self.prose, chars, need=need, choice=hk),
+            "body": pick_family(rng, self.prose, chars, need=need, choice=bk),
+            "mono": pick_family(rng, self.mono, chars),
+        }
         self.fallback = {}
         self.dropped = 0
         self.unresolved = Counter()
@@ -974,7 +1259,7 @@ class Typesetter:
         if all(ord(c) in cmap or unicodedata.category(c) == "Cf" for c in text):
             return [(path, wght, text)]
         runs = []
-        for c in regex.findall(r"\X", text):                                   # by grapheme cluster (UAX #29): a mark stays in its base letter's font
+        for c in regex.findall(r"\X", text):  # by grapheme cluster (UAX #29): a mark stays in its base letter's font
             has = lambda m: all(ord(x) in m or x in JOINERS for x in c)
             font_c = (path, wght) if has(cmap) else self._covering(c, bold, italic)
             if font_c is None:
@@ -993,7 +1278,14 @@ class Typesetter:
             has = lambda f: all(ord(x) in _font_cmap(f) or x in JOINERS for x in c)
             guess = style_file(self.prose[pick_family(self.rng, self.prose, set(c), bold, italic)], bold, italic)
             if not has(guess[0]):
-                guess = next((style_file(v, bold, italic) for k, v in sorted(self.prose.items()) if has(style_file(v, bold, italic)[0])), None)
+                guess = next(
+                    (
+                        style_file(v, bold, italic)
+                        for k, v in sorted(self.prose.items())
+                        if has(style_file(v, bold, italic)[0])
+                    ),
+                    None,
+                )
             self.fallback[key] = guess
         return self.fallback[key]
 
@@ -1001,7 +1293,9 @@ class Typesetter:
 def _clusters(text):
     out = []
     for ch in text:
-        if out and (unicodedata.combining(ch) or unicodedata.category(ch) in ("Mn", "Mc", "Me") or ch in JOINERS + "ำຳ"):
+        if out and (
+            unicodedata.combining(ch) or unicodedata.category(ch) in ("Mn", "Mc", "Me") or ch in JOINERS + "ำຳ"
+        ):
             out[-1] += ch
         else:
             out.append(ch)
@@ -1031,8 +1325,22 @@ def _leader(text):
 
 
 def _glyph_token(s, px, space, tab):
-    return dict(text="", glyph=(s["number"], s["glyph"]), size=s["size"], px=px, gray=s["gray"], gap=space, tab=tab, brk=False,
-                rtl=False, path=None, wght=None, tall=s.get("tall", False), icon=s.get("icon", False), leader=False)
+    return dict(
+        text="",
+        glyph=(s["number"], s["glyph"]),
+        size=s["size"],
+        px=px,
+        gray=s["gray"],
+        gap=space,
+        tab=tab,
+        brk=False,
+        rtl=False,
+        path=None,
+        wght=None,
+        tall=s.get("tall", False),
+        icon=s.get("icon", False),
+        leader=False,
+    )
 
 
 def _word_tokens(s, typesetter, role, px, space, tab):
@@ -1042,8 +1350,21 @@ def _word_tokens(s, typesetter, role, px, space, tab):
         space = space or i > 0
         for piece in _pieces(w) if w else ():
             for path, wght, text in typesetter.resolve(role, piece, s["bold"], s["italic"]):
-                toks.append(dict(text=text, path=path, wght=wght, px=px, gray=s["gray"], gap=space, tab=tab, size=s["size"],
-                                 brk=_nobreak(text), rtl=any(_rtl_char(c) for c in text if c.isalpha()), leader=_leader(text)))
+                toks.append(
+                    dict(
+                        text=text,
+                        path=path,
+                        wght=wght,
+                        px=px,
+                        gray=s["gray"],
+                        gap=space,
+                        tab=tab,
+                        size=s["size"],
+                        brk=_nobreak(text),
+                        rtl=any(_rtl_char(c) for c in text if c.isalpha()),
+                        leader=_leader(text),
+                    )
+                )
                 space, tab = False, 0.0
     return toks, space, tab
 
@@ -1057,7 +1378,7 @@ def _whole_clusters(spans):
         last = next((o for o in reversed(out) if o["glyph"] is None), None)
         if head and s["glyph"] is None and last is not None and last is out[-1] and last["text"]:
             out[-1] = dict(last, text=last["text"] + head.group())
-            s = dict(s, text=s["text"][head.end():])
+            s = dict(s, text=s["text"][head.end() :])
             if not s["text"]:
                 continue
         out.append(s)
@@ -1103,9 +1424,10 @@ def _split(t, room):
     """(head, tail) of a token at the last line break opportunity (UAX #14, ICU: dictionary breaks for Thai, ...) whose head fits room; a
     grapheme cluster only when no break fits (a word longer than the line)."""
     from .linebreak import breaks
+
     fits = [b for b in breaks(t["text"]) if b < len(t["text"]) and measure(dict(t, text=t["text"][:b]))[1] <= room]
     if fits:
-        return t["text"][:fits[-1]], t["text"][fits[-1]:]
+        return t["text"][: fits[-1]], t["text"][fits[-1] :]
     cl = _clusters(t["text"])
     lo, hi = 0, len(cl)
     while lo < hi:
@@ -1207,33 +1529,67 @@ def prepare(b, others, page_w, g, typesetter, role_of, px_of, cols, walls=()):
     multi = len(b["lines"]) > 1
     bpx = px_of(b["size"])
     lettered = next((t for t in toks if t["path"] is not None), None)
-    asc, desc = font(lettered["path"], bpx, lettered["wght"]).getmetrics() if lettered else (C.ascent_share * bpx, (1 - C.ascent_share) * bpx)
+    asc, desc = (
+        font(lettered["path"], bpx, lettered["wght"]).getmetrics()
+        if lettered
+        else (C.ascent_share * bpx, (1 - C.ascent_share) * bpx)
+    )
     cx = (x0 + x1) / 2
-    c0, c1 = (b["colspan"][0] * g, b["colspan"][1] * g) if b.get("colspan") else (min(a for a, _ in cols), max(z for _, z in cols))
+    c0, c1 = (
+        (b["colspan"][0] * g, b["colspan"][1] * g)
+        if b.get("colspan")
+        else (min(a for a, _ in cols), max(z for _, z in cols))
+    )
     W, bx0, ind1, ind2 = x1 - x0, x0, 0.0, 0.0
     if multi:
         align = b["align"]
         ind1, ind2 = indents(b, g, bpx)
     else:
-        align = ("right" if b["rtl"] else "left") if b["lines"][0].get("marked") else b.get("src_align") or single_align(x0, x1, c0, c1, b["rtl"])
-        beside = (np.minimum(others[:, 3], bb.y1) - np.maximum(others[:, 1], bb.y0)
-                  > C.row_overlap * np.minimum(others[:, 3] - others[:, 1], bb.height))
+        align = (
+            ("right" if b["rtl"] else "left")
+            if b["lines"][0].get("marked")
+            else b.get("src_align") or single_align(x0, x1, c0, c1, b["rtl"])
+        )
+        beside = np.minimum(others[:, 3], bb.y1) - np.maximum(others[:, 1], bb.y0) > C.row_overlap * np.minimum(
+            others[:, 3] - others[:, 1], bb.height
+        )
         row = (others[beside][:, [0, 2]] * g).tolist()
         row += [(x, x) for x, wy0, wy1 in walls if min(wy1, y1) - max(wy0, y0) > C.row_overlap * (y1 - y0)]
         slack = C.edge_slack * (c1 - c0)
         e0, e1 = max(c0 - slack, 2.0), min(c1 + slack, page_w * g - 2.0)
         right = min((a for a, z in row if a >= x1 - 1), default=e1)
         left = max((z for a, z in row if z <= x0 + 1), default=e0)
-        cap = {"left": min(e1, right) - x0, "right": x1 - max(e0, left),
-               "center": 2 * min(cx - max(e0, left), min(e1, right) - cx)}[align]
+        cap = {
+            "left": min(e1, right) - x0,
+            "right": x1 - max(e0, left),
+            "center": 2 * min(cx - max(e0, left), min(e1, right) - cx),
+        }[align]
         Wa = max(min(C.room * W, cap), W)
         bx0, W = {"left": x0, "right": x1 - Wa, "center": cx - Wa / 2}[align], Wa
         if b.get("flush"):
             align = "justify"
     lines = wrap(toks, W, ind1, ind2)
-    return dict(b=b, x0=x0, x1=x1, y0=y0, y1=y1, bx0=bx0, W=W, align=align, ind=(ind1, ind2), lines=lines,
-                pitch=line_pitch(b, bpx, asc, desc), asc=asc, desc=desc, multi=multi, pinned=b["pinned"], rtl=b["rtl"],
-                bpx=bpx, tol=C.row_tol_em * b["size"] * g, wrapped=not multi and len(lines) > 1)
+    return dict(
+        b=b,
+        x0=x0,
+        x1=x1,
+        y0=y0,
+        y1=y1,
+        bx0=bx0,
+        W=W,
+        align=align,
+        ind=(ind1, ind2),
+        lines=lines,
+        pitch=line_pitch(b, bpx, asc, desc),
+        asc=asc,
+        desc=desc,
+        multi=multi,
+        pinned=b["pinned"],
+        rtl=b["rtl"],
+        bpx=bpx,
+        tol=C.row_tol_em * b["size"] * g,
+        wrapped=not multi and len(lines) > 1,
+    )
 
 
 def _paths(d):
@@ -1294,8 +1650,16 @@ def _fill(img, paths, gray, alpha, even_odd=False):
 
 def page_frame(r, ph, pw):
     """A bar along the page edge that spans most of the page: a frame, kept whole where it is."""
-    tall = r.height >= C.frame_span * ph and r.width <= C.frame_thin * pw and (r.x0 < C.edge_zone * pw or r.x1 > (1 - C.edge_zone) * pw)
-    wide = r.width >= C.frame_span * pw and r.height <= C.frame_thin * ph and (r.y0 < C.edge_zone * ph or r.y1 > (1 - C.edge_zone) * ph)
+    tall = (
+        r.height >= C.frame_span * ph
+        and r.width <= C.frame_thin * pw
+        and (r.x0 < C.edge_zone * pw or r.x1 > (1 - C.edge_zone) * pw)
+    )
+    wide = (
+        r.width >= C.frame_span * pw
+        and r.height <= C.frame_thin * ph
+        and (r.y0 < C.edge_zone * ph or r.y1 > (1 - C.edge_zone) * ph)
+    )
     return tall or wide
 
 
@@ -1310,7 +1674,12 @@ def graphics(src, number, first, ph, pw, home=None, below=None):
     repeated = set() if first else {_key(d["rect"]) for d in src.drawings(home)}
     for d in src.drawings(number):
         r = d["rect"]
-        fixed = r.y1 < C.header_pt or r.y0 > ph - C.footer_pt or page_frame(r, ph, pw) or (below is not None and r.y0 >= below)
+        fixed = (
+            r.y1 < C.header_pt
+            or r.y0 > ph - C.footer_pt
+            or page_frame(r, ph, pw)
+            or (below is not None and r.y0 >= below)
+        )
         if not first and (fixed or _key(r) in repeated or r.width * r.height > C.repeat_cover * pw * ph):
             continue
         out.append((d, fixed and first))
@@ -1328,24 +1697,39 @@ def join_tiles(boxes):
     rs, x0 = r[order], np.sort(r[:, 0])
     widest = float((rs[:, 2] - rs[:, 0]).max())
     rows, cols = [], []
-    for a in range(0, len(rs), 512):                                  # the touching pairs in blocks of rows (sorted by x0, so only the columns near them can touch)
-        q = rs[a:a + 512]
-        lo, hi = np.searchsorted(x0, q[:, 0].min() - t - widest, "left"), np.searchsorted(x0, q[:, 2].max() + t, "right")
+    for a in range(
+        0, len(rs), 512
+    ):  # the touching pairs in blocks of rows (sorted by x0, so only the columns near them can touch)
+        q = rs[a : a + 512]
+        lo, hi = (
+            np.searchsorted(x0, q[:, 0].min() - t - widest, "left"),
+            np.searchsorted(x0, q[:, 2].max() + t, "right"),
+        )
         c = rs[lo:hi]
-        near = ((q[:, None, 0] <= c[None, :, 2] + t) & (c[None, :, 0] <= q[:, None, 2] + t)
-                & (q[:, None, 1] <= c[None, :, 3] + t) & (c[None, :, 1] <= q[:, None, 3] + t))
+        near = (
+            (q[:, None, 0] <= c[None, :, 2] + t)
+            & (c[None, :, 0] <= q[:, None, 2] + t)
+            & (q[:, None, 1] <= c[None, :, 3] + t)
+            & (c[None, :, 1] <= q[:, None, 3] + t)
+        )
         i, j = np.nonzero(near)
         rows.append(i + a), cols.append(j + lo)
     rows, cols = np.concatenate(rows), np.concatenate(cols)
-    _, found = connected_components(csr_matrix((np.ones(len(rows), bool), (rows, cols)), shape=(len(r), len(r))), directed=False)
+    _, found = connected_components(
+        csr_matrix((np.ones(len(rows), bool), (rows, cols)), shape=(len(r), len(r))), directed=False
+    )
     label = np.empty(len(r), found.dtype)
     label[order] = found
     size = np.bincount(label)
-    joined = {}                                                       # label -> the joined rectangle, or None when the tiles do not cover enough of it
+    joined = {}  # label -> the joined rectangle, or None when the tiles do not cover enough of it
     for k in np.flatnonzero(size > 1):
         m = r[label == k]
         box = np.r_[m[:, :2].min(0), m[:, 2:].max(0)]
-        joined[k] = pymupdf.Rect(*box.tolist()) if np.prod(m[:, 2:] - m[:, :2], axis=1).sum() >= C.tile_cover * np.prod(box[2:] - box[:2]) else None
+        joined[k] = (
+            pymupdf.Rect(*box.tolist())
+            if np.prod(m[:, 2:] - m[:, :2], axis=1).sum() >= C.tile_cover * np.prod(box[2:] - box[:2])
+            else None
+        )
     out, done = [], set()
     for i, k in enumerate(label):
         if joined.get(k) is not None:
@@ -1364,12 +1748,16 @@ def _inked(src, number, r):
     full = src.clean_pixmap(number)
     bounds = pymupdf.IRect(full.irect)
     box = pymupdf.IRect(r.irect) & bounds
-    a = np.frombuffer(full.samples, np.uint8).reshape(full.h, full.stride)[box.y0 - bounds.y0:box.y1 - bounds.y0, box.x0 - bounds.x0:box.x1 - bounds.x0]
+    a = np.frombuffer(full.samples, np.uint8).reshape(full.h, full.stride)[
+        box.y0 - bounds.y0 : box.y1 - bounds.y0, box.x0 - bounds.x0 : box.x1 - bounds.x0
+    ]
     rows, cols = np.flatnonzero((a < C.ink_level).any(1)), np.flatnonzero((a < C.ink_level).any(0))
     if not len(rows):
         return None
     sx, sy = r.width / box.width, r.height / box.height
-    return pymupdf.Rect(r.x0 + cols[0] * sx, r.y0 + rows[0] * sy, r.x0 + (cols[-1] + 1) * sx, r.y0 + (rows[-1] + 1) * sy)
+    return pymupdf.Rect(
+        r.x0 + cols[0] * sx, r.y0 + rows[0] * sy, r.x0 + (cols[-1] + 1) * sx, r.y0 + (rows[-1] + 1) * sy
+    )
 
 
 def _covered(boxes, r):
@@ -1384,8 +1772,11 @@ def pictures(src, number, ph, pw, below=None):
     pictures that only repeat the page's text are left out."""
     out = []
     page = pymupdf.Rect(0, 0, pw, ph)
-    rects = [r for r in join_tiles(r for r in (pymupdf.Rect(im["bbox"]) & page for im in src.images(number)) if not r.is_empty)
-             if max(r.width, r.height) >= src.min_picture]                   # the letters of a page set as bitmaps are no pictures
+    rects = [
+        r
+        for r in join_tiles(r for r in (pymupdf.Rect(im["bbox"]) & page for im in src.images(number)) if not r.is_empty)
+        if max(r.width, r.height) >= src.min_picture
+    ]  # the letters of a page set as bitmaps are no pictures
     if not rects:
         return out
     words = np.array([w[:4] for w in src.words(number)], float).reshape(-1, 4)
@@ -1402,8 +1793,12 @@ def pictures(src, number, ph, pw, below=None):
 
 def cell_boxes(elems, page_area):
     """Rectangles of the filled or closed drawings no larger than cell_share of the page: table cells, boxes, panels."""
-    return [d["rect"] for d, fixed in elems if (d.get("fill") is not None or d.get("closePath") or any(it[0] == "re" for it in d["items"]))
-            and d["rect"].get_area() <= C.cell_share * page_area]
+    return [
+        d["rect"]
+        for d, fixed in elems
+        if (d.get("fill") is not None or d.get("closePath") or any(it[0] == "re" for it in d["items"]))
+        and d["rect"].get_area() <= C.cell_share * page_area
+    ]
 
 
 def _hrules(elems, g):
@@ -1438,10 +1833,16 @@ def _vrules(elems, g):
 
 def _band(rules, ys, p):
     """The rules above and below a block that run along all of its width: the row of a table it sits in, or None."""
+
     def covers(r):
         return r[0] <= p["x0"] + 2 and r[1] >= p["x1"] - 2
-    up = next((rules[k][2] for k in range(bisect.bisect_right(ys, p["y0"] + p["tol"]) - 1, -1, -1) if covers(rules[k])), None)
-    down = next((rules[k][2] for k in range(bisect.bisect_left(ys, p["y1"] - p["tol"]), len(rules)) if covers(rules[k])), None)
+
+    up = next(
+        (rules[k][2] for k in range(bisect.bisect_right(ys, p["y0"] + p["tol"]) - 1, -1, -1) if covers(rules[k])), None
+    )
+    down = next(
+        (rules[k][2] for k in range(bisect.bisect_left(ys, p["y1"] - p["tol"]), len(rules)) if covers(rules[k])), None
+    )
     return None if up is None or down is None or down <= up else (up, down)
 
 
@@ -1468,7 +1869,10 @@ def draw_graphics(img, drawings, g):
         paths = [[(x * g, y * g - dy) for x, y in path] for path in _paths(d)]
         flat = [p for path in paths for p in path]
         if flat:
-            lo, hi = (min(p[0] for p in flat), min(p[1] for p in flat)), (max(p[0] for p in flat), max(p[1] for p in flat))
+            lo, hi = (
+                (min(p[0] for p in flat), min(p[1] for p in flat)),
+                (max(p[0] for p in flat), max(p[1] for p in flat)),
+            )
             shift = [0.0, 0.0]
             for k, size in enumerate((img.width, img.height)):
                 if hi[k] < 1 and hi[k] > -C.edge_snap_px:
@@ -1482,7 +1886,9 @@ def draw_graphics(img, drawings, g):
                 _fill(img, shapes, _gray_f(fill), alpha, bool(d.get("even_odd")))
         for pts in paths:
             if stroke is not None and len(pts) > 1:
-                ImageDraw.Draw(img).line(pts + ([pts[0]] if d.get("closePath") else []), fill=_gray_f(stroke), width=width)
+                ImageDraw.Draw(img).line(
+                    pts + ([pts[0]] if d.get("closePath") else []), fill=_gray_f(stroke), width=width
+                )
 
 
 def text_page(src, number):
@@ -1531,8 +1937,16 @@ def _cut(segs, walls):
             lo, hi = min(prev.x1, s["bbox"].x1), max(prev.x0, s["bbox"].x0)
             cut = any(lo - 1 <= x <= hi + 1 and y0 < l["bbox"].y1 and y1 > l["bbox"].y0 for x, y0, y1 in walls)
             groups.append([s]) if cut else groups[-1].append(s)
-        out += [dict(l, bbox=pymupdf.Rect(min(s["bbox"].x0 for s in grp), l["bbox"].y0, max(s["bbox"].x1 for s in grp), l["bbox"].y1), spans=grp)
-                for grp in groups]
+        out += [
+            dict(
+                l,
+                bbox=pymupdf.Rect(
+                    min(s["bbox"].x0 for s in grp), l["bbox"].y0, max(s["bbox"].x1 for s in grp), l["bbox"].y1
+                ),
+                spans=grp,
+            )
+            for grp in groups
+        ]
     return out
 
 
@@ -1542,7 +1956,9 @@ class Source:
 
     def __init__(self, doc, min_picture=0.0):
         self.doc = doc
-        self.min_picture = min_picture                                   # an image (joined tiles taken as one) with no side of that many points is no picture
+        self.min_picture = (
+            min_picture  # an image (joined tiles taken as one) with no side of that many points is no picture
+        )
         self._read = {}
 
     def __len__(self):
@@ -1578,31 +1994,58 @@ class Source:
 
     def clean_pixmap(self, number):
         """The clean page rendered once (grey, 1 px a point): what the pictures are cut from."""
-        return self._get("clean_pm", number, lambda: self.clean(number).get_pixmap(colorspace=pymupdf.csGRAY, alpha=False))
+        return self._get(
+            "clean_pm", number, lambda: self.clean(number).get_pixmap(colorspace=pymupdf.csGRAY, alpha=False)
+        )
 
     def _clean(self, number):
         """The display list the pictures are taken from: that of the page itself when no text and no line art touches a picture (the redaction of
         _text_free would remove nothing), else _text_free."""
-        pics = [r for r in join_tiles(im["bbox"] for im in self.images(number)) if max(r.width, r.height) > max(C.dot_pt, self.min_picture)]
+        pics = [
+            r
+            for r in join_tiles(im["bbox"] for im in self.images(number))
+            if max(r.width, r.height) > max(C.dot_pt, self.min_picture)
+        ]
         if pics:
             p = np.array([tuple(r) for r in pics])
-            spans = np.array([sp["bbox"] for b in self[number].get_text("dict", flags=TEXT_FLAGS, textpage=self.textpage(number))["blocks"]
-                              for l in b.get("lines", []) for sp in l["spans"]], float).reshape(-1, 4)
+            spans = np.array(
+                [
+                    sp["bbox"]
+                    for b in self[number].get_text("dict", flags=TEXT_FLAGS, textpage=self.textpage(number))["blocks"]
+                    for l in b.get("lines", [])
+                    for sp in l["spans"]
+                ],
+                float,
+            ).reshape(-1, 4)
             art = np.array([d["rect"] for d in self.cdrawings(number)], float).reshape(-1, 4)
-            touch = lambda a: any(((b[:, None, 0] <= p[None, :, 2]) & (p[None, :, 0] <= b[:, None, 2]) & (b[:, None, 1] <= p[None, :, 3])
-                                   & (p[None, :, 1] <= b[:, None, 3])).any() for b in (a[i:i + 2048] for i in range(0, len(a), 2048)))     # in blocks: 250 000 drawings x 5 000 pictures are 1 GB
+            touch = lambda a: any(
+                (
+                    (b[:, None, 0] <= p[None, :, 2])
+                    & (p[None, :, 0] <= b[:, None, 2])
+                    & (b[:, None, 1] <= p[None, :, 3])
+                    & (p[None, :, 1] <= b[:, None, 3])
+                ).any()
+                for b in (a[i : i + 2048] for i in range(0, len(a), 2048))
+            )  # in blocks: 250 000 drawings x 5 000 pictures are 1 GB
             if not touch(spans) and not touch(art):
                 return self[number].get_displaylist()
         return _text_free(self.doc, number, self.min_picture)
 
     def lines(self, number):
         """Lines and rules of a page (fresh copies: callers change them)."""
+
         def parse():
             v, h = line_rules(self.drawings(number))
             return _cut(extract_segments(self[number], self.textpage(number)), v), (v, h)
+
         segs, (v, h) = self._get("lines", number, parse)
-        return ([dict(l, bbox=pymupdf.Rect(l["bbox"]), spans=[dict(s, bbox=pymupdf.Rect(s["bbox"])) for s in l["spans"]]) for l in segs],
-                (list(v), list(h)))
+        return (
+            [
+                dict(l, bbox=pymupdf.Rect(l["bbox"]), spans=[dict(s, bbox=pymupdf.Rect(s["bbox"])) for s in l["spans"]])
+                for l in segs
+            ],
+            (list(v), list(h)),
+        )
 
 
 def _overlaps(a, b, share):
@@ -1621,7 +2064,14 @@ def _absorb(blocks):
         for b in blocks:
             if b is o or id(b) in gone or len(b["lines"]) < 2 or not _overlaps(b["bbox"], o["bbox"], C.contain_share):
                 continue
-            line = next((l for l in b["lines"] if min(l["bbox"].y1, o["bbox"].y1) - max(l["bbox"].y0, o["bbox"].y0) > 0.5 * o["bbox"].height), None)
+            line = next(
+                (
+                    l
+                    for l in b["lines"]
+                    if min(l["bbox"].y1, o["bbox"].y1) - max(l["bbox"].y0, o["bbox"].y0) > 0.5 * o["bbox"].height
+                ),
+                None,
+            )
             if line:
                 line["spans"] = sorted(line["spans"] + o["lines"][0]["spans"], key=lambda s: s["bbox"].x0)
                 line["bbox"] = line["bbox"] | o["lines"][0]["bbox"]
@@ -1633,7 +2083,11 @@ def _absorb(blocks):
 def page_blocks(src, number, first, running=()):
     """Paragraphs of a page. Header and footer zones are those of the whole page, whatever its crop."""
     segs, rules = src.lines(number)
-    shapes = [tuple(d["rect"]) for d in src.drawings(number) if d["rect"].get_area() < C.background_share * src[number].rect.get_area()]
+    shapes = [
+        tuple(d["rect"])
+        for d in src.drawings(number)
+        if d["rect"].get_area() < C.background_share * src[number].rect.get_area()
+    ]
     blocks = _absorb(paragraphs(segs, rules, shapes))
     page = src[number]
     offset, full = page.cropbox_position.y, page.mediabox.height
@@ -1677,15 +2131,22 @@ def _horizontal(d):
 def body_size(blocks):
     """The body font size of a page's blocks: the size (to 0.5 pt) of most of their characters (0: no text)."""
     spans = [s for b in blocks for l in b["lines"] for s in l["spans"]]
-    sizes = Counter({k: sum(len(s["text"]) for s in spans if round(s["size"] * 2) / 2 == k)
-                     for k in {round(s["size"] * 2) / 2 for s in spans}})
+    sizes = Counter(
+        {
+            k: sum(len(s["text"]) for s in spans if round(s["size"] * 2) / 2 == k)
+            for k in {round(s["size"] * 2) / 2 for s in spans}
+        }
+    )
     return sizes.most_common(1)[0][0] if sizes else 0.0
 
 
 @lru_cache(maxsize=1 << 16)
 def needs_shaping(text):
     """Scripts whose letters join, reorder or stack (Hebrew to Indic, Thai, Khmer, Arabic forms) are set by the shaping engine."""
-    return any(0x0590 <= ord(c) <= 0x1CFF or 0xA800 <= ord(c) <= 0xABFF or 0xFB1D <= ord(c) <= 0xFEFF or c in JOINERS for c in text)
+    return any(
+        0x0590 <= ord(c) <= 0x1CFF or 0xA800 <= ord(c) <= 0xABFF or 0xFB1D <= ord(c) <= 0xFEFF or c in JOINERS
+        for c in text
+    )
 
 
 @lru_cache(maxsize=1 << 16)
@@ -1696,7 +2157,9 @@ def _advance(key, ch):
 @lru_cache(maxsize=1 << 15)
 def _coverage(key, text, direction):
     """Coverage of a letter (direction None, with its advance) or of a word shaped as a unit (advance 0)."""
-    mask, (ox, oy) = _font(*key).getmask2(text, "L", anchor="ls", **({} if direction is None else dict(direction=direction)))
+    mask, (ox, oy) = _font(*key).getmask2(
+        text, "L", anchor="ls", **({} if direction is None else dict(direction=direction))
+    )
     w, h = mask.size
     cov = np.array(mask, dtype=np.uint8).reshape(h, w) if w and h else np.zeros((0, 0), np.uint8)
     return cov, ox, oy, 0.0 if direction else _advance(key, text)
@@ -1711,12 +2174,24 @@ def blit_text(img, items, s=1.0):
     for x, y, f, text, gray, direction, clip in items:
         cx0, cy0, cx1, cy1 = (0, 0, W, H) if clip is None else (round(c * s) for c in clip)
         key = f.key if s == 1.0 else (f.key[0], f.key[1] * s, f.key[2])
-        for ch in ([text] if needs_shaping(text) else text):
+        for ch in [text] if needs_shaping(text) else text:
             d = direction if needs_shaping(text) else None
             cov, ox, oy, _ = _coverage(key, ch, d)
             if cov.size:
                 covs.append(cov.ravel())
-                at.append((int(round(x * s)) + ox, int(round(y * s)) + oy, cov.shape[0], cov.shape[1], gray, cx0, cy0, cx1, cy1))
+                at.append(
+                    (
+                        int(round(x * s)) + ox,
+                        int(round(y * s)) + oy,
+                        cov.shape[0],
+                        cov.shape[1],
+                        gray,
+                        cx0,
+                        cy0,
+                        cx1,
+                        cy1,
+                    )
+                )
             x += 0.0 if d else _advance(f.key, ch)
     if covs:
         arr = np.asarray(img).copy()
@@ -1748,7 +2223,9 @@ def render(src, lay, s=1.0):
     def paste_pictures(pinned):
         for x, top, b in lay["pics"]:
             if b["pinned"] == pinned:
-                pm = src.clean(b["number"]).get_pixmap(matrix=pymupdf.Matrix(g, g), clip=b["clip"], colorspace=pymupdf.csGRAY, alpha=False)
+                pm = src.clean(b["number"]).get_pixmap(
+                    matrix=pymupdf.Matrix(g, g), clip=b["clip"], colorspace=pymupdf.csGRAY, alpha=False
+                )
                 pic = Image.frombytes("L", (pm.w, pm.h), pm.samples)
                 if b["clip"] != b["rect"]:
                     pic = pic.resize((round(b["rect"].width * g), round(b["rect"].height * g)), Image.LANCZOS)
@@ -1764,40 +2241,50 @@ def render(src, lay, s=1.0):
         number, rect = t["glyph"]
         k = t["px"] * s / t["size"]
         pm = src[number].get_pixmap(matrix=pymupdf.Matrix(k, k), clip=rect, colorspace=pymupdf.csGRAY)
-        run = np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.stride)[:, :pm.w]
-        if not run.size:                                              # a glyph box of no area (an empty symbol glyph): nothing is drawn
+        run = np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.stride)[:, : pm.w]
+        if not run.size:  # a glyph box of no area (an empty symbol glyph): nothing is drawn
             continue
         edge = np.concatenate([run[0], run[-1], run[:, 0], run[:, -1]])
         ink = np.abs(run.astype(int) - int(np.median(edge))) > C.glyph_ink
         if t.get("icon"):
-            _, label = cv2.connectedComponents(cv2.dilate(ink.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=2))
-            mid = label[pm.h // 3: pm.h - pm.h // 3, pm.w // 3: pm.w - pm.w // 3]
-            ink &= np.isin(label, np.unique(mid[mid > 0]))     # the icon, not the letters of the lines its box reaches into
+            _, label = cv2.connectedComponents(
+                cv2.dilate(ink.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=2)
+            )
+            mid = label[pm.h // 3 : pm.h - pm.h // 3, pm.w // 3 : pm.w - pm.w // 3]
+            ink &= np.isin(
+                label, np.unique(mid[mid > 0])
+            )  # the icon, not the letters of the lines its box reaches into
         mask = Image.fromarray((ink * 255).astype(np.uint8))
         img.paste(Image.fromarray(run), (round(x), round(y - C.ascent_share * pm.h)), mask)
     return img
-
-
-def _stroked(d):
-    """Rectangle of a drawing with half its stroke width around it (the line is part of what the page shows)."""
-    half = (d.get("width") or 1.0) / 2 if d.get("color") is not None else 0.0
-    return d["rect"] + (-half, -half, half, half)
 
 
 def content_box(page, src=None, number=None, fix_fonts=True):
     """Rectangle of what the page shows: text lines, pictures and graphics (a background fill over the page does not count).
     With the Source and number of the page, what it has read of the page is used again."""
     if src is None:
-        segs, images, drawings = extract_segments(page, fix_fonts=fix_fonts), page.get_image_info(), page.get_cdrawings()
+        segs, images, drawings = (
+            extract_segments(page, fix_fonts=fix_fonts),
+            page.get_image_info(),
+            page.get_cdrawings(),
+        )
     else:
-        segs, images, drawings = extract_segments(page, src.textpage(number), fix_fonts), src.images(number), src.cdrawings(number)
+        segs, images, drawings = (
+            extract_segments(page, src.textpage(number), fix_fonts),
+            src.images(number),
+            src.cdrawings(number),
+        )
     boxes = np.array([tuple(l["bbox"]) for l in segs] + [tuple(i["bbox"]) for i in images], float).reshape(-1, 4)
-    if drawings:                                                      # a drawing with half its stroke width around it, unless it is a fill over most of the page
+    if drawings:  # a drawing with half its stroke width around it, unless it is a fill over most of the page
         r = np.array([d["rect"] for d in drawings], float).reshape(-1, 4)
         half = np.array([(d.get("width") or 1.0) / 2 if d.get("color") is not None else 0.0 for d in drawings])
-        small = (np.array([d.get("fill") is None for d in drawings]) | ((r[:, 2] - r[:, 0]) * (r[:, 3] - r[:, 1]) < C.background_share * page.rect.get_area()))
+        small = np.array([d.get("fill") is None for d in drawings]) | (
+            (r[:, 2] - r[:, 0]) * (r[:, 3] - r[:, 1]) < C.background_share * page.rect.get_area()
+        )
         boxes = np.vstack([boxes, (r + np.stack([-half, -half, half, half], 1))[small]])
-    boxes = boxes[(boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])]            # an empty rectangle adds nothing to a union
+    boxes = boxes[
+        (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
+    ]  # an empty rectangle adds nothing to a union
     box = pymupdf.Rect(*np.r_[boxes[:, :2].min(0), boxes[:, 2:].max(0)].tolist()) if len(boxes) else pymupdf.Rect()
     return box & page.rect if box.is_valid and not box.is_empty else page.rect
 
@@ -1813,8 +2300,12 @@ def usable(src, number, latin=True):
     is written in it), no more than max_columns columns, no scan with a hidden text layer."""
     segs = src.lines(number)[0]
     body = [l for l in segs if l["bbox"].y1 >= C.header_pt and l["bbox"].y0 <= src[number].rect.height - C.footer_pt]
-    return (bool(body) and text_page(src, number) and len(column_intervals(segs)) <= C.max_columns
-            and over_pictures(src, number, segs) <= C.over_picture_share)
+    return (
+        bool(body)
+        and text_page(src, number)
+        and len(column_intervals(segs)) <= C.max_columns
+        and over_pictures(src, number, segs) <= C.over_picture_share
+    )
 
 
 def font_set(font_dirs):
@@ -1822,7 +2313,13 @@ def font_set(font_dirs):
     base = find_fonts(tuple(font_dirs))
     known = set(base)
     dirs = [os.path.expanduser(d) for d in font_dirs]
-    extra = sorted(f for d in dirs if os.path.isdir(d) for ext in ("ttf", "otf") for f in glob.glob(f"{d}/**/*.{ext}", recursive=True)
-                   if os.path.basename(f).lower().startswith("noto") and f not in known and len(_font_cmap(f)) >= C.min_noto_cmap)
+    extra = sorted(
+        f
+        for d in dirs
+        if os.path.isdir(d)
+        for ext in ("ttf", "otf")
+        for f in glob.glob(f"{d}/**/*.{ext}", recursive=True)
+        if os.path.basename(f).lower().startswith("noto") and f not in known and len(_font_cmap(f)) >= C.min_noto_cmap
+    )
     save_font_info()
     return base + tuple(extra)

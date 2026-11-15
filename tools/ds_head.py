@@ -5,24 +5,26 @@ ds_metric.hw_class of the hw_det box counts (none / filled / hw) of the in-scope
 balanced accuracy of kind and of hw on them. -> OUT/head.pt, OUT/report.json
 
 python tools/ds_head.py train [--steps 3000] [--unif 1.0]"""
+
 import argparse
 import glob
 import json
 import re
 from pathlib import Path
 
+import ds100k as D
+import ds_metric as DM
+import ds_targets as DT
+import kaggle_fps as KF
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import ds100k as D
-import ds_metric as DM
-import ds_targets as DT
-import kaggle_fps as KF
+from dspages import paths as _P  # noqa: E402
 
-LS = Path("/run/media/p/D/ML_DS/UVTM/Labels/labelset")
+LS = Path(f"{_P.ROOT}/Labels/labelset")
 OUT = D.OUT / "head16"
 DIM, HOLD, BATCH, TAU = 16, 0.1, 512, 0.1
 
@@ -35,6 +37,7 @@ def pool_rows():
     def get(r):
         q = np.searchsorted(starts, r, side="right") - 1
         return np.stack([parts[a][b - starts[a]] for a, b in zip(q, r)]).astype(np.float32)
+
     return get
 
 
@@ -46,14 +49,14 @@ def kinds(get):
     a = np.flatnonzero(I.pool_i.notna())
     E[a] = get(I.pool_i.to_numpy()[a].astype(np.int64))
     at, V = {}, []
-    for f in sorted(LS.glob("out*/**/ids.npy")):                     # every Kaggle embedding run of the label files
+    for f in sorted(LS.glob("out*/**/ids.npy")):  # every Kaggle embedding run of the label files
         ids = np.load(f)[:, 0]
         at.update({int(k): (len(V), i) for i, k in enumerate(ids)})
         V.append(np.load(f.parent / "embeddings.npy"))
     b = np.array([i for i, k in enumerate(I.k) if np.isnan(E[i, 0]) and int(k) in at], int)
     E[b] = np.stack([V[at[int(k)][0]][at[int(k)][1]] for k in I.k.to_numpy()[b]])
     ok = ~np.isnan(E[:, 0])
-    doc = I.path.map(lambda p: (m.group(0) if (m := re.search(r"[0-9a-f]{12}", Path(p).name)) else Path(p).stem))
+    doc = I.path.map(lambda p: m.group(0) if (m := re.search(r"[0-9a-f]{12}", Path(p).name)) else Path(p).stem)
     return E[ok], I.cls.to_numpy()[ok], doc.to_numpy()[ok]
 
 
@@ -68,7 +71,7 @@ def supcon(z, y):
 def knn_bal(Zq, yq, Zr, yr, k=10):
     pred = []
     for a in range(0, len(Zq), 2048):
-        nb = torch.cdist(Zq[a:a + 2048], Zr).topk(k, largest=False).indices
+        nb = torch.cdist(Zq[a : a + 2048], Zr).topk(k, largest=False).indices
         pred.append(torch.mode(yr[nb], 1).values)
     pred = torch.cat(pred).numpy()
     yq = yq.numpy()
@@ -95,8 +98,11 @@ def cmd_train(a):
     Xk, Yk = torch.from_numpy(Ek), torch.from_numpy(yk)
     by_k = [np.flatnonzero((~hk) & (yk == c)) for c in range(len(names))]
     by_h = [np.flatnonzero(yh_tr.numpy() == c) for c in range(3)]
-    print(f"kind: {len(Ek)} labelled pages, {len(names)} classes, held out {int(hk.sum())}; hw training pages {len(keep)} "
-          f"{np.bincount(yh[keep]).tolist()}", flush=True)
+    print(
+        f"kind: {len(Ek)} labelled pages, {len(names)} classes, held out {int(hk.sum())}; hw training pages {len(keep)} "
+        f"{np.bincount(yh[keep]).tolist()}",
+        flush=True,
+    )
     net = nn.Sequential(nn.Linear(1536, 512), nn.GELU(), nn.Linear(512, DIM))
     f = lambda x: F.normalize(net(x), dim=1)
     opt = torch.optim.AdamW(net.parameters(), 1e-3, weight_decay=1e-4)
@@ -105,11 +111,12 @@ def cmd_train(a):
     def draw(groups):
         per = max(2, BATCH // len(groups))
         return np.concatenate([g.choice(x, per, replace=len(x) < per) for x in groups if len(x)])
+
     for s in range(a.steps):
         bk, bh = draw(by_k), draw(by_h)
         zh = f(Eh[bh])
         lk, lh = supcon(f(Xk[bk]), Yk[bk]), supcon(zh, yh_tr[bh])
-        w = zh[yh_tr[bh] > 0]                                         # pages with handwriting spread over their region (Wang & Isola 2020)
+        w = zh[yh_tr[bh] > 0]  # pages with handwriting spread over their region (Wang & Isola 2020)
         lu = torch.pdist(w).pow(2).mul(-2).exp().mean().log()
         opt.zero_grad()
         (lk + lh + a.unif * lu).backward()
@@ -122,12 +129,16 @@ def cmd_train(a):
         Zk = f(Xk)
         qh = g.choice(np.flatnonzero(hh), 20_000, replace=False)
         qh = np.concatenate([qh, np.flatnonzero(hh & (yh > 0))])
-        Zq = torch.cat([f(torch.from_numpy(get(pool_i[qh[x:x + 20_000]]))) for x in range(0, len(qh), 20_000)])
-        Zr = torch.cat([f(Eh[x:x + 50_000]) for x in range(0, len(Eh), 50_000)])
-        rep = {"kind 10-NN balanced acc (held-out labelled docs)": knn_bal(Zk[torch.from_numpy(hk)], Yk[torch.from_numpy(hk)], Zk[torch.from_numpy(~hk)], Yk[torch.from_numpy(~hk)]),
-               "hw 10-NN balanced acc (held-out pages)": knn_bal(Zq, torch.from_numpy(yh[qh]), Zr, yh_tr)}
+        Zq = torch.cat([f(torch.from_numpy(get(pool_i[qh[x : x + 20_000]]))) for x in range(0, len(qh), 20_000)])
+        Zr = torch.cat([f(Eh[x : x + 50_000]) for x in range(0, len(Eh), 50_000)])
+        rep = {
+            "kind 10-NN balanced acc (held-out labelled docs)": knn_bal(
+                Zk[torch.from_numpy(hk)], Yk[torch.from_numpy(hk)], Zk[torch.from_numpy(~hk)], Yk[torch.from_numpy(~hk)]
+            ),
+            "hw 10-NN balanced acc (held-out pages)": knn_bal(Zq, torch.from_numpy(yh[qh]), Zr, yh_tr),
+        }
         yq = yh[qh]
-        for c, nm in enumerate(("none", "filled", "hw")):              # mean distance to the class centre: the size of its region
+        for c, nm in enumerate(("none", "filled", "hw")):  # mean distance to the class centre: the size of its region
             zc = Zq[torch.from_numpy(yq == c)]
             rep[f"spread {nm}"] = float((zc - zc.mean(0)).norm(dim=1).mean())
     OUT.mkdir(parents=True, exist_ok=True)

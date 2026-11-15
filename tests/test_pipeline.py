@@ -5,8 +5,8 @@ from dataclasses import replace
 import cv2
 import numpy as np
 import pytest
-
 from conftest import fake_manifest
+
 from dspages import cli
 from dspages.conditions import factors, geometry_cond, plan, sample_preset
 from dspages.geometry.surface import make_surface, page_points
@@ -74,7 +74,7 @@ def test_flat_is_a_slice_of_the_drawn_sheet_and_the_content_is_in_the_photo(full
         ph, pw = page.shape
         x0, y0 = round(u0 * (pw - 1)), round(v0 * (ph - 1))
         flat = o["flat"] if Ps.layout.page_px[0] <= Ps.layout.page_px[1] else np.rot90(o["flat"], -1)
-        assert (flat == page[y0:y0 + flat.shape[0], x0:x0 + flat.shape[1]]).all()
+        assert (flat == page[y0 : y0 + flat.shape[0], x0 : x0 + flat.shape[1]]).all()
         ink = np.array(desc["ink"])
         assert u0 <= ink[0] + 1e-3 and v0 <= ink[1] + 1e-3 and u1 >= ink[2] - 1e-3 and v1 >= ink[3] - 1e-3
         assert m["view"]["cut"] == (frame != "page")
@@ -86,8 +86,12 @@ def test_paper_effects_do_not_depend_on_the_resolution(full_small):
     c = full_small.layout
     ppm = c.page_px[0] / c.sheet_mm[0]
     for seed in range(5):
-        a, fa = paper.apply(np.random.default_rng(seed), np.full((360, 256), 255, np.uint8), ppm / 4, c, full_small.geometry.shallow)
-        b, fb = paper.apply(np.random.default_rng(seed), np.full((720, 512), 255, np.uint8), ppm / 2, c, full_small.geometry.shallow)
+        a, fa = paper.apply(
+            np.random.default_rng(seed), np.full((360, 256), 255, np.uint8), ppm / 4, c, full_small.geometry.shallow
+        )
+        b, fb = paper.apply(
+            np.random.default_rng(seed), np.full((720, 512), 255, np.uint8), ppm / 2, c, full_small.geometry.shallow
+        )
         assert fa == fb
         small = cv2.resize(b, a.shape[::-1], interpolation=cv2.INTER_AREA).astype(float)
         assert abs(small.mean() - a.mean()) < 2.0
@@ -108,11 +112,25 @@ def _raster_manifest(tmp_path, n, missing):
         if i not in missing:
             img = np.full((420, 300), 250, np.uint8)
             for y in range(40, 380, 14):
-                img[y:y + 6, 30:30 + int(rng.integers(150, 240))] = 20
+                img[y : y + 6, 30 : 30 + int(rng.integers(150, 240))] = 20
             cv2.imwrite(str(p), img)
-        out.append(dict(source_path=str(p), page_index=0, kind="raster", language="en", category="test", rotate90=0,
-                        deskew_deg=0.0, used_h=420, used_w=300, window=[0.0, 0.0, 300.0, 420.0], margin=0.05, fill=0.8,
-                        picture_share=0.0))
+        out.append(
+            dict(
+                source_path=str(p),
+                page_index=0,
+                kind="raster",
+                language="en",
+                category="test",
+                rotate90=0,
+                deskew_deg=0.0,
+                used_h=420,
+                used_w=300,
+                window=[0.0, 0.0, 300.0, 420.0],
+                margin=0.05,
+                fill=0.8,
+                picture_share=0.0,
+            )
+        )
     path = tmp_path / "manifest_pages.jsonl"
     path.write_text("".join(json.dumps(e) + "\n" for e in out))
     return path
@@ -155,6 +173,7 @@ def test_a_stopped_run_goes_on_and_a_run_of_another_manifest_or_size_is_refused(
 
 def test_a_manifest_file_that_raises_is_rejected_with_its_error(tmp_path):
     from dspages.prep import manifest
+
     p = tmp_path / "broken.pdf"
     p.write_bytes(b"%PDF-1.4 not a pdf")
     recs = manifest._run(dict(path=str(p), language="en", category="test", digital=True, cap=2, skip=set()))
@@ -163,14 +182,35 @@ def test_a_manifest_file_that_raises_is_rejected_with_its_error(tmp_path):
 
 def test_the_manifest_goes_on_from_its_partial_records(tmp_path):
     from dspages.prep import manifest
+
     man = _raster_manifest(tmp_path, 6, missing=set())
     files = tmp_path / "files.jsonl"
-    files.write_text("".join(json.dumps(dict(path=e["source_path"], language="en", topic="t", category="test", digital=False,
-                                             pages=1, fonts=[], body_pt=0.0)) + "\n" for e in map(json.loads, open(man))))
+    files.write_text(
+        "".join(
+            json.dumps(
+                dict(
+                    path=e["source_path"],
+                    language="en",
+                    topic="t",
+                    category="test",
+                    digital=False,
+                    pages=1,
+                    fonts=[],
+                    body_pt=0.0,
+                )
+            )
+            + "\n"
+            for e in map(json.loads, open(man))
+        )
+    )
     out = tmp_path / "m.jsonl"
-    first = manifest._run(dict(path=str(tmp_path / "page0.png"), language="en", category="test", digital=False, cap=1, skip=set()))
+    first = manifest._run(
+        dict(path=str(tmp_path / "page0.png"), language="en", category="test", digital=False, cap=1, skip=set())
+    )
     (tmp_path / "m.partial.jsonl").write_text("".join(json.dumps(r) + "\n" for r in first))
     manifest._init()
     manifest.main(str(out), 1, pages=6, files=str(files))
-    paths = [json.loads(l)["source_path"] for l in open(out)] + [json.loads(l)["source_path"] for l in open(tmp_path / "m.rejected.jsonl")]
+    paths = [json.loads(l)["source_path"] for l in open(out)] + [
+        json.loads(l)["source_path"] for l in open(tmp_path / "m.rejected.jsonl")
+    ]
     assert len(paths) == len(set(paths)) == 6 and not (tmp_path / "m.partial.jsonl").exists()

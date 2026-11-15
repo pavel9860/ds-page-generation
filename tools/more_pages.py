@@ -15,6 +15,7 @@ scans a thumbnail proxy (ink grid, row / column profiles, edges; a JPEG scan is 
   python tools/more_pages.py merge              # WORK/out* -> emb_out/{embeddings,ids}.npy
 
 Local jobs run with 6 workers at most; every long step takes a timeout from the caller (watchdog)."""
+
 import argparse
 import io
 import json
@@ -28,11 +29,12 @@ import numpy as np
 import pandas as pd
 import pymupdf
 
+from dspages import paths as _P  # noqa: E402
 from dspages.hand.config import PATHS
 from dspages.ingest.litefeat import farthest_first  # noqa: F401  (pages_topup / pages_extra: M.farthest_first)
 from dspages.kaggle_api import api  # noqa: F401
 
-sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting")          # pagetype.thumbs / pack_npz (the embedding side's code)
+sys.path.insert(0, f"{_P.CORPUS}")  # pagetype.thumbs / pack_npz (the embedding side's code)
 
 UV = Path(PATHS.uvtm)
 LAYOUTS = Path(PATHS.layouts)
@@ -41,11 +43,11 @@ WORK = LAYOUTS / "archive" / "info" / "more_pages"
 POOL = LAYOUTS / "archive" / "info" / "diverse" / "pool.parquet"
 SHORT, MIN_BUDGET, BASE_PAGES, EXTRA = 5, 30, 5, 0.10
 WORKERS = 6
-KEY = 100_000                                              # (doc, page) -> doc * KEY + page (pages of a file stay below it)
-MAX_CANDIDATES = 400                                       # pages of one document looked at (strided over the rest of a longer one)
-DOC_SECONDS = 120                                          # a document that takes longer is dropped from the features
-TEXT_MIN_CHARS = 20                                        # fewer characters: the page is an image (the picture proxy is added)
-EMPTY_INK = 0.002                                          # picture proxy: share of dark pixels below this and no text = empty page
+KEY = 100_000  # (doc, page) -> doc * KEY + page (pages of a file stay below it)
+MAX_CANDIDATES = 400  # pages of one document looked at (strided over the rest of a longer one)
+DOC_SECONDS = 120  # a document that takes longer is dropped from the features
+TEXT_MIN_CHARS = 20  # fewer characters: the page is an image (the picture proxy is added)
+EMPTY_INK = 0.002  # picture proxy: share of dark pixels below this and no text = empty page
 
 pymupdf.TOOLS.mupdf_display_errors(False)
 
@@ -62,13 +64,18 @@ def budget(pages):
 
 
 # ---------------------------------------------------------------------------------------------------------------- features
-GRID = (8, 6)                                              # rows x columns of the density grids
+GRID = (8, 6)  # rows x columns of the density grids
 
 
 def _grid(mask):
     h, w = mask.shape
     r, c = GRID
-    return np.array([[mask[i * h // r:(i + 1) * h // r, j * w // c:(j + 1) * w // c].mean() for j in range(c)] for i in range(r)]).ravel()
+    return np.array(
+        [
+            [mask[i * h // r : (i + 1) * h // r, j * w // c : (j + 1) * w // c].mean() for j in range(c)]
+            for i in range(r)
+        ]
+    ).ravel()
 
 
 def text_feats(pg):
@@ -89,8 +96,17 @@ def text_feats(pg):
             n = sum(len(s["text"].strip()) for s in ln["spans"])
             if not n:
                 continue
-            lines.append((x0 / W, y0 / H, x1 / W, y1 / H, n, sum(c.isdigit() for s in ln["spans"] for c in s["text"]),
-                          sum(c.isupper() for s in ln["spans"] for c in s["text"])))
+            lines.append(
+                (
+                    x0 / W,
+                    y0 / H,
+                    x1 / W,
+                    y1 / H,
+                    n,
+                    sum(c.isdigit() for s in ln["spans"] for c in s["text"]),
+                    sum(c.isupper() for s in ln["spans"] for c in s["text"]),
+                )
+            )
             for s in ln["spans"]:
                 k = len(s["text"].strip())
                 if k:
@@ -99,9 +115,9 @@ def text_feats(pg):
                     ital += [(bool(s["flags"] & 2), k)]
                     mono += [(bool(s["flags"] & 8), k)]
                     fonts.add(s["font"])
-            gx0, gx1 = int(np.clip(x0 / W, 0, .999) * GRID[1]), int(np.clip(x1 / W, 0, .999) * GRID[1])
-            gy = int(np.clip((y0 + y1) / 2 / H, 0, .999) * GRID[0])
-            cells[gy * GRID[1] + gx0:gy * GRID[1] + gx1 + 1] += n / (gx1 - gx0 + 1)
+            gx0, gx1 = int(np.clip(x0 / W, 0, 0.999) * GRID[1]), int(np.clip(x1 / W, 0, 0.999) * GRID[1])
+            gy = int(np.clip((y0 + y1) / 2 / H, 0, 0.999) * GRID[0])
+            cells[gy * GRID[1] + gx0 : gy * GRID[1] + gx1 + 1] += n / (gx1 - gx0 + 1)
     chars = int(sum(l[4] for l in lines))
     f = np.zeros(40)
     f[0], f[1] = np.log1p(W / H * 10), n_img
@@ -112,9 +128,11 @@ def text_feats(pg):
         dr = []
     f[3] = np.log1p(len(dr))
     if dr:
-        wh = np.array([[min(r["rect"][2] - r["rect"][0], 1e4) / W, min(r["rect"][3] - r["rect"][1], 1e4) / H] for r in dr[:3000]])
-        f[4] = (wh.min(1) < 0.004).mean()                  # thin rules / lines
-        f[5] = ((wh > .5).all(1)).mean()                   # page-sized fills and frames
+        wh = np.array(
+            [[min(r["rect"][2] - r["rect"][0], 1e4) / W, min(r["rect"][3] - r["rect"][1], 1e4) / H] for r in dr[:3000]]
+        )
+        f[4] = (wh.min(1) < 0.004).mean()  # thin rules / lines
+        f[5] = ((wh > 0.5).all(1)).mean()  # page-sized fills and frames
         f[6] = np.mean([r.get("fill") is not None for r in dr[:3000]])
     if not lines:
         return np.concatenate([f, cells]), 0
@@ -124,8 +142,8 @@ def text_feats(pg):
     ssz = np.average(sz[:, 0], weights=sz[:, 1])
     f[7], f[8], f[9] = np.log1p(len(L)), np.log1p(chars), np.log1p(len(d["blocks"]))
     f[10] = L[:, 0].min()
-    f[11], f[12], f[13] = L[:, 1].min(), L[:, 2].max(), L[:, 3].max()      # content box
-    f[14] = (w * (L[:, 3] - L[:, 1])).sum()                                 # text area share
+    f[11], f[12], f[13] = L[:, 1].min(), L[:, 2].max(), L[:, 3].max()  # content box
+    f[14] = (w * (L[:, 3] - L[:, 1])).sum()  # text area share
     f[15], f[16] = w.mean(), w.std()
     f[17], f[18] = ssz, np.sqrt(np.average((sz[:, 0] - ssz) ** 2, weights=sz[:, 1]))
     f[19], f[20] = sz[:, 0].max() / max(ssz, 1), sz[:, 0].min() / max(ssz, 1)
@@ -134,25 +152,25 @@ def text_feats(pg):
     for i, v in ((23, bold), (24, ital), (25, mono)):
         a = np.array(v, float)
         f[i] = np.average(a[:, 0], weights=a[:, 1])
-    f[26] = L[:, 5].sum() / max(chars, 1)                                  # digits
-    f[27] = L[:, 6].sum() / max(chars, 1)                                  # capitals
-    left = np.round(L[:, 0] * 50)                                          # left edges in 2 % steps
+    f[26] = L[:, 5].sum() / max(chars, 1)  # digits
+    f[27] = L[:, 6].sum() / max(chars, 1)  # capitals
+    left = np.round(L[:, 0] * 50)  # left edges in 2 % steps
     u, cnt = np.unique(left, return_counts=True)
     p = cnt / cnt.sum()
     f[28], f[29] = len(u), -(p * np.log(p)).sum()
     mid = (L[:, 0] + L[:, 2]) / 2
-    f[30] = (np.abs(mid - .5) < .02).mean()                                # centred lines
-    f[31] = (L[:, 2] > .93).mean() if len(L) else 0                        # reach the right margin (justified)
+    f[30] = (np.abs(mid - 0.5) < 0.02).mean()  # centred lines
+    f[31] = (L[:, 2] > 0.93).mean() if len(L) else 0  # reach the right margin (justified)
     cols = np.histogram(mid, bins=10, range=(0, 1))[0] > max(2, 0.08 * len(L))
     f[32] = cols.sum()
     y = np.sort((L[:, 1] + L[:, 3]) / 2)
     gaps = np.diff(y)
     if len(gaps):
         f[33], f[34] = gaps.mean(), gaps.std()
-        f[35] = (gaps > 3 * np.median(gaps) + 1e-3).mean() if len(gaps) > 2 else 0      # paragraph breaks
-    f[36] = (L[:, 4] < 12).mean()                                          # short lines (tables, forms, titles)
+        f[35] = (gaps > 3 * np.median(gaps) + 1e-3).mean() if len(gaps) > 2 else 0  # paragraph breaks
+    f[36] = (L[:, 4] < 12).mean()  # short lines (tables, forms, titles)
     f[37] = L[:, 4].mean() / 100
-    f[38] = (w < .15).mean()
+    f[38] = (w < 0.15).mean()
     f[39] = len(set(np.round(L[:, 0] * 100))) / max(len(L), 1)
     cells = cells / max(cells.sum(), 1) * 10
     return np.concatenate([f, cells]), chars
@@ -167,11 +185,27 @@ def proxy_feats(g):
     rows, cols = ink.mean(1), ink.mean(0)
     gx, gy = np.abs(np.diff(g, axis=1)).mean(), np.abs(np.diff(g, axis=0)).mean()
     hist = np.histogram(g, bins=8, range=(0, 255))[0] / g.size
-    f = [ink.mean(), g.mean() / 255, g.std() / 255, bg / 255, gx / 255, gy / 255, ww / hh,
-         rows.std(), cols.std(), (rows > .02).mean(), (cols > .02).mean(),
-         np.abs(np.diff(rows)).mean(), np.abs(np.diff(cols)).mean(),
-         ink[:, :ww // 8 + 1].mean(), ink[:, -ww // 8 - 1:].mean(), ink[:hh // 8 + 1].mean(), ink[-hh // 8 - 1:].mean(),
-         g[:, :ww // 16 + 1].mean() / 255, g[:, -ww // 16 - 1:].mean() / 255]
+    f = [
+        ink.mean(),
+        g.mean() / 255,
+        g.std() / 255,
+        bg / 255,
+        gx / 255,
+        gy / 255,
+        ww / hh,
+        rows.std(),
+        cols.std(),
+        (rows > 0.02).mean(),
+        (cols > 0.02).mean(),
+        np.abs(np.diff(rows)).mean(),
+        np.abs(np.diff(cols)).mean(),
+        ink[:, : ww // 8 + 1].mean(),
+        ink[:, -ww // 8 - 1 :].mean(),
+        ink[: hh // 8 + 1].mean(),
+        ink[-hh // 8 - 1 :].mean(),
+        g[:, : ww // 16 + 1].mean() / 255,
+        g[:, -ww // 16 - 1 :].mean() / 255,
+    ]
     rp = np.add.reduceat(rows, np.linspace(0, hh, 17, dtype=int)[:-1]) / (hh / 16)
     return np.concatenate([f, hist, _grid(ink) * 4, rp]).astype(np.float32), float(ink.mean())
 
@@ -179,8 +213,14 @@ def proxy_feats(g):
 def scan_thumb(doc, pg, side=96):
     """Gray thumbnail of a page: a single JPEG picture decoded at a reduced scale, else a small render."""
     from PIL import Image
+
     imgs = pg.get_images(full=True)
-    if len(imgs) == 1 and not imgs[0][1] and doc.xref_get_key(imgs[0][0], "Filter")[1] == "/DCTDecode" and not pg.rotation:
+    if (
+        len(imgs) == 1
+        and not imgs[0][1]
+        and doc.xref_get_key(imgs[0][0], "Filter")[1] == "/DCTDecode"
+        and not pg.rotation
+    ):
         try:
             with Image.open(io.BytesIO(doc.xref_stream_raw(imgs[0][0]))) as jpg:
                 if jpg.mode in ("L", "RGB"):
@@ -188,7 +228,10 @@ def scan_thumb(doc, pg, side=96):
                     a = np.asarray(jpg.convert("L"))
                     z = side / max(a.shape)
                     import cv2
-                    return cv2.resize(a, (max(8, round(a.shape[1] * z)), max(8, round(a.shape[0] * z))), interpolation=cv2.INTER_AREA)
+
+                    return cv2.resize(
+                        a, (max(8, round(a.shape[1] * z)), max(8, round(a.shape[0] * z))), interpolation=cv2.INTER_AREA
+                    )
         except Exception:
             pass
     z = side / max(pg.rect.width, pg.rect.height)
@@ -197,7 +240,7 @@ def scan_thumb(doc, pg, side=96):
 
 
 NT, NP = 40 + GRID[0] * GRID[1], 19 + 8 + GRID[0] * GRID[1] + 16
-DIM = NT + NP + 2                                          # text block | picture proxy block | has text, has proxy
+DIM = NT + NP + 2  # text block | picture proxy block | has text, has proxy
 
 
 class Timeout(Exception):
@@ -229,15 +272,15 @@ def doc_feats(args):
                 if scan or chars < TEXT_MIN_CHARS:
                     try:
                         q, ink = proxy_feats(scan_thumb(doc, pg))
-                        v[NT:NT + NP], v[-1] = q, 1
+                        v[NT : NT + NP], v[-1] = q, 1
                         if chars < TEXT_MIN_CHARS and ink < EMPTY_INK:
-                            continue                                 # an empty page: not a candidate
+                            continue  # an empty page: not a candidate
                     except Exception as e:
                         err = f"proxy {type(e).__name__}"
                         if chars < TEXT_MIN_CHARS:
                             continue
                 out[p] = v
-    except BaseException as e:                                       # Timeout, a broken file
+    except BaseException as e:  # Timeout, a broken file
         err = f"{type(e).__name__}: {e}"[:200]
     finally:
         signal.alarm(0)
@@ -245,8 +288,6 @@ def doc_feats(args):
 
 
 # ---------------------------------------------------------------------------------------------------------------- selection
-
-
 
 
 # ---------------------------------------------------------------------------------------------------------------- documents
@@ -284,7 +325,14 @@ def load_docs():
 def cmd_check(_):
     P = load_docs()
     pdf = P.path.str.lower().str.endswith(".pdf")
-    print(len(P), "documents;", (P.actual < 0).sum(), "unreadable;", int(P.redo.sum()), "with another page count than at the embedding")
+    print(
+        len(P),
+        "documents;",
+        (P.actual < 0).sum(),
+        "unreadable;",
+        int(P.redo.sum()),
+        "with another page count than at the embedding",
+    )
     print(pd.crosstab(P.scan, P.redo))
     n = P.actual.clip(lower=0)
     print("embedded pages beyond the file's end:", int(sum(any(p >= a for p in e) for e, a in zip(P.emb, n))))
@@ -305,7 +353,7 @@ FEAT_CHUNK = 400
 def cmd_plan(a):
     P = load_docs()
     P = P[(P.actual > 0) & P.path.str.lower().str.endswith(".pdf")]
-    rows, jobs = [], []                                             # rows: chosen (doc, page); jobs: documents that need features
+    rows, jobs = [], []  # rows: chosen (doc, page); jobs: documents that need features
     for r in P.itertuples():
         pool, done = candidates(r)
         k = budget(r.actual) if r.actual >= SHORT else len(pool)
@@ -315,8 +363,15 @@ def cmd_plan(a):
         if len(pool) > MAX_CANDIDATES:
             pool = [pool[i] for i in np.unique(np.linspace(0, len(pool) - 1, MAX_CANDIDATES).round().astype(int))]
         jobs.append((r.doc, str(LAYOUTS / r.path), bool(r.scan), done + pool))
-    print(len(rows), "pages of the documents taken whole;", len(jobs), "documents to choose pages in,",
-          sum(len(j[3]) for j in jobs), "pages to look at", flush=True)
+    print(
+        len(rows),
+        "pages of the documents taken whole;",
+        len(jobs),
+        "documents to choose pages in,",
+        sum(len(j[3]) for j in jobs),
+        "pages to look at",
+        flush=True,
+    )
     fd = WORK / "feats"
     fd.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
@@ -325,13 +380,16 @@ def cmd_plan(a):
             f = fd / f"{c // FEAT_CHUNK:04d}.npz"
             if f.exists():
                 continue
-            res = list(ex.map(doc_feats, jobs[c:c + FEAT_CHUNK], chunksize=4))
+            res = list(ex.map(doc_feats, jobs[c : c + FEAT_CHUNK], chunksize=4))
             key = [d * KEY + p for d, o, _ in res for p in o]
             V = np.stack([v for _, o, _ in res for v in o.values()]) if key else np.zeros((0, DIM), np.float32)
             err = {int(d): e for d, _, e in res if e}
             np.savez(f"{f}.tmp.npz", key=np.array(key, np.int64), V=V, err=json.dumps(err))
             f.with_name(f.name + ".tmp.npz").rename(f)
-            print(f"features {c + len(res)}/{len(jobs)} docs, {int(time.time() - t0)} s, {len(err)} with errors", flush=True)
+            print(
+                f"features {c + len(res)}/{len(jobs)} docs, {int(time.time() - t0)} s, {len(err)} with errors",
+                flush=True,
+            )
     select(P, jobs, rows)
 
 
@@ -343,12 +401,14 @@ def select(P, jobs, rows):
         err.update(json.loads(str(z["err"])))
     key, V = np.concatenate(keys), np.concatenate(Vs)
     V = V.copy()
-    for lo, hi, flag, wts in ((0, NT, DIM - 2, np.r_[np.ones(40), np.full(GRID[0] * GRID[1], .4)]),
-                              (NT, NT + NP, DIM - 1, np.r_[np.ones(27), np.full(GRID[0] * GRID[1], .4), np.full(16, .4)])):
+    for lo, hi, flag, wts in (
+        (0, NT, DIM - 2, np.r_[np.ones(40), np.full(GRID[0] * GRID[1], 0.4)]),
+        (NT, NT + NP, DIM - 1, np.r_[np.ones(27), np.full(GRID[0] * GRID[1], 0.4), np.full(16, 0.4)]),
+    ):
         m = V[:, flag] > 0
         mu, sd = V[m, lo:hi].mean(0), V[m, lo:hi].std(0) + 1e-6
         V[:, lo:hi] = np.where(m[:, None], np.clip((V[:, lo:hi] - mu) / sd, -5, 5) * wts, 0)
-    V[:, -2:] *= 3                                                 # a page with text and a page that is a picture are far apart
+    V[:, -2:] *= 3  # a page with text and a page that is a picture are far apart
     at = {int(k): i for i, k in enumerate(key)}
     info = P.set_index("doc")
     fallback = 0
@@ -358,11 +418,13 @@ def select(P, jobs, rows):
         k = budget(r.actual)
         have = [p for p in look if doc * KEY + p in at and p not in done]
         seeds = [V[at[doc * KEY + p]] for p in done if doc * KEY + p in at]
-        if len(have) <= k:                                         # features failed (timeout, broken file): evenly spread pages
+        if len(have) <= k:  # features failed (timeout, broken file): evenly spread pages
             if len(have) < k:
                 fallback += 1
                 have = look if not have else have
-                have = [have[i] for i in np.unique(np.linspace(0, len(have) - 1, min(k, len(have))).round().astype(int))]
+                have = [
+                    have[i] for i in np.unique(np.linspace(0, len(have) - 1, min(k, len(have))).round().astype(int))
+                ]
             rows += [(doc, p) for p in have]
             continue
         M = V[[at[doc * KEY + p] for p in have]]
@@ -370,12 +432,24 @@ def select(P, jobs, rows):
     S = pd.DataFrame(rows, columns=["doc", "page"]).sort_values(["doc", "page"])
     S = S.join(P.set_index("doc")[["path", "scan", "redo", "actual"]], on="doc")
     S.to_parquet(WORK / "select.parquet")
-    print(len(S), "pages of", S.doc.nunique(), "documents;", int(S.redo.sum()), "pages of documents embedded again;",
-          fallback, "documents without usable features;", len(err), "errors", "->", WORK / "select.parquet")
+    print(
+        len(S),
+        "pages of",
+        S.doc.nunique(),
+        "documents;",
+        int(S.redo.sum()),
+        "pages of documents embedded again;",
+        fallback,
+        "documents without usable features;",
+        len(err),
+        "errors",
+        "->",
+        WORK / "select.parquet",
+    )
 
 
 # ---------------------------------------------------------------------------------------------------------------- shards
-SHARD_PAGES = 20_000                                       # pages of one pages_NNNN.npz (one sequential read on Kaggle)
+SHARD_PAGES = 20_000  # pages of one pages_NNNN.npz (one sequential read on Kaggle)
 NPZ = WORK / "npz"
 DATASET, KERNEL = "pavel9860/more-pages-npz", "pavel9860/more-pages-embed"
 
@@ -383,6 +457,7 @@ DATASET, KERNEL = "pavel9860/more-pages-npz", "pavel9860/more-pages-embed"
 def render_job(args):
     """(path, [(doc, page)]) -> [(doc, page, jpeg)]: 384 px thumbnails like pagetype.thumbs (scan pictures decoded, others rendered)."""
     from pagetype import thumbs as T
+
     path, items = args
     out = []
     signal.signal(signal.SIGALRM, _alarm)
@@ -413,6 +488,7 @@ def run_jobs(jobs):
     """render_job over jobs on WORKERS processes; a crash of the pool (a file that kills MuPDF) splits the jobs until the file is found
     and skipped."""
     from concurrent.futures.process import BrokenProcessPool
+
     try:
         with ProcessPoolExecutor(WORKERS if len(jobs) > 1 else 1) as ex:
             return [x for r in ex.map(render_job, jobs, chunksize=8) for x in r]
@@ -426,6 +502,7 @@ def run_jobs(jobs):
 
 def cmd_shards(a):
     from pagetype.pack_npz import write_shard
+
     S = pd.read_parquet(WORK / "select.parquet").reset_index(drop=True)
     NPZ.mkdir(parents=True, exist_ok=True)
     n_sh = -(-len(S) // SHARD_PAGES)
@@ -435,12 +512,17 @@ def cmd_shards(a):
             f = NPZ / f"pages_{s:04d}.npz"
             if f.exists():
                 continue
-            part = S.iloc[s * SHARD_PAGES:(s + 1) * SHARD_PAGES]
-            jobs = [(str(LAYOUTS / g.path.iloc[0]), list(zip(g.doc, g.page))) for _, g in part.groupby("doc", sort=True)]
+            part = S.iloc[s * SHARD_PAGES : (s + 1) * SHARD_PAGES]
+            jobs = [
+                (str(LAYOUTS / g.path.iloc[0]), list(zip(g.doc, g.page))) for _, g in part.groupby("doc", sort=True)
+            ]
             got = run_jobs(jobs)
             got.sort(key=lambda x: (x[0], x[1]))
             write_shard(f, [(d, p) for d, p, _ in got], [j for *_, j in got])
-            print(f"{f.name}: {len(got)}/{len(part)} pages, {round(sum(len(j) for *_, j in got) / 1e9, 2)} GB, {int(time.time() - t0)} s", flush=True)
+            print(
+                f"{f.name}: {len(got)}/{len(part)} pages, {round(sum(len(j) for *_, j in got) / 1e9, 2)} GB, {int(time.time() - t0)} s",
+                flush=True,
+            )
     sizes = [f.stat().st_size for f in NPZ.glob("pages_*.npz")]
     print(len(sizes), "shards", round(sum(sizes) / 1e9, 1), "GB")
 
@@ -450,12 +532,13 @@ def cmd_shards(a):
 
 def parts(per_part):
     files = sorted(NPZ.glob("pages_*.npz"))
-    return [files[i:i + per_part] for i in range(0, len(files), per_part)]
+    return [files[i : i + per_part] for i in range(0, len(files), per_part)]
 
 
 def cmd_upload(a):
     """One dataset per part (a.per shards): <DATASET>-<k>. Existing ones with all their files are left alone."""
     import shutil
+
     k = api()
     for i, files in enumerate(parts(a.per)):
         ref = f"{DATASET}-{i}"
@@ -464,8 +547,11 @@ def cmd_upload(a):
         folder.mkdir()
         for f in files:
             (folder / f.name).hardlink_to(f)
-        (folder / "dataset-metadata.json").write_text(json.dumps({"title": f"more-pages-npz-{i}", "id": ref, "licenses": [{"name": "CC0-1.0"}],
-                                                                  "isPrivate": True}))
+        (folder / "dataset-metadata.json").write_text(
+            json.dumps(
+                {"title": f"more-pages-npz-{i}", "id": ref, "licenses": [{"name": "CC0-1.0"}], "isPrivate": True}
+            )
+        )
         try:
             have = {x.name for x in k.dataset_list_files(ref).files}
         except Exception:
@@ -479,7 +565,7 @@ def cmd_upload(a):
             k.dataset_create_version(str(folder), version_notes=time.strftime("%Y-%m-%d"), dir_mode="skip", quiet=False)
         except Exception:
             k.dataset_create_new(str(folder), dir_mode="skip", quiet=False)
-        for _ in range(90):                                        # the status endpoint answers 403 for a while after an upload
+        for _ in range(90):  # the status endpoint answers 403 for a while after an upload
             try:
                 if {f.name for f in files} <= {x.name for x in k.dataset_list_files(ref).files}:
                     break
@@ -495,15 +581,19 @@ def cmd_upload(a):
 def cmd_test(a):
     """10 pages of the first shard -> a test dataset, a kernel run on it, the output checked (shape, finite)."""
     import shutil
+
     z = np.load(NPZ / "pages_0000.npz")
     off = z["offsets"]
     d = WORK / "upload_test"
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir()
     from pagetype.pack_npz import write_shard
-    write_shard(d / "pages_0000.npz", z["ids"][:10], [z["jpeg"][off[i]:off[i + 1]].tobytes() for i in range(10)])
+
+    write_shard(d / "pages_0000.npz", z["ids"][:10], [z["jpeg"][off[i] : off[i + 1]].tobytes() for i in range(10)])
     ref = "pavel9860/more-pages-test"
-    (d / "dataset-metadata.json").write_text(json.dumps({"title": "more-pages-test", "id": ref, "licenses": [{"name": "CC0-1.0"}], "isPrivate": True}))
+    (d / "dataset-metadata.json").write_text(
+        json.dumps({"title": "more-pages-test", "id": ref, "licenses": [{"name": "CC0-1.0"}], "isPrivate": True})
+    )
     k = api()
     try:
         k.dataset_status(ref)
@@ -519,20 +609,39 @@ def cmd_test(a):
         time.sleep(20)
     run_kernel([ref], "pavel9860/more-pages-test-embed", WORK / "out_test")
     v, i = np.load(WORK / "out_test" / "embeddings.npy"), np.load(WORK / "out_test" / "ids.npy")
-    print("test output", v.shape, i.shape, np.isfinite(v.astype(np.float32)).all(), i[:3].tolist(), z["ids"][:3].tolist())
+    print(
+        "test output", v.shape, i.shape, np.isfinite(v.astype(np.float32)).all(), i[:3].tolist(), z["ids"][:3].tolist()
+    )
 
 
 def run_kernel(datasets, kernel, out):
     import shutil
+
     k, folder = api(), WORK / "kernel"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir()
-    shutil.copy("/run/media/p/D/BUISNESS/corpus_collecting/pagetype/embed_kaggle.py", folder / "embed_kaggle.py")
-    (folder / "kernel-metadata.json").write_text(json.dumps({
-        "id": kernel, "title": kernel.split("/")[1], "code_file": "embed_kaggle.py", "language": "python", "kernel_type": "script",
-        "is_private": True, "enable_gpu": True, "enable_tpu": False, "enable_internet": True, "keywords": ["gpu"],
-        "dataset_sources": datasets, "kernel_sources": [], "competition_sources": [], "model_sources": [],
-        "machine_shape": "NvidiaTeslaT4"}))
+    shutil.copy(f"{_P.CORPUS}/pagetype/embed_kaggle.py", folder / "embed_kaggle.py")
+    (folder / "kernel-metadata.json").write_text(
+        json.dumps(
+            {
+                "id": kernel,
+                "title": kernel.split("/")[1],
+                "code_file": "embed_kaggle.py",
+                "language": "python",
+                "kernel_type": "script",
+                "is_private": True,
+                "enable_gpu": True,
+                "enable_tpu": False,
+                "enable_internet": True,
+                "keywords": ["gpu"],
+                "dataset_sources": datasets,
+                "kernel_sources": [],
+                "competition_sources": [],
+                "model_sources": [],
+                "machine_shape": "NvidiaTeslaT4",
+            }
+        )
+    )
     k.kernels_push(str(folder))
     t0 = time.time()
     while True:
@@ -557,8 +666,10 @@ def cmd_local(a):
     WORK/out_local/{embeddings,ids}.npy (merged with WORK/out by `merge`)."""
     import cv2
     import torch
-    sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting/pagetype")
+
+    sys.path.insert(0, f"{_P.CORPUS}/pagetype")
     import embed_kaggle as EK
+
     S = pd.read_parquet(WORK / "select.parquet")
     have = np.concatenate([np.load(f)["ids"] for f in sorted(NPZ.glob("pages_*.npz"))]).astype(np.int64)
     miss = S[~np.isin(S.doc.astype(np.int64) * KEY + S.page, have[:, 0] * KEY + have[:, 1])]
@@ -567,13 +678,29 @@ def cmd_local(a):
     done = {(d, p) for d, p, _ in got}
     import subprocess
     import tempfile
+
     from pagetype import thumbs as T
-    for r in miss.itertuples():                                    # MuPDF crashes on these files: poppler renders them
+
+    for r in miss.itertuples():  # MuPDF crashes on these files: poppler renders them
         if (r.doc, r.page) in done:
             continue
         with tempfile.TemporaryDirectory() as td:
-            subprocess.run(["pdftoppm", "-f", str(r.page + 1), "-l", str(r.page + 1), "-scale-to", str(T.WORK), "-png",
-                            str(LAYOUTS / r.path), f"{td}/p"], capture_output=True, timeout=120)
+            subprocess.run(
+                [
+                    "pdftoppm",
+                    "-f",
+                    str(r.page + 1),
+                    "-l",
+                    str(r.page + 1),
+                    "-scale-to",
+                    str(T.WORK),
+                    "-png",
+                    str(LAYOUTS / r.path),
+                    f"{td}/p",
+                ],
+                capture_output=True,
+                timeout=120,
+            )
             im = next(Path(td).glob("p*.png"), None)
             rgb = cv2.imread(str(im)) if im is not None else None
             if rgb is not None:
@@ -583,7 +710,9 @@ def cmd_local(a):
     vec = []
     with torch.inference_mode():
         for i in range(0, len(got), 16):
-            x = np.stack([cv2.imdecode(np.frombuffer(j, np.uint8), cv2.IMREAD_COLOR)[:, :, ::-1] for *_, j in got[i:i + 16]])
+            x = np.stack(
+                [cv2.imdecode(np.frombuffer(j, np.uint8), cv2.IMREAD_COLOR)[:, :, ::-1] for *_, j in got[i : i + 16]]
+            )
             x = (torch.from_numpy(x.copy()).permute(0, 3, 1, 2).float() / 255 - 0.5) / 0.5
             o = model.get_image_features(pixel_values=x)
             vec.append(getattr(o, "pooler_output", o).numpy())
@@ -598,6 +727,7 @@ def cmd_merge(a):
     """WORK/out -> emb_out: rows of documents embedded again replace their old rows (also stale ones beyond the file's end); other
     new rows are added unless (doc, page) is there. Keys doc * KEY + page. The old files are kept once as *.before_more_pages."""
     import shutil
+
     outs = [d for d in (WORK / "out", WORK / "out_local") if (d / "ids.npy").exists()]
     vec = np.concatenate([np.load(d / "embeddings.npy") for d in outs])
     ids = np.concatenate([np.load(d / "ids.npy") for d in outs])
@@ -622,11 +752,22 @@ def cmd_merge(a):
         tmp = EMB / (name + ".tmp.npy")
         np.save(tmp, arr)
         tmp.replace(EMB / name)
-    print(f"selected {len(S)}, embedded {len(vec)} new rows ({(~ok).sum()} of the output dropped); old rows replaced {int(drop.sum())}; "
-          f"total {len(all_v)} pages of {len(np.unique(all_i[:, 0]))} documents")
+    print(
+        f"selected {len(S)}, embedded {len(vec)} new rows ({(~ok).sum()} of the output dropped); old rows replaced {int(drop.sum())}; "
+        f"total {len(all_v)} pages of {len(np.unique(all_i[:, 0]))} documents"
+    )
 
 
-COMMANDS = {"check": cmd_check, "plan": cmd_plan, "shards": cmd_shards, "upload": cmd_upload, "run": cmd_run, "test": cmd_test, "local": cmd_local, "merge": cmd_merge}
+COMMANDS = {
+    "check": cmd_check,
+    "plan": cmd_plan,
+    "shards": cmd_shards,
+    "upload": cmd_upload,
+    "run": cmd_run,
+    "test": cmd_test,
+    "local": cmd_local,
+    "merge": cmd_merge,
+}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()

@@ -1,5 +1,6 @@
 """Pictures on a page: YOLO11n trained on DocLayNet, run as ONNX on the CPU, and filled areas (artwork, full-page
 illustrations, dark blocks the detector does not know)."""
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -8,8 +9,7 @@ import numpy as np
 import onnxruntime as ort
 
 from ..config import PictureCfg
-
-STRIDE = 32
+from .config import STRIDE  # noqa: F401
 
 
 @lru_cache(maxsize=2)
@@ -33,7 +33,7 @@ def pictures(img, c: PictureCfg):
     H, W = (-(-v // STRIDE) * STRIDE for v in (nh, nw))
     x = np.full((H, W, 3), 114, np.uint8)
     y0, x0 = (H - nh) // 2, (W - nw) // 2
-    x[y0:y0 + nh, x0:x0 + nw] = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+    x[y0 : y0 + nh, x0 : x0 + nw] = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
     out = s.run(None, {s.get_inputs()[0].name: x.transpose(2, 0, 1)[None].astype(np.float32) / 255})[0][0]
     cls = out[4:]
     score = cls[c.picture_class]
@@ -53,7 +53,7 @@ def picture_mask(boxes, shape, s):
     """Picture boxes (x0, y0, x1, y1) in page px rasterized on a mask of shape at scale s."""
     m = np.zeros(shape, bool)
     for x0, y0, x1, y1 in np.asarray(boxes, float).reshape(-1, 4) * s:
-        m[int(y0):int(np.ceil(y1)), int(x0):int(np.ceil(x1))] = True
+        m[int(y0) : int(np.ceil(y1)), int(x0) : int(np.ceil(x1))] = True
     return m
 
 

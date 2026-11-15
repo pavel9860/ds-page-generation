@@ -1,5 +1,6 @@
 """Every number of the fill / pic detector. Frozen dataclasses with the values the shipped model was trained with; `Config.load(path)` overlays a JSON file
 (nested keys as in the dataclasses) and DSPAGES_FILLPIC_CONFIG points to one. A model is valid only for the geometry and map settings it was trained with."""
+
 import json
 import os
 from dataclasses import dataclass, field, fields, replace
@@ -116,8 +117,40 @@ class Kaggle:
 @dataclass(frozen=True)
 class Languages:
     cjk: tuple = ("ja", "zh", "ko")
-    rare: tuple = ("am", "bo", "dz", "km", "lo", "my", "si", "ti", "ka", "hy", "ne", "hi", "bn", "ta", "te", "ml", "kn", "gu", "pa", "or", "th", "he", "ar", "fa", "sa",
-                   "mn", "ug", "yi", "ps", "ks", "dv", "ckb")
+    rare: tuple = (
+        "am",
+        "bo",
+        "dz",
+        "km",
+        "lo",
+        "my",
+        "si",
+        "ti",
+        "ka",
+        "hy",
+        "ne",
+        "hi",
+        "bn",
+        "ta",
+        "te",
+        "ml",
+        "kn",
+        "gu",
+        "pa",
+        "or",
+        "th",
+        "he",
+        "ar",
+        "fa",
+        "sa",
+        "mn",
+        "ug",
+        "yi",
+        "ps",
+        "ks",
+        "dv",
+        "ckb",
+    )
 
 
 @dataclass(frozen=True)
@@ -139,7 +172,9 @@ class Config:
         parts = {}
         for f in fields(cls):
             cur = getattr(cls(), f.name)
-            parts[f.name] = replace(cur, **{k: (tuple(v) if isinstance(v, list) else v) for k, v in over.get(f.name, {}).items()})
+            parts[f.name] = replace(
+                cur, **{k: (tuple(v) if isinstance(v, list) else v) for k, v in over.get(f.name, {}).items()}
+            )
         return cls(**parts)
 
 

@@ -4,6 +4,7 @@
 python tools/uvdoc_compare.py RUN_DIR UVDOC_DIR [--n 100] [--workers 6]
 UVDoc's .mat files are MATLAB v7.3 (HDF5): h5py is needed.
 """
+
 import argparse
 import json
 from concurrent.futures import ProcessPoolExecutor
@@ -11,16 +12,17 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-
-from dspages import io
 from uv_check import TILE, WINDOW
 from viz import back_map
+
+from dspages import io
 
 
 def _scattered(src, dst, hw):
     """dst values at the src points interpolated onto the pixels of an hw grid (NaN outside their hull)."""
     from scipy.interpolate import griddata
-    gy, gx = np.mgrid[0:hw[0], 0:hw[1]]
+
+    gy, gx = np.mgrid[0 : hw[0], 0 : hw[1]]
     return griddata(src, dst, (gx, gy), method="linear").astype(np.float32)
 
 
@@ -38,8 +40,8 @@ def round_trip(warped, back, uv):
     s = []
     for y in range(0, w.shape[0] - TILE + 1, TILE):
         for x in range(0, w.shape[1] - TILE + 1, TILE):
-            if ok[y:y + TILE, x:x + TILE].all() and w[y:y + TILE, x:x + TILE].std() > 10:
-                (dx, dy), r = cv2.phaseCorrelate(w[y:y + TILE, x:x + TILE], fw[y:y + TILE, x:x + TILE], WINDOW)
+            if ok[y : y + TILE, x : x + TILE].all() and w[y : y + TILE, x : x + TILE].std() > 10:
+                (dx, dy), r = cv2.phaseCorrelate(w[y : y + TILE, x : x + TILE], fw[y : y + TILE, x : x + TILE], WINDOW)
                 if r > 0.1:
                     s.append(np.hypot(dx, dy))
     return rmse, float(np.sqrt(np.mean(np.square(s)))) if s else None
@@ -57,6 +59,7 @@ def ours(path):
 
 def uvdoc(args):
     import h5py
+
     root, sid = args
     m = json.loads((root / "metadata_sample" / f"{sid}.json").read_text())
     w = cv2.imread(str(root / "warped_textures" / f"{sid}.png"), cv2.IMREAD_GRAYSCALE)
@@ -76,8 +79,14 @@ def uvdoc(args):
 def summary(rows):
     r = np.array([x[0] for x in rows])
     s = np.array([x[1] for x in rows if x[1] is not None])
-    return dict(n=len(rows), rmse_median=float(np.median(r)), rmse_p90=float(np.percentile(r, 90)),
-                shift_px_median=float(np.median(s)), shift_px_p90=float(np.percentile(s, 90)), shift_px_max=float(s.max()))
+    return dict(
+        n=len(rows),
+        rmse_median=float(np.median(r)),
+        rmse_p90=float(np.percentile(r, 90)),
+        shift_px_median=float(np.median(s)),
+        shift_px_p90=float(np.percentile(s, 90)),
+        shift_px_max=float(s.max()),
+    )
 
 
 def main():
@@ -91,8 +100,10 @@ def main():
     ids = sorted(p.stem for p in (root / "warped_textures").glob("*.png"))
     ids = [ids[i] for i in np.random.default_rng(0).choice(len(ids), a.n, replace=False)]
     with ProcessPoolExecutor(a.workers) as pool:
-        res = dict(ours=summary(list(pool.map(ours, sorted((run / "samples").glob("*.npz"))[:a.n]))),
-                   uvdoc=summary(list(pool.map(uvdoc, [(root, i) for i in ids]))))
+        res = dict(
+            ours=summary(list(pool.map(ours, sorted((run / "samples").glob("*.npz"))[: a.n]))),
+            uvdoc=summary(list(pool.map(uvdoc, [(root, i) for i in ids]))),
+        )
     out = run.with_name(run.name + "_viz") / "uvdoc_compare.json"
     out.write_text(json.dumps(res, indent=1))
     print(json.dumps(res, indent=1))

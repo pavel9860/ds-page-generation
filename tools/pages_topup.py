@@ -15,18 +15,18 @@ largest one). Data: Layouts/archive/info/pages_topup (WORK).
 then: python tools/pages_1m.py build --work pages_topup --first-shard 400 --ds-base 18
 
 6 workers."""
+
 import argparse
 import json
 import sqlite3
 import time
 from concurrent.futures import ProcessPoolExecutor
 
-import numpy as np
-import pandas as pd
-
 import more_pages as M
+import numpy as np
 import pages_1m as P1
 import pages_extra as X
+import pandas as pd
 
 LAYOUTS = P1.LAYOUTS
 WORK = LAYOUTS / "archive" / "info" / "pages_topup"
@@ -42,22 +42,32 @@ def lost_pages():
 
 def emb_dir():
     from dspages.hand.config import PATHS
+
     return P1.F.Path(PATHS.uvtm) / "Labels" / "embedding" / "emb_out"
 
 
 def cmd_prior(_):
     import re
+
     info = LAYOUTS / "archive" / "info"
     hexn = re.compile(r"^([0-9a-f]{12})(?![0-9a-f])")
-    npages = dict(pd.read_parquet(info / "layouts_revise" / "scan.parquet", columns=["path", "pages"]).itertuples(False, None))
+    npages = dict(
+        pd.read_parquet(info / "layouts_revise" / "scan.parquet", columns=["path", "pages"]).itertuples(False, None)
+    )
     dup = set(pd.read_parquet(info / "layouts_revise" / "dups.parquet").src)
     with sqlite3.connect(f"file:{LAYOUTS / 'manifest.sqlite'}?mode=ro", uri=True) as db:
         plan = dict(db.execute("select doc, new_path from plan"))
     man = {r["id"]: r["path"] for r in map(json.loads, open(emb_dir() / "manifest.jsonl"))}
     ids = np.load(emb_dir() / "ids.npy")
     emb = set(zip([man[d] for d in ids[:, 0]], ids[:, 1].tolist()))
-    A = pd.concat([pd.read_parquet(info / f / "select.parquet", columns=["path", "page"]).assign(src=f) for f in SELECTIONS]
-                  + [pd.read_parquet(info / "pages_extra" / "select_topup.parquet", columns=["path", "page"]).assign(src="pages_extra")])
+    A = pd.concat(
+        [pd.read_parquet(info / f / "select.parquet", columns=["path", "page"]).assign(src=f) for f in SELECTIONS]
+        + [
+            pd.read_parquet(info / "pages_extra" / "select_topup.parquet", columns=["path", "page"]).assign(
+                src="pages_extra"
+            )
+        ]
+    )
 
     def now(p):
         if p in npages:
@@ -74,7 +84,13 @@ def cmd_prior(_):
     A = A[[k not in emb for k in zip(A.path, A.page)]].drop_duplicates(["path", "page"])
     WORK.mkdir(parents=True, exist_ok=True)
     A.reset_index(drop=True).to_parquet(WORK / "prior.parquet")
-    print(len(A), "pages of", A.path.nunique(), "files selected before, not embedded, still there:", A.src.value_counts().to_dict())
+    print(
+        len(A),
+        "pages of",
+        A.path.nunique(),
+        "files selected before, not embedded, still there:",
+        A.src.value_counts().to_dict(),
+    )
 
 
 def docs(all_docs=False):
@@ -147,10 +163,12 @@ def cmd_features(a):
             f = fd / f"{c // CHUNK:04d}.npz"
             if f.exists():
                 continue
-            res = list(ex.map(X.lite_job, jobs[c:c + CHUNK], chunksize=4))
+            res = list(ex.map(X.lite_job, jobs[c : c + CHUNK], chunksize=4))
             key = [d * KEY + p for d, o, _ in res for p in o]
             V = np.stack([v for _, o, _ in res for v in o.values()]) if key else np.zeros((0, X.LDIM), np.float32)
-            np.savez(f"{f}.tmp.npz", key=np.array(key, np.int64), V=V, err=json.dumps({int(d): e for d, _, e in res if e}))
+            np.savez(
+                f"{f}.tmp.npz", key=np.array(key, np.int64), V=V, err=json.dumps({int(d): e for d, _, e in res if e})
+            )
             f.with_name(f.name + ".tmp.npz").rename(f)
             if c // CHUNK % 10 == 0:
                 print(f"features {c + len(res)}/{len(jobs)} docs, {int(time.time() - t0)} s", flush=True)
@@ -158,13 +176,17 @@ def cmd_features(a):
 
 def cmd_select(a):
     from sklearn.cluster import MiniBatchKMeans
+
     D, used = docs()
     keys, Vs = [], []
     for f in sorted((WORK / "lite_feats").glob("*.npz")):
         z = np.load(f)
         keys.append(z["key"]), Vs.append(z["V"])
     key, V = np.concatenate(keys), np.nan_to_num(np.concatenate(Vs), nan=0.0, posinf=0.0, neginf=0.0)
-    for lo, hi, flag in ((0, X.LITE, X.LDIM - 2), (X.LITE, X.LITE + M.NP, X.LDIM - 1)):     # z-score of each block over the pages that have it
+    for lo, hi, flag in (
+        (0, X.LITE, X.LDIM - 2),
+        (X.LITE, X.LITE + M.NP, X.LDIM - 1),
+    ):  # z-score of each block over the pages that have it
         m = V[:, flag] > 0
         mu, sd = V[m, lo:hi].mean(0), V[m, lo:hi].std(0) + 1e-6
         V[:, lo:hi] = np.where(m[:, None], np.clip((V[:, lo:hi] - mu) / sd, -5, 5), 0)
@@ -176,9 +198,14 @@ def cmd_select(a):
         have = [p for p in range(int(r.actual)) if p not in u and r.doc * KEY + p in at]
         if have:
             seeds = [V[at[r.doc * KEY + p]] for p in u if r.doc * KEY + p in at]
-            rows += [(r.doc, have[i], k) for k, i in enumerate(M.farthest_first(V[[at[r.doc * KEY + p] for p in have]], seeds, int(r.extra)))]
+            rows += [
+                (r.doc, have[i], k)
+                for k, i in enumerate(M.farthest_first(V[[at[r.doc * KEY + p] for p in have]], seeds, int(r.extra)))
+            ]
     n_emb = len(np.load(emb_dir() / "ids.npy"))
-    prior = pd.read_parquet(WORK / "prior.parquet").merge(docs(all_docs=True)[0][["doc", "path", "lang", "new_doc"]], on="path")
+    prior = pd.read_parquet(WORK / "prior.parquet").merge(
+        docs(all_docs=True)[0][["doc", "path", "lang", "new_doc"]], on="path"
+    )
     n = a.total - n_emb - len(prior)
     print(f"embedded {n_emb} + prior {len(prior)} -> {n} new pages to the total {a.total}", flush=True)
     S = pd.DataFrame(rows, columns=["doc", "page", "rank"]).merge(D[["doc", "path", "lang", "new_doc"]], on="doc")
@@ -187,26 +214,49 @@ def cmd_select(a):
     print(len(S), "candidate pages of", S.doc.nunique(), "documents", flush=True)
     lc = S.lang.value_counts()
     q = dict(zip(lc.index, P1.water(lc.values, n)))
-    print("language cap:", max(q.values()), "| languages kept whole:", sum(q[l] == lc[l] for l in lc.index), "of", len(lc), flush=True)
+    print(
+        "language cap:",
+        max(q.values()),
+        "| languages kept whole:",
+        sum(q[l] == lc[l] for l in lc.index),
+        "of",
+        len(lc),
+        flush=True,
+    )
     keep = []
     for l, g in S.groupby("lang"):
         if q[l] >= len(g):
             keep.append(g.index.values)
             continue
         Xl = V[g.i.values]
-        lab = MiniBatchKMeans(int(np.clip(len(g) // 250, 20, 400)), random_state=0, batch_size=4096, n_init=1, max_iter=50).fit_predict(Xl)
+        lab = MiniBatchKMeans(
+            int(np.clip(len(g) // 250, 20, 400)), random_state=0, batch_size=4096, n_init=1, max_iter=50
+        ).fit_predict(Xl)
         cl = pd.Series(lab).value_counts()
         for c, qq in zip(cl.index, P1.water(cl.values, q[l])):
             if qq:
                 idx = np.where(lab == c)[0]
                 keep.append(g.index.values[idx if qq >= len(idx) else idx[X.thin_l2(Xl[idx], qq)]])
-    K = pd.concat([prior.assign(lang=prior.lang.fillna("unknown")), S.loc[np.concatenate(keep)].drop(columns=["i", "rank"]).assign(src="new")])
+    K = pd.concat(
+        [
+            prior.assign(lang=prior.lang.fillna("unknown")),
+            S.loc[np.concatenate(keep)].drop(columns=["i", "rank"]).assign(src="new"),
+        ]
+    )
     docs_ = K.doc.unique()
     o = dict(zip(docs_[np.random.default_rng(0).permutation(len(docs_))], range(len(docs_))))
     K = K.assign(o=K.doc.map(o)).sort_values(["o", "page"]).drop(columns="o").reset_index(drop=True)
     assert not K.duplicated(["path", "page"]).any()
     K.to_parquet(WORK / "select.parquet")
-    print(len(K), "pages of", K.doc.nunique(), "documents (new documents", int(K.drop_duplicates("doc").new_doc.sum()), ")", K.src.value_counts().to_dict())
+    print(
+        len(K),
+        "pages of",
+        K.doc.nunique(),
+        "documents (new documents",
+        int(K.drop_duplicates("doc").new_doc.sum()),
+        ")",
+        K.src.value_counts().to_dict(),
+    )
     print(K.lang.value_counts().head(10).to_dict(), "->", WORK / "select.parquet")
 
 

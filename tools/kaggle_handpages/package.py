@@ -4,6 +4,7 @@ CPU kernel folder per shard of the plan; fonts are fetched by the kernel from th
 python tools/kaggle_handpages/package.py --plan plan.jsonl --out DIR [--shards 4] [--name handpages] [--user USER]
 kaggle datasets create -p DIR/dataset ; kaggle kernels push -p DIR/kernel<k>
 """
+
 import argparse
 import json
 import shutil
@@ -27,17 +28,34 @@ def build(plan, out, shards=4, name="handpages", user="pavel9860"):
     with tarfile.open(out / "dataset" / "handpages_src.tar.gz", "w:gz") as t:
         t.add(src, arcname="handpages_src")
     shutil.rmtree(src)
-    (out / "dataset" / "dataset-metadata.json").write_text(json.dumps(
-        {"title": f"{name}-code", "id": f"{user}/{name}-code", "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+    (out / "dataset" / "dataset-metadata.json").write_text(
+        json.dumps({"title": f"{name}-code", "id": f"{user}/{name}-code", "licenses": [{"name": "CC-BY-NC-SA-4.0"}]})
+    )
     template = (Path(__file__).parent / "kernel.py").read_text()
     for k in range(shards):
         d = out / f"kernel{k}"
         d.mkdir()
         (d / "kernel.py").write_text(f"SHARD, SHARDS = {k}, {shards}\n" + template)
-        (d / "kernel-metadata.json").write_text(json.dumps({
-            "id": f"{user}/{name}-gen-{k}", "title": f"{name}-gen-{k}", "code_file": "kernel.py", "language": "python", "kernel_type": "script",
-            "is_private": True, "enable_gpu": False, "enable_tpu": False, "enable_internet": True, "dataset_sources": [f"{user}/{name}-code"],
-            "kernel_sources": [], "competition_sources": [], "model_sources": []}, indent=1))
+        (d / "kernel-metadata.json").write_text(
+            json.dumps(
+                {
+                    "id": f"{user}/{name}-gen-{k}",
+                    "title": f"{name}-gen-{k}",
+                    "code_file": "kernel.py",
+                    "language": "python",
+                    "kernel_type": "script",
+                    "is_private": True,
+                    "enable_gpu": False,
+                    "enable_tpu": False,
+                    "enable_internet": True,
+                    "dataset_sources": [f"{user}/{name}-code"],
+                    "kernel_sources": [],
+                    "competition_sources": [],
+                    "model_sources": [],
+                },
+                indent=1,
+            )
+        )
     return out
 
 

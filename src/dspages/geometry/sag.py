@@ -1,8 +1,18 @@
 import numpy as np
 import pypardiso
 from scipy.interpolate import LinearNDInterpolator, RegularGridInterpolator
-from skfem import (Basis, BilinearForm, ElementTriMorley, ElementTriP1, ElementTriP2, ElementVector,
-                   LinearForm, MeshQuad, bmat, condense)
+from skfem import (
+    Basis,
+    BilinearForm,
+    ElementTriMorley,
+    ElementTriP1,
+    ElementTriP2,
+    ElementVector,
+    LinearForm,
+    MeshQuad,
+    bmat,
+    condense,
+)
 from skfem.helpers import dd, ddot, grad, sym_grad, trace
 
 
@@ -11,7 +21,9 @@ def _outer_sym(a, b):
 
 
 def _mesh(u, v, nodes):
-    return MeshQuad.init_tensor(np.linspace(u[0], u[-1], nodes[0]), np.linspace(v[0], v[-1], nodes[1])).to_meshtri(style="x")
+    return MeshQuad.init_tensor(np.linspace(u[0], u[-1], nodes[0]), np.linspace(v[0], v[-1], nodes[1])).to_meshtri(
+        style="x"
+    )
 
 
 def sag_field(u, v, nodes, w, U, V):
@@ -24,13 +36,13 @@ def solve_sag(u, v, z0, span, paper, nodes):
     paper = config.paper_props. The solved profile is held (w = 0, zero slope) over the support strip v in span and
     where it lies on the table."""
     m = _mesh(u, v, nodes)
-    ba = Basis(m, ElementVector(ElementTriP2()), intorder=2)     # the integrands are at most quadratic: exact
+    ba = Basis(m, ElementVector(ElementTriP2()), intorder=2)  # the integrands are at most quadratic: exact
     bw = Basis(m, ElementTriMorley(), quadrature=ba.quadrature)
     bz = Basis(m, ElementTriP1(), quadrature=ba.quadrature)
     x, y = m.p
     z_nodes = RegularGridInterpolator((v, u), z0)(np.column_stack([y, x]))
     d, nu = paper["bending"], paper["poisson"]
-    c = paper["membrane"] / (1.0 - nu ** 2)
+    c = paper["membrane"] / (1.0 - nu**2)
 
     def membrane(e1, e2):
         return c * ((1.0 - nu) * ddot(e1, e2) + nu * trace(e1) * trace(e2))
@@ -69,4 +81,4 @@ def solve_sag(u, v, z0, span, paper, nodes):
     Ks = K.multiply(s[:, None]).multiply(s[None, :]).tocsr()
     Kc, fc, x, free = condense(Ks, f * s, D=np.unique(np.concatenate(fixed)))
     x[free] = pypardiso.spsolve(Kc.tocsr(), fc)
-    return (s * x)[:bw.N][bw.nodal_dofs[0]]
+    return (s * x)[: bw.N][bw.nodal_dofs[0]]

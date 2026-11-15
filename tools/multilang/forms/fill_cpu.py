@@ -1,5 +1,6 @@
 """Fills prepared forms (dspages.multilang.formfill) and renders them
 python scripts/forms/fill_cpu.py SET_DIR OUT_DIR [N] [--random SEED] [--no-render]"""
+
 import argparse
 import json
 import random
@@ -7,6 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import cv2
+
 from dspages.multilang import filledforms
 from dspages.multilang import formfill as FF
 
@@ -29,11 +31,18 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     meta = json.loads((src / "meta.json").read_text())
     items = [it for f in sorted(src.glob("in_*.json")) for it in json.loads(f.read_text())]
-    items = random.Random(a.random).sample(items, min(a.n, len(items))) if a.random is not None else items[:a.n]
+    items = random.Random(a.random).sample(items, min(a.n, len(items))) if a.random is not None else items[: a.n]
     answers, prov = FF.fill_forms(items, meta, out / "used_lines.json")
     (out / "answers.json").write_text(json.dumps(answers, ensure_ascii=False))
     (out / "provenance.json").write_text(json.dumps(prov, ensure_ascii=False))
-    print(len(items), "forms,", sum(len(it["boxes"]) for it in items), "fields;", FF.repeats(answers), FF.closeness(items, answers, prov))
+    print(
+        len(items),
+        "forms,",
+        sum(len(it["boxes"]) for it in items),
+        "fields;",
+        FF.repeats(answers),
+        FF.closeness(items, answers, prov),
+    )
     if not a.no_render:
         jobs = [(f, meta[f], ans, str(out / f"{meta[f]['lang']}_{f}.jpg")) for f, ans in answers.items()]
         with ProcessPoolExecutor(a.workers) as ex:

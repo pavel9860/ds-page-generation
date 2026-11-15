@@ -4,6 +4,7 @@ python tools/triplets.py OUT_DIR [--manifest M] [--n 200] [--seed 0] [--workers 
 Pages are random "refont" entries of the manifest; the margin of a restyle is drawn from the preset's range like the
 generation does. Writes OUT_DIR/<i>_<category>_<file>_p<page>.png (full size).
 """
+
 import argparse
 import os
 from concurrent.futures import ProcessPoolExecutor
@@ -15,8 +16,8 @@ from PIL import Image
 
 from dspages.config import get_preset
 from dspages.layout import refont
-from dspages.layout.template import sheet
 from dspages.layout.sources import load_manifest
+from dspages.layout.template import sheet
 
 _W = {}
 
@@ -36,9 +37,19 @@ def _triplet(args):
     panels = [Image.frombytes("L", (pm.w, pm.h), pm.samples)]
     rng = np.random.default_rng([seed, i])
     for _ in range(2):
-        gray, _ = sheet(e["source_path"], e["page_index"], int(rng.integers(1 << 31)), _W["fonts"], rng.uniform(*c.margin_frac), (pw, ph), turn=_W["turn"])
+        gray, _ = sheet(
+            e["source_path"],
+            e["page_index"],
+            int(rng.integers(1 << 31)),
+            _W["fonts"],
+            rng.uniform(*c.margin_frac),
+            (pw, ph),
+            turn=_W["turn"],
+        )
         panels.append(Image.fromarray(gray).rotate(90, expand=True) if _W["turn"] else Image.fromarray(gray))
-    out_img = Image.new("L", (sum(p.width for p in panels) + 20 * (len(panels) - 1), max(p.height for p in panels)), 128)
+    out_img = Image.new(
+        "L", (sum(p.width for p in panels) + 20 * (len(panels) - 1), max(p.height for p in panels)), 128
+    )
     x = 0
     for p in panels:
         out_img.paste(p, (x, 0))
@@ -56,15 +67,23 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--preset", default="full")
-    ap.add_argument("--turn", action="store_true", help="turn the restyled pages a quarter (text set again, graphics stretched)")
-    ap.add_argument("--only", default=None, help="comma-separated triplet numbers to make (the others are left as they are)")
+    ap.add_argument(
+        "--turn", action="store_true", help="turn the restyled pages a quarter (text set again, graphics stretched)"
+    )
+    ap.add_argument(
+        "--only", default=None, help="comma-separated triplet numbers to make (the others are left as they are)"
+    )
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     pages = [e for e in load_manifest(a.manifest or get_preset(a.preset).paths.manifest) if e["kind"] == "refont"]
     only = None if a.only is None else {int(i) for i in a.only.split(",")}
-    pick = np.random.default_rng(a.seed).permutation(len(pages))[:a.n]
+    pick = np.random.default_rng(a.seed).permutation(len(pages))[: a.n]
     with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, a.turn)) as pool:
-        for name in pool.map(_triplet, [(i, pages[j], a.out, a.seed) for i, j in enumerate(pick) if only is None or i in only], chunksize=1):
+        for name in pool.map(
+            _triplet,
+            [(i, pages[j], a.out, a.seed) for i, j in enumerate(pick) if only is None or i in only],
+            chunksize=1,
+        ):
             print(name, flush=True)
 
 

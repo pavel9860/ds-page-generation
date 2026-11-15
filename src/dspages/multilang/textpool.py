@@ -1,4 +1,5 @@
 """Text pool: lines per language from the layout PDFs and written-by-hand style texts (translate/<code>.json)"""
+
 import json
 import pickle
 import random
@@ -26,7 +27,11 @@ def page_lines(page, min_font):
 def clean(t, cfg: Config):
     """A line of words: mostly letters, none of the characters that legacy-encoded or OCR text fills with."""
     body = [c for c in t if not c.isspace()]
-    return bool(body) and sum(c.isalpha() for c in body) / len(body) >= cfg.text_min_alpha and not set(t) & set(cfg.text_bad)
+    return (
+        bool(body)
+        and sum(c.isalpha() for c in body) / len(body) >= cfg.text_min_alpha
+        and not set(t) & set(cfg.text_bad)
+    )
 
 
 def lang_lines(args):
@@ -35,9 +40,9 @@ def lang_lines(args):
     random.Random(lang).shuffle(files)
     lo, hi = cfg.text_line_len
     lines = []
-    for p in files[:cfg.text_files_per_lang]:
+    for p in files[: cfg.text_files_per_lang]:
         with pymupdf.open(p) as doc:
-            for pg in list(doc)[:cfg.text_pages_per_file]:
+            for pg in list(doc)[: cfg.text_pages_per_file]:
                 lines += [t for t in page_lines(pg, cfg.text_min_font) if lo <= len(t) <= hi]
     return lang, lines
 
@@ -45,6 +50,7 @@ def lang_lines(args):
 def build(cfg: Config):
     from hwsynth.cli import coverage
     from hwsynth.scripts import text_script
+
     hand = {s for s, kind in coverage().items() if kind == "hand"}
     by = {}
     for d in cfg.bg_folders:
@@ -61,7 +67,7 @@ def build(cfg: Config):
             if script not in hand:
                 skip.append(lang)
             elif len(same) >= cfg.text_min_lines:
-                pool[lang] = same[:cfg.text_max_lines]
+                pool[lang] = same[: cfg.text_max_lines]
     for code in cfg.no_font_langs:
         pool.pop(code, None)
     for f in sorted((cfg.data / "translate").glob("*.json")):

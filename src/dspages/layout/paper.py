@@ -4,16 +4,14 @@ The page is carried as ink coverage a (0 paper .. 1 ink) until it is composited 
     lum = paper * texture * (1 - a (1 - ink / paper))
 Each effect runs with its config probability and draws its parameters uniformly from the config ranges.
 """
+
 import cv2
 import numpy as np
 
 from ..config import LayoutCfg, ShallowCreaseCfg
 from ..creases import shallow
 from ..noise import fbm, fbm_rotated, fleck_mask, smooth_noise, warp
-
-YELLOW_LUMA = 0.24              # Rec. 709 luma of a yellow cast (0, 0.25, 0.8) per unit strength
-STAIN_LUMA = 0.57               # of a brown stain (0.3, 0.6, 1.0)
-BLUR_LEVELS = (0.0, 0.7, 1.4, 2.4, 3.6, 5.0)    # px, the pre-blurred levels of a variable blur
+from .config import BLUR_LEVELS, CLOUD_STEP, STAIN_LUMA, YELLOW_LUMA  # noqa: F401
 
 
 def _u(rng, r):
@@ -30,7 +28,7 @@ def _blur(m, box, sigma):
     """GaussianBlur of m (zero outside box) computed around box only: the same values. -> blurred m, its box."""
     out = np.zeros_like(m)
     big = _grow(box, int(np.ceil(4 * sigma)) + 2, m.shape)
-    sl = np.s_[big[0]:big[1], big[2]:big[3]]
+    sl = np.s_[big[0] : big[1], big[2] : big[3]]
     out[sl] = cv2.GaussianBlur(m[sl], (0, 0), sigma)
     return out, big
 
@@ -45,7 +43,11 @@ def _blob_mask(rng, shape, center, radius, harmonics=3):
     m = np.zeros(shape, np.float32)
     p = np.round(pts).astype(np.int32)
     cv2.fillPoly(m, [p], 1.0)
-    return _blur(m, _grow((p[:, 1].min(), p[:, 1].max() + 1, p[:, 0].min(), p[:, 0].max() + 1), 1, shape), max(1.0, 0.15 * radius))
+    return _blur(
+        m,
+        _grow((p[:, 1].min(), p[:, 1].max() + 1, p[:, 0].min(), p[:, 0].max() + 1), 1, shape),
+        max(1.0, 0.15 * radius),
+    )
 
 
 def variable_blur(img, sigma_map, levels=BLUR_LEVELS):
@@ -63,17 +65,24 @@ def variable_blur(img, sigma_map, levels=BLUR_LEVELS):
 
 def old_crease_map(rng, w_mm, h_mm, px, sc: ShallowCreaseCfg):
     """Height map [mm] of old creases at raster size px (w, h), from the shallow crease generator."""
-    lines = shallow.sample(rng, w_mm, h_mm, sc.mean_groups, sc.p_isolated, sc.mean_extra, sc.radius_mm,
-                           sc.spread_deg, sc.singles_per_group, sc.k)
+    lines = shallow.sample(
+        rng,
+        w_mm,
+        h_mm,
+        sc.mean_groups,
+        sc.p_isolated,
+        sc.mean_extra,
+        sc.radius_mm,
+        sc.spread_deg,
+        sc.singles_per_group,
+        sc.k,
+    )
     h = shallow.render(lines, w_mm, h_mm, sc.pitch_mm, sc.w_max_mm)
     return cv2.resize(h, px, interpolation=cv2.INTER_LINEAR), lines
 
 
 def _logu(rng, r):
     return float(np.exp(rng.uniform(*np.log(r))))
-
-
-CLOUD_STEP = 4                              # clouds (>= 2 mm) are evaluated on every 4th pixel
 
 
 def paper_texture(rng, h, w, px_per_mm, p, k, kp=1.0):
@@ -83,24 +92,33 @@ def paper_texture(rng, h, w, px_per_mm, p, k, kp=1.0):
     amplitude drawn per page, the feature sizes times k."""
     sd = int(rng.integers(1 << 30))
     th, stretch = rng.uniform(0, np.pi), _logu(rng, p["fiber_stretch"])
-    t = _u(rng, p["fiber_amp"]) * fbm_rotated(sd, h, w, 1.0 / px_per_mm, th, stretch, k * _u(rng, p["fiber_mm"]), int(rng.integers(2, 4)))
+    t = _u(rng, p["fiber_amp"]) * fbm_rotated(
+        sd, h, w, 1.0 / px_per_mm, th, stretch, k * _u(rng, p["fiber_mm"]), int(rng.integers(2, 4))
+    )
     q = CLOUD_STEP
-    cy, cx = (v.astype(np.float32) for v in np.meshgrid(np.arange(0, h, q) / px_per_mm, np.arange(0, w, q) / px_per_mm, indexing="ij"))
+    cy, cx = (
+        v.astype(np.float32)
+        for v in np.meshgrid(np.arange(0, h, q) / px_per_mm, np.arange(0, w, q) / px_per_mm, indexing="ij")
+    )
     if rng.random() < 0.4:
         cx, cy = warp(sd + 7, cx, cy, k * _logu(rng, p["cloud_mm"]), rng.uniform(1, 10))
     cloud = fbm(sd + 20, cx, cy, k * _logu(rng, p["cloud_mm"]), int(rng.integers(2, 7)), rng.uniform(0.35, 0.7))
     t += _u(rng, p["cloud_amp"]) * cv2.resize(cloud, (w, h), interpolation=cv2.INTER_CUBIC)
     if rng.random() < p["fleck_prob"]:
-        t -= _u(rng, p["fleck_amp"]) * fleck_mask(sd + 40, h, w, k * _logu(rng, (0.5, 4.0)) * px_per_mm, rng.uniform(0.04, 0.12), rng.uniform(0.1, 0.5))
+        t -= _u(rng, p["fleck_amp"]) * fleck_mask(
+            sd + 40, h, w, k * _logu(rng, (0.5, 4.0)) * px_per_mm, rng.uniform(0.04, 0.12), rng.uniform(0.1, 0.5)
+        )
     grain = rng.standard_normal((max(round(h / kp), 2), max(round(w / kp), 2)), dtype=np.float32)
-    return t + _u(rng, p["grain_amp"]) * (grain if grain.shape == (h, w) else cv2.resize(grain, (w, h), interpolation=cv2.INTER_LINEAR))
+    return t + _u(rng, p["grain_amp"]) * (
+        grain if grain.shape == (h, w) else cv2.resize(grain, (w, h), interpolation=cv2.INTER_LINEAR)
+    )
 
 
 def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
     """uint8 gray page (0 ink .. 255 paper) -> uint8 luminance page and the names of the effects applied. Sizes in px are
     of the sheet at page_px: at px_per_mm they scale with it (the same page at any resolution)."""
     kp = px_per_mm * c.sheet_mm[0] / c.page_px[0]
-    ns = rng.uniform(*c.noise_scale)                 # factor of this page's noise feature sizes
+    ns = rng.uniform(*c.noise_scale)  # factor of this page's noise feature sizes
     fx = {k: e for k, e in c.effects.items() if rng.random() < e.prob}
     h, w = gray.shape
     a = 1.0 - gray.astype(np.float32) / 255.0
@@ -110,11 +128,12 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
         a = np.clip(cv2.GaussianBlur(a, (0, 0), kp * _u(rng, p["sigma_px"])) * (1 + _u(rng, p["gain"])), 0, 1)
     if "ink_fade" in fx:
         p = fx["ink_fade"].params
-        a *= 1 - _u(rng, p["strength"]) * np.clip(0.5 + 0.5 *
-                                                  smooth_noise(rng, (h, w), ns * _u(rng, p["scale_mm"]) * px_per_mm), 0, 1)
+        a *= 1 - _u(rng, p["strength"]) * np.clip(
+            0.5 + 0.5 * smooth_noise(rng, (h, w), ns * _u(rng, p["scale_mm"]) * px_per_mm), 0, 1
+        )
     if "toner_speckle" in fx:
         p = fx["toner_speckle"].params
-        n = rng.poisson(_u(rng, p["density"]) * h * w / kp ** 2)
+        n = rng.poisson(_u(rng, p["density"]) * h * w / kp**2)
         ys, xs = rng.uniform(0, h, n), rng.uniform(0, w, n)
         for y, x, r in zip(ys, xs, rng.integers(p["size_px"][0], p["size_px"][1] + 1, n)):
             cv2.circle(a, (int(x), int(y)), round(kp * r) // 2, float(rng.uniform(0.3, 1.0)), -1)
@@ -122,8 +141,9 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
         p = fx["banding"].params
         period = _u(rng, p["period_mm"]) * px_per_mm
         yy = np.arange(h, dtype=np.float32)[:, None] if rng.random() < 0.5 else np.arange(w, dtype=np.float32)[None, :]
-        a = np.clip(a * (1 - _u(rng, p["amp"]) * (0.5 + 0.5 *
-                    np.sin(2 * np.pi * yy / period + rng.uniform(0, 6.3)))), 0, 1)
+        a = np.clip(
+            a * (1 - _u(rng, p["amp"]) * (0.5 + 0.5 * np.sin(2 * np.pi * yy / period + rng.uniform(0, 6.3)))), 0, 1
+        )
 
     creases = None
     if "old_creases" in fx:
@@ -159,7 +179,7 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
             if rng.random() < 0.5:
                 b, box = _blur(m, box, 0.15 * r)
                 m = np.clip(m - b * 0.8, 0, 1)
-            sl = np.s_[box[0]:box[1], box[2]:box[3]]
+            sl = np.s_[box[0] : box[1], box[2] : box[3]]
             lum[sl] = lum[sl] * (1 - STAIN_LUMA * _u(rng, p["strength"]) * m[sl])
     if creases is not None:
         shade, ridge, p = creases
@@ -174,6 +194,10 @@ def apply(rng, gray, px_per_mm, c: LayoutCfg, sc: ShallowCreaseCfg):
             boxes.append(box)
         y0, y1, x0, x1 = (f(b[k] for b in boxes) for k, f in enumerate((min, max, min, max)))
         big = _grow((y0, y1, x0, x1), int(np.ceil(4 * kp * BLUR_LEVELS[-1])) + 2, (h, w))
-        part = variable_blur(lum[big[0]:big[1], big[2]:big[3]], smap[big[0]:big[1], big[2]:big[3]], tuple(kp * b for b in BLUR_LEVELS))
-        lum[y0:y1, x0:x1] = part[y0 - big[0]:y1 - big[0], x0 - big[2]:x1 - big[2]]
+        part = variable_blur(
+            lum[big[0] : big[1], big[2] : big[3]],
+            smap[big[0] : big[1], big[2] : big[3]],
+            tuple(kp * b for b in BLUR_LEVELS),
+        )
+        lum[y0:y1, x0:x1] = part[y0 - big[0] : y1 - big[0], x0 - big[2] : x1 - big[2]]
     return np.clip(lum * 255 + 0.5, 0, 255).astype(np.uint8), sorted(fx)

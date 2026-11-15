@@ -1,4 +1,5 @@
 """Shards pages_*.npz: ids int32 (n, 2) [doc, page], offsets int64 (n + 1), jpeg uint8 (page i = jpeg[offsets[i]:offsets[i + 1]]); and the result files per shard."""
+
 from pathlib import Path
 
 import cv2
@@ -11,7 +12,7 @@ def read(path):
 
 
 def decode(jpeg, offsets, i):
-    return cv2.imdecode(jpeg[offsets[i]:offsets[i + 1]], cv2.IMREAD_GRAYSCALE)
+    return cv2.imdecode(jpeg[offsets[i] : offsets[i + 1]], cv2.IMREAD_GRAYSCALE)
 
 
 def result_name(shard):
@@ -23,8 +24,3 @@ def write_result(path, ids, fill, pic, win):
     path = Path(path)
     np.savez(f"{path}.tmp.npz", ids=ids, fill=fill, pic=pic, win=win)
     Path(f"{path}.tmp.npz").rename(path)
-
-
-def read_result(path):
-    z = np.load(path)
-    return z["ids"], z["fill"], z["pic"], z["win"]

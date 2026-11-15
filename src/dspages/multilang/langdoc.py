@@ -1,4 +1,5 @@
 """The same documents in every language, as clean 1024 px pages, for grouping languages by how their pages look."""
+
 import io
 import json
 import os
@@ -13,16 +14,17 @@ import regex
 from PIL import Image
 
 from . import translate as T
+from .config import KINDS  # noqa: F401
 from .config import LANGDS as C
 
 TRAIN_DOCS, VAL_DOCS = {0, 1, 3, 5}, {2, 4, 6}
 RTL = T.RTL
-KINDS = {0: "plain", 1: "formatted", 2: "formatted", 3: "table", 4: "table", 5: "form", 6: "form"}
 
 
 def writer_of(rng):
     """A natural writer without the random crossed-out typos (they read as fake corrections)."""
     from .bank import new_writer
+
     w = new_writer(rng)
     w.p["cross"] = 0.0
     return w
@@ -31,8 +33,10 @@ def writer_of(rng):
 def table_html(blocks, texts):
     """A table from the cell blocks"""
     head = "".join(f"<h2>{_e(t)}</h2>" for b, t in zip(blocks, texts, strict=True) if b["role"] == "h")
-    items = sorted(((b, t) for b, t in zip(blocks, texts, strict=True) if b["role"] != "h"),
-                   key=lambda x: (x[0]["bbox"][1] + x[0]["bbox"][3]) / 2)
+    items = sorted(
+        ((b, t) for b, t in zip(blocks, texts, strict=True) if b["role"] != "h"),
+        key=lambda x: (x[0]["bbox"][1] + x[0]["bbox"][3]) / 2,
+    )
     rows, cur, last = [], [], None
     for b, t in items:
         yc = (b["bbox"][1] + b["bbox"][3]) / 2
@@ -66,6 +70,7 @@ def form_html(blocks, texts, fills):
         if rows:
             out.append('<table class="f">' + "".join(rows) + "</table>")
             rows.clear()
+
     for b, t in zip(blocks, texts, strict=True):
         t = re.sub(r"_{3,}|\.{5,}", " ", t).strip()
         if b["role"] == "h":
@@ -84,7 +89,9 @@ def form_html(blocks, texts, fills):
 
 def text_html(rl):
     """Headings, paragraphs and list items (marker or clause number kept in the text, hanging indent) in reading order."""
-    return "".join({"h": f"<h2>{_e(t)}</h2>", "li": f'<p class="li">{_e(t)}</p>', "p": f"<p>{_e(t)}</p>"}[role] for role, t in rl)
+    return "".join(
+        {"h": f"<h2>{_e(t)}</h2>", "li": f'<p class="li">{_e(t)}</p>', "p": f"<p>{_e(t)}</p>"}[role] for role, t in rl
+    )
 
 
 def page_pdf(body, font, lang, rng, images=None, fs_max=22, fixed=None, with_size=False, shrink=True):
@@ -95,18 +102,24 @@ def page_pdf(body, font, lang, rng, images=None, fs_max=22, fixed=None, with_siz
         arch.add(data, name)
     m, lead = fixed[1:] if fixed else (rng.uniform(16, 30), rng.uniform(1.15, 1.45))
     where = pymupdf.Rect(m, m, C.pt - m, C.pt - m)
-    for fs in ([fixed[0]] if fixed and not shrink else np.arange(fixed[0] if fixed else fs_max, 5.4, -0.4)):
-        css = (f"@font-face {{font-family: tf; src: url({font.name});}} body {{font-family: tf; font-size: {fs:.1f}pt; "
-               f"line-height: {lead}; direction: {'rtl' if lang in RTL else 'ltr'};}} p {{margin: 0 0 {fs * 0.5:.1f}pt 0;}} "
-               f"h2 {{font-size: {fs * 1.3:.1f}pt; margin: {fs * 0.4:.1f}pt 0 {fs * 0.4:.1f}pt 0;}} p.li {{margin-left: {fs * 1.4:.1f}pt;}} "
-               f"img {{height: {fs * 1.9:.1f}pt;}} "
-               f"table {{border-collapse: collapse; width: 100%;}} td {{border: 0.6pt solid black; padding: 2pt;}} "
-               f"h1 {{font-size: {fs * 2.2:.1f}pt; text-align: center; margin: {fs * 0.3:.1f}pt 0 {fs * 0.6:.1f}pt 0;}} "
-               f"td.col {{width: 48%; vertical-align: top; padding: 2pt 7pt; border: none;}} table.box {{border: 1.6pt solid black; width: 100%;}} "
-               f"td.band {{background-color: #b8b8b8; padding: {fs * 0.4:.1f}pt; border: none;}} td.bx {{padding: {fs * 0.4:.1f}pt 8pt; border: none;}} "
-               f"table.f {{width: 100%;}} td.l {{width: 45%; padding: {fs * 0.25:.1f}pt 4pt;}} "
-               f"td.line {{border-bottom: 0.7pt solid black; width: 55%;}} "
-               + "".join(f"img.g{i} {{width: {w * 72 / C.dpi * fs / 11:.1f}pt;}} " for i, (_, (_, w, _)) in enumerate((images or {}).items())) + "")
+    for fs in [fixed[0]] if fixed and not shrink else np.arange(fixed[0] if fixed else fs_max, 5.4, -0.4):
+        css = (
+            f"@font-face {{font-family: tf; src: url({font.name});}} body {{font-family: tf; font-size: {fs:.1f}pt; "
+            f"line-height: {lead}; direction: {'rtl' if lang in RTL else 'ltr'};}} p {{margin: 0 0 {fs * 0.5:.1f}pt 0;}} "
+            f"h2 {{font-size: {fs * 1.3:.1f}pt; margin: {fs * 0.4:.1f}pt 0 {fs * 0.4:.1f}pt 0;}} p.li {{margin-left: {fs * 1.4:.1f}pt;}} "
+            f"img {{height: {fs * 1.9:.1f}pt;}} "
+            f"table {{border-collapse: collapse; width: 100%;}} td {{border: 0.6pt solid black; padding: 2pt;}} "
+            f"h1 {{font-size: {fs * 2.2:.1f}pt; text-align: center; margin: {fs * 0.3:.1f}pt 0 {fs * 0.6:.1f}pt 0;}} "
+            f"td.col {{width: 48%; vertical-align: top; padding: 2pt 7pt; border: none;}} table.box {{border: 1.6pt solid black; width: 100%;}} "
+            f"td.band {{background-color: #b8b8b8; padding: {fs * 0.4:.1f}pt; border: none;}} td.bx {{padding: {fs * 0.4:.1f}pt 8pt; border: none;}} "
+            f"table.f {{width: 100%;}} td.l {{width: 45%; padding: {fs * 0.25:.1f}pt 4pt;}} "
+            f"td.line {{border-bottom: 0.7pt solid black; width: 55%;}} "
+            + "".join(
+                f"img.g{i} {{width: {w * 72 / C.dpi * fs / 11:.1f}pt;}} "
+                for i, (_, (_, w, _)) in enumerate((images or {}).items())
+            )
+            + ""
+        )
         story = pymupdf.Story(html=f"<body>{body}</body>", user_css=css, archive=arch)
         more, filled = story.place(where)
         if not more and filled[2] <= where.x1 + 0.5:
@@ -123,10 +136,11 @@ def page_pdf(body, font, lang, rng, images=None, fs_max=22, fixed=None, with_siz
 def hand_png(text, writer, width_mm):
     """A handwritten text as a transparent PNG (dark ink on alpha) and its ink array."""
     import hwsynth as H
+
     s = H.write(text, writer, width_mm=width_mm, dpi=C.dpi, ruled=False, scan=False, image=False)
     ink = np.clip(s.ink, 0, 1)
     ys, xs = np.nonzero(ink > 0.05)
-    ink = ink[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    ink = ink[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
     a = np.zeros((*ink.shape, 4), np.uint8)
     a[..., :3] = 25
     a[..., 3] = (ink * 255).astype(np.uint8)
@@ -142,7 +156,7 @@ def _cut(t, limit=40):
         return t
     head = " ".join(w[:limit])
     k = max(head.rfind(c) for c in ".;:。")
-    return head[:k + 1] if k > len(head) * 0.4 else head
+    return head[: k + 1] if k > len(head) * 0.4 else head
 
 
 def hand_page(rl, writer, rng, boxes=None, rtl=False):
@@ -159,7 +173,14 @@ def hand_page(rl, writer, rng, boxes=None, rtl=False):
             continue
         sc = 1.3 if role == "h" else 1.0
         if sc != 1.0:
-            ink = np.asarray(Image.fromarray((ink * 255).astype(np.uint8)).resize((int(ink.shape[1] * sc), int(ink.shape[0] * sc)))) / 255
+            ink = (
+                np.asarray(
+                    Image.fromarray((ink * 255).astype(np.uint8)).resize(
+                        (int(ink.shape[1] * sc), int(ink.shape[0] * sc))
+                    )
+                )
+                / 255
+            )
         indent = 45 if role == "li" else 0
         h, w = ink.shape[0], min(ink.shape[1], C.side - 2 * m - indent)
         x = C.side - m - w if rtl else m + indent
@@ -167,12 +188,12 @@ def hand_page(rl, writer, rng, boxes=None, rtl=False):
             if len(t.split()) <= 12:
                 break
             continue
-        page[y:y + h, x:x + w] *= 1 - 0.9 * ink[:h, :w]
+        page[y : y + h, x : x + w] *= 1 - 0.9 * ink[:h, :w]
         if boxes is not None:
             boxes.append(dict(k="hand", b=[x, y, x + w, y + h], role=role))
         y += h + 28
         if role == "h":
-            page[y - 14:y - 12, x:x + w] *= 0.35
+            page[y - 14 : y - 12, x : x + w] *= 0.35
         if C.side - m - y < 90:
             break
     return page
@@ -182,6 +203,7 @@ def make(args):
     """(work, lang, doc, mode, v, split, out) -> path or None; mode print | filled | hand."""
     work, lang, doc, mode, v, split, out = args
     from hwsynth.writer import _index
+
     rng = random.Random(f"{lang}{doc}{mode}{v}")
     try:
         work = Path(work)
@@ -208,12 +230,19 @@ def make(args):
                 for i in range(6):
                     s = rng.randrange(max(1, len(words) - 3))
                     name = f"h{i}.png"
-                    png, ink = hand_png(" ".join(words[s:s + rng.randint(1, 3)]), wr, 110)
+                    png, ink = hand_png(" ".join(words[s : s + rng.randint(1, 3)]), wr, 110)
                     images[name] = (png, ink.shape[1], ink.shape[0])
                     fills.append(name)
-            body = (table_html(blocks, texts) if kind == "table" else form_html(blocks, texts, fills) if kind == "form"
-                    else text_html([(b["role"], t) for b, t in zip(blocks, texts, strict=True)]))
-            pdf = page_pdf(body, font, lang, rng, images, fs_max={"plain": 24, "formatted": 22, "table": 38, "form": 30}[kind])
+            body = (
+                table_html(blocks, texts)
+                if kind == "table"
+                else form_html(blocks, texts, fills)
+                if kind == "form"
+                else text_html([(b["role"], t) for b, t in zip(blocks, texts, strict=True)])
+            )
+            pdf = page_pdf(
+                body, font, lang, rng, images, fs_max={"plain": 24, "formatted": 22, "table": 38, "form": 30}[kind]
+            )
             if pdf is None:
                 return None
             with pymupdf.open("pdf", pdf) as d:
@@ -236,7 +265,13 @@ def jobs_for(work, out, langs, variants=6):
     work = Path(work)
     jobs = []
     for lang in langs:
-        for doc, mode in [(d, "print") for d in range(7)] + [(5, "filled"), (6, "filled"), (0, "hand"), (1, "hand"), (2, "hand")]:
+        for doc, mode in [(d, "print") for d in range(7)] + [
+            (5, "filled"),
+            (6, "filled"),
+            (0, "hand"),
+            (1, "hand"),
+            (2, "hand"),
+        ]:
             if (work / f"out_{lang}_{doc}.json").exists():
                 split = "train" if doc in TRAIN_DOCS else "val"
                 jobs += [(str(work), lang, doc, mode, v, split, str(out)) for v in range(variants)]
@@ -246,76 +281,17 @@ def jobs_for(work, out, langs, variants=6):
 def build(work, out, variants=6, workers=10):
     work = Path(work)
     langs = sorted({f.stem[4:].rsplit("_", 1)[0] for f in work.glob("out_*_?.json")})
-    jobs = [j for j in jobs_for(work, out, langs, variants)
-            if not (Path(out) / j[5] / j[1] / f"{j[2]}{j[3][0]}_{j[4]:02d}.jpg").exists()]
+    jobs = [
+        j
+        for j in jobs_for(work, out, langs, variants)
+        if not (Path(out) / j[5] / j[1] / f"{j[2]}{j[3][0]}_{j[4]:02d}.jpg").exists()
+    ]
     made = 0
     for i in range(0, len(jobs), 8 * workers):
-        batch = jobs[i:i + 8 * workers]
+        batch = jobs[i : i + 8 * workers]
         try:
             with ProcessPoolExecutor(workers) as ex:
                 made += sum(r is not None for r in ex.map(make, batch, chunksize=2))
         except Exception:
             made += sum(make(j) is not None for j in batch)
     return made, len(jobs)
-
-
-
-
-def script_fonts(work, langs):
-    """{script: font file}: one font per script"""
-    from hwsynth.scripts import text_script
-    from hwsynth.writer import _index
-    index = _index()
-    work = Path(work)
-    text = {}
-    for lang in langs:
-        t = " ".join(" ".join(json.loads(f.read_text()).values()) for f in sorted(work.glob(f"out_{lang}_?.json")))
-        text[lang] = t
-    groups = {}
-    for lang, t in text.items():
-        groups.setdefault(text_script(t[:3000]), []).append(lang)
-    bad = r"Symbol|Emoji|Icon|Display|Mono|Math|Handjet|Pop|Pixel|Bungee|Press|Italic"
-    out = {}
-    for scr, ls in groups.items():
-        chars = {c for lang in ls for c in text[lang] if not c.isspace()}
-        sample = "".join(sorted(chars))
-        cands = [f for f in index.cmap if not __import__("re").search(bad, f)]
-        cands.sort(key=lambda f: (index.meta[f].get("class") != "print", "NotoSans" not in f, "Noto" not in f, f))
-        full = [f for f in cands if index.covers(f, sample)]
-        out[scr] = (full or sorted(cands, key=lambda f: -sum(ord(c) in index.cmap[f] for c in sample))[:1])[0]
-    return out, groups
-
-
-def variant_layout(v):
-    """(margin pt, leading, size scale) of layout variant v"""
-    r = random.Random(v * 7919 + 1)
-    return r.uniform(14, 34), r.uniform(1.15, 1.5), r.uniform(0.6, 1.0)
-
-
-def _body(work, src, lang, doc):
-    tr = json.loads((Path(work) / f"out_{lang}_{doc}.json").read_text())
-    pairs = [(b, tr.get(f"{doc}_{k}", b["text"])) for k, b in enumerate(src[doc]["blocks"])]
-    pairs = [(b, t) for b, t in pairs if t.strip()]
-    blocks, texts = [b for b, _ in pairs], [t for _, t in pairs]
-    kind = KINDS[doc]
-    return (table_html(blocks, texts) if kind == "table" else form_html(blocks, texts, None) if kind == "form"
-            else text_html([(b["role"], t) for b, t in zip(blocks, texts, strict=True)]))
-
-
-def _clean_one(args):
-    work, lang, doc, v, fs0, font, out = args
-    try:
-        src = json.loads((Path(work) / "src.json").read_text())
-        m, lead, _ = variant_layout(v)
-        pdf, used = page_pdf(_body(work, src, lang, doc), font, lang, random.Random(0), None, fixed=(fs0, m, lead), with_size=True)
-        if pdf is None:
-            return None
-        with pymupdf.open("pdf", pdf) as d:
-            pix = d[0].get_pixmap(dpi=C.dpi, colorspace=pymupdf.csGRAY)
-        split = "train" if doc in TRAIN_DOCS else "val"
-        d_ = Path(out) / split / lang
-        d_.mkdir(parents=True, exist_ok=True)
-        Image.frombytes("L", (pix.width, pix.height), pix.samples).resize((C.side, C.side)).save(d_ / f"{doc}_{v:02d}.jpg", quality=90)
-        return used
-    except Exception:
-        return None

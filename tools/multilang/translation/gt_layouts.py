@@ -1,5 +1,6 @@
 """Translated layouts for the languages short of layouts
 python scripts/translation/gt_layouts.py prep LANG=N [LANG=N ...]   |   python scripts/translation/gt_layouts.py render"""
+
 import json
 import random
 import sys
@@ -9,6 +10,7 @@ import pymupdf
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "review"))
 import translate_layouts as TL
+
 from dspages.hand.plan import EXPECT
 from dspages.multilang import detlayouts as ds3k
 from dspages.multilang import translate as T
@@ -19,16 +21,26 @@ def sources(n, exclude):
     """n clean text-like layouts near the page ratio that are not planned or used, shuffled."""
     flag = json.loads((TL.L / "layout_hw_flagged.json").read_text())
     rows = [json.loads(l) for l in open(TL.L / "det_layouts/layouts.jsonl")]
-    good = [r for r in rows if r["type"] in ("text", "magazine", "flyer") and flag.get(r["id"], "clean") == "clean" and r["id"] not in exclude
-            and r.get("text_ok", True) and len(r["words"]) > 80 and ds3k.layout_is_near_a4(r["file"])
-            and (r["script"] == EXPECT.get(r["lang"], r["script"]) or r["lang"] in TL.TWO)]
+    good = [
+        r
+        for r in rows
+        if r["type"] in ("text", "magazine", "flyer")
+        and flag.get(r["id"], "clean") == "clean"
+        and r["id"] not in exclude
+        and r.get("text_ok", True)
+        and len(r["words"]) > 80
+        and ds3k.layout_is_near_a4(r["file"])
+        and (r["script"] == EXPECT.get(r["lang"], r["script"]) or r["lang"] in TL.TWO)
+    ]
     random.Random(7).shuffle(good)
     return good[:n]
 
 
 def prep(need):
     assign = json.loads((TL.TR / "assign.json").read_text()) if (TL.TR / "assign.json").exists() else {}
-    exclude = {p.get("id") for p in json.loads((TL.L / "ds3k_plan.json").read_text())} | {a["id"] for v in assign.values() for a in v}
+    exclude = {p.get("id") for p in json.loads((TL.L / "ds3k_plan.json").read_text())} | {
+        a["id"] for v in assign.values() for a in v
+    }
     srcs = iter(sources(sum(need.values()), exclude))
     for lang, n in sorted(need.items()):
         d = TL.TR / lang

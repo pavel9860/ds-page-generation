@@ -1,4 +1,5 @@
 """Pages without a value, why, and a recheck of the stored values from the source files."""
+
 import time
 from concurrent.futures import ProcessPoolExecutor
 
@@ -52,6 +53,7 @@ def _why(job):
     try:
         with time_limit(CONFIG.kaggle.local_render_seconds):
             from pathlib import Path
+
             if not Path(path).exists():
                 return "file missing"
             g = render_other(path, number)
@@ -78,16 +80,25 @@ def fill_missing(cfg=CONFIG):
     t0 = time.time()
     res = _pool(_fill_page, [(d, p, man[d]) for d, p in todo], cfg.train.workers)
     ok = [i for i, r in enumerate(res) if r]
-    new = dict(ids=np.array([todo[i] for i in ok], np.int32).reshape(-1, 2), fill=np.array([res[i][0] for i in ok], np.float32),
-               pic=np.array([res[i][1] for i in ok], np.float32), win=np.array([res[i][2:] for i in ok], np.float32).reshape(-1, 4))
+    new = dict(
+        ids=np.array([todo[i] for i in ok], np.int32).reshape(-1, 2),
+        fill=np.array([res[i][0] for i in ok], np.float32),
+        pic=np.array([res[i][1] for i in ok], np.float32),
+        win=np.array([res[i][2:] for i in ok], np.float32).reshape(-1, 4),
+    )
     out = PCT / "out" / "local"
     out.mkdir(parents=True, exist_ok=True)
     if (out / "scan_pct_local.npz").exists():
         old = dict(np.load(out / "scan_pct_local.npz"))
-        keep = ~np.isin(old["ids"][:, 0].astype(np.int64) * 100000 + old["ids"][:, 1], new["ids"][:, 0].astype(np.int64) * 100000 + new["ids"][:, 1])
+        keep = ~np.isin(
+            old["ids"][:, 0].astype(np.int64) * 100000 + old["ids"][:, 1],
+            new["ids"][:, 0].astype(np.int64) * 100000 + new["ids"][:, 1],
+        )
         new = {k: np.concatenate([old[k][keep], new[k]]) for k in new}
     np.savez(out / "scan_pct_local.npz", **new)
-    print(f"{len(ok)} pages got a value, {len(todo) - len(ok)} not (file or page unreadable), {int(time.time() - t0)} s")
+    print(
+        f"{len(ok)} pages got a value, {len(todo) - len(ok)} not (file or page unreadable), {int(time.time() - t0)} s"
+    )
 
 
 def no_value_reasons(cfg=CONFIG):
@@ -116,5 +127,7 @@ def recheck(n=3000, seed=1, cfg=CONFIG):
     d = D[ok]
     for c in cols:
         e = (d["new_" + c] - d[c]).abs()
-        print(f"  {c}: mean abs diff {e.mean():.4f}, median {e.median():.4f}, p99 {e.quantile(.99):.4f}, max {e.max():.4f}, within 0.01 on {100 * (e <= 0.01).mean():.1f} % of pages, "
-              f"within 0.05 on {100 * (e <= 0.05).mean():.1f} %")
+        print(
+            f"  {c}: mean abs diff {e.mean():.4f}, median {e.median():.4f}, p99 {e.quantile(0.99):.4f}, max {e.max():.4f}, within 0.01 on {100 * (e <= 0.01).mean():.1f} % of pages, "
+            f"within 0.05 on {100 * (e <= 0.05).mean():.1f} %"
+        )

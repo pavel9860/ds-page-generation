@@ -10,3 +10,5 @@ out/
 _aside/
 _logs/
 .tmp/
+.env
+HANDOFF.md

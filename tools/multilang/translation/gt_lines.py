@@ -1,5 +1,6 @@
 """Bank lines for languages with too few
 python scripts/translation/gt_lines.py [--lang xx] [--rounds 3]"""
+
 import argparse
 import json
 import random
@@ -96,8 +97,16 @@ def main():
             raw = translated(lang)["raw"] + new
             LB.TRANSLATED.mkdir(parents=True, exist_ok=True)
             old = translated(lang)
-            (LB.TRANSLATED / f"{lang}.json").write_text(json.dumps(dict(raw=raw, w=list(dict.fromkeys(old["w"] + lines_of(raw, lang))), used=old["used"]), ensure_ascii=False))
-            print(f"[{time.time() - t:4.0f}s] {lang}: {len(new)} paragraphs, {sum(r['tr'] is None for r in new)} failed, missing {missing(lang)}", flush=True)
+            (LB.TRANSLATED / f"{lang}.json").write_text(
+                json.dumps(
+                    dict(raw=raw, w=list(dict.fromkeys(old["w"] + lines_of(raw, lang))), used=old["used"]),
+                    ensure_ascii=False,
+                )
+            )
+            print(
+                f"[{time.time() - t:4.0f}s] {lang}: {len(new)} paragraphs, {sum(r['tr'] is None for r in new)} failed, missing {missing(lang)}",
+                flush=True,
+            )
     print("still missing:", {l: missing(l) for l in langs if missing(l)})
 
 

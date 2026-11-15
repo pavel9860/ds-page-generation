@@ -9,30 +9,43 @@ Point set = the 90K existing pages (their vectors) + the 10K target points. Per 
 nearest target of its own group, distance to the nearest pool page. Data: ds100k/query (OUT).
 
 python tools/ds_query.py cands [--per 30] | fetch [--per 12] | images | embed | report"""
+
 import argparse
 import json
-import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlsplit
-
-import numpy as np
-import pandas as pd
 
 import ds100k as D
 import ds_metric as DM
 import ds_probe as PR
 import ds_targets as T
 import form_pages as F
+import numpy as np
+import pandas as pd
 
 OUT = D.OUT / "query"
 V10 = T.OUT / "v10k"
 PAGES = 2
-GROUPS = [("text", False, "en"), ("forms_clean", False, "en"), ("flyers", False, "en"), ("tables", False, "en"), ("bureaucracy", False, "en"),
-          ("text", False, "ru"), ("forms_clean", False, "ja"), ("filled_forms", True, "en"), ("bureaucracy", True, "en"), ("text", True, "en")]
-KEYWORDS = {"text": ["article", "essay", "story", "text"], "forms_clean": ["form", "application", "blank"], "flyers": ["flyer", "brochure", "poster"],
-            "tables": ["table", "schedule", "price", "list"], "bureaucracy": ["decision", "order", "decree", "notice", "minutes"],
-            "filled_forms": ["filled", "completed", "signed", "form"]}
+GROUPS = [
+    ("text", False, "en"),
+    ("forms_clean", False, "en"),
+    ("flyers", False, "en"),
+    ("tables", False, "en"),
+    ("bureaucracy", False, "en"),
+    ("text", False, "ru"),
+    ("forms_clean", False, "ja"),
+    ("filled_forms", True, "en"),
+    ("bureaucracy", True, "en"),
+    ("text", True, "en"),
+]
+KEYWORDS = {
+    "text": ["article", "essay", "story", "text"],
+    "forms_clean": ["form", "application", "blank"],
+    "flyers": ["flyer", "brochure", "poster"],
+    "tables": ["table", "schedule", "price", "list"],
+    "bureaucracy": ["decision", "order", "decree", "notice", "minutes"],
+    "filled_forms": ["filled", "completed", "signed", "form"],
+}
 TLD = {"en": None, "ru": ["ru", "su"], "ja": ["jp"]}
 
 
@@ -49,6 +62,7 @@ def targets():
 
 def cmd_cands(a):
     import duckdb
+
     G = targets()
     urls = PR.source_urls()
     con = duckdb.connect()
@@ -70,7 +84,9 @@ def cmd_cands(a):
                             where regexp_matches(lower(url), '({words})') {tld} order by hash(url) limit {a.per}""").df()
         out.append(r.assign(group=gname(g), method="keyword"))
         print(gname(g), "hosts", len(hosts), flush=True)
-    r = con.execute(f"select url, warc_filename f, warc_record_offset o, warc_record_length l from {idx} using sample {a.per} rows").df()
+    r = con.execute(
+        f"select url, warc_filename f, warc_record_offset o, warc_record_length l from {idx} using sample {a.per} rows"
+    ).df()
     out.append(r.assign(group="any", method="random"))
     C = pd.concat(out, ignore_index=True).drop_duplicates("url")
     OUT.mkdir(parents=True, exist_ok=True)
@@ -104,9 +120,14 @@ def cmd_fetch(a):
 def fetch_image(url):
     import cv2
     import httpx
+
     try:
-        r = httpx.get(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"}, timeout=20,
-                      follow_redirects=True)
+        r = httpx.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"},
+            timeout=20,
+            follow_redirects=True,
+        )
         if r.status_code != 200 or len(r.content) > 25_000_000:
             return None
         img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
@@ -132,21 +153,28 @@ def cmd_images(_):
 
 
 def heads():
+    import torch
     import torch.nn as nn
     import torch.nn.functional as Fn
-    import torch
+
     sd = torch.load(DM.OUT / "out" / "head.pt", map_location="cpu")
     f = [nn.Sequential(nn.Linear(1536, 512), nn.GELU(), nn.Linear(512, DM.DIM)) for _ in range(3)]
     for k in range(3):
         f[k].load_state_dict({kk.split(".", 2)[2]: v for kk, v in sd.items() if kk.startswith(f"f.{k}.")})
     msd = json.load(open(DM.OUT / "out" / "metric.json"))["pair_msd"]
-    return lambda V: torch.cat([Fn.normalize(f[h](torch.from_numpy(V).float()), dim=1) / msd[h] ** 0.5 for h in range(3)], 1).detach().numpy()
+    return lambda V: (
+        torch.cat([Fn.normalize(f[h](torch.from_numpy(V).float()), dim=1) / msd[h] ** 0.5 for h in range(3)], 1)
+        .detach()
+        .numpy()
+    )
 
 
 def cmd_embed(_):
     import torch
+
     sys.path.insert(0, f"{PR.CC}/pagetype")
     import embed_kaggle as K
+
     torch.set_num_threads(6)
     parts = []
     for s in ("pdf", "img"):
@@ -157,7 +185,7 @@ def cmd_embed(_):
     P = pd.concat([p for p, _ in parts], ignore_index=True)
     raw = [x for _, r in parts for x in r]
     model = K.load_model("cpu")
-    V = np.concatenate([K.embed_pages(model, raw[a:a + 4], "cpu")[0] for a in range(0, len(raw), 4)])
+    V = np.concatenate([K.embed_pages(model, raw[a : a + 4], "cpu")[0] for a in range(0, len(raw), 4)])
     np.save(OUT / "vectors.npy", V.astype(np.float16))
     P.to_parquet(OUT / "pages.parquet")
     print(len(P), "pages embedded")
@@ -165,6 +193,7 @@ def cmd_embed(_):
 
 def cmd_report(_):
     import torch
+
     P = pd.read_parquet(OUT / "pages.parquet")
     Zq = heads()(np.load(OUT / "vectors.npy").astype(np.float32))
     t = np.load(V10 / "targets.npz")
@@ -183,20 +212,36 @@ def cmd_report(_):
     P["target_group"] = np.where(j >= len(Ex), tgt_group, "")
     P["target_type"] = np.where(j >= len(Ex), G.type.to_numpy()[np.clip(j - len(Ex), 0, None)], "")
     dt = torch.cdist(q, torch.from_numpy(Xt))
-    P["d_own"] = [float(dt[i, torch.from_numpy((G.group == g).to_numpy())].min()) if (G.group == g).any() else np.nan for i, g in enumerate(P.group)]
+    P["d_own"] = [
+        float(dt[i, torch.from_numpy((G.group == g).to_numpy())].min()) if (G.group == g).any() else np.nan
+        for i, g in enumerate(P.group)
+    ]
     pool = torch.from_numpy(Zold)
-    P["d_pool"] = torch.cat([torch.cdist(q[a:a + 64], pool).min(1).values for a in range(0, len(q), 64)]).numpy()
+    P["d_pool"] = torch.cat([torch.cdist(q[a : a + 64], pool).min(1).values for a in range(0, len(q), 64)]).numpy()
     P["own_hit"] = P.target_group == P.group
     P.to_parquet(OUT / "result.parquet")
     r = json.load(open(V10 / "targets.json"))
-    print(f"point spacing: covering radius {r['cover']:.3f}, existing-page radius r {r['r']:.3f}; target point to its nearest pool page median "
-          f"{np.median(t['nd'][:, 0]):.3f}")
-    S = P.groupby(["group", "method"]).agg(pages=("url", "size"), files=("url", "nunique"), near_target=("nearest", lambda s: (s == "target").mean()),
-                                           own_group_hit=("own_hit", "mean"), d_own_target=("d_own", "median"), d_point=("d_point", "median"),
-                                           d_pool=("d_pool", "median"))
+    print(
+        f"point spacing: covering radius {r['cover']:.3f}, existing-page radius r {r['r']:.3f}; target point to its nearest pool page median "
+        f"{np.median(t['nd'][:, 0]):.3f}"
+    )
+    S = P.groupby(["group", "method"]).agg(
+        pages=("url", "size"),
+        files=("url", "nunique"),
+        near_target=("nearest", lambda s: (s == "target").mean()),
+        own_group_hit=("own_hit", "mean"),
+        d_own_target=("d_own", "median"),
+        d_point=("d_point", "median"),
+        d_pool=("d_pool", "median"),
+    )
     print(S.round(3).to_string())
     print("\ntypes of the nearest target (pages that land nearest a target):")
-    print(P[P.nearest == "target"].groupby(["group", "method"]).target_type.agg(lambda s: s.value_counts().head(3).to_dict()).to_string())
+    print(
+        P[P.nearest == "target"]
+        .groupby(["group", "method"])
+        .target_type.agg(lambda s: s.value_counts().head(3).to_dict())
+        .to_string()
+    )
 
 
 if __name__ == "__main__":

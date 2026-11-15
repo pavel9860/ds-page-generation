@@ -5,17 +5,16 @@ Every round takes up to B pages, the farthest from the set, each also farther fr
   python tools/kaggle_fps.py upload        # pool vectors (fp16, 4 parts) -> dataset pavel9860/ds100k-pool
   python tools/kaggle_fps.py push [--n 100000]
   python tools/kaggle_fps.py fetch         # -> ds100k/select.parquet (order = pick order, r = distance when picked), cover.npz"""
+
 import argparse
 import json
 import subprocess
 import sys
-from pathlib import Path
-
-import numpy as np
-import pandas as pd
 
 import diverse_ds as DD
 import ds100k as D
+import numpy as np
+import pandas as pd
 
 WORK = D.OUT / "kaggle"
 DS = "pavel9860/ds100k-pool"
@@ -23,7 +22,7 @@ KID = "pavel9860/ds100k-fps"
 PARTS, CHUNK = 4, 100_000
 KAGGLE = [sys.executable, "-W", "ignore", "-m", "kaggle"]
 
-KERNEL = r'''
+KERNEL = r"""
 import glob, sys, time, numpy as np, torch
 N_PICK, B = int(sys.argv[1]) if len(sys.argv) > 1 else N, 100
 X = torch.from_numpy(np.concatenate([np.load(f) for f in sorted(glob.glob("/kaggle/input/**/pool_*.npy", recursive=True))])).cuda()
@@ -56,7 +55,7 @@ while True:
 r = d.sqrt().cpu().numpy()
 np.savez("/kaggle/working/fps.npz", pick=np.array(pick, np.int64), rad=np.array(rad, np.float32), cover=r.astype(np.float32), cell=cell.cpu().numpy())
 print("DONE", len(pick), "picks; covering radius", float(r.max()), int(time.time() - t0), "s", flush=True)
-'''
+"""
 
 
 def kaggle(*args, timeout=3600):
@@ -71,9 +70,18 @@ def cmd_upload(_):
     d.mkdir(parents=True, exist_ok=True)
     rows = P.row.to_numpy()
     for k, part in enumerate(np.array_split(rows, PARTS)):
-        np.save(d / f"pool_{k}.npy", np.concatenate([DD.unit_rows(np.asarray(E[part[a:a + CHUNK]], np.float32)).astype(np.float16)
-                                                       for a in range(0, len(part), CHUNK)]))
-    (d / "dataset-metadata.json").write_text(json.dumps({"title": DS.split("/")[1], "id": DS, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+        np.save(
+            d / f"pool_{k}.npy",
+            np.concatenate(
+                [
+                    DD.unit_rows(np.asarray(E[part[a : a + CHUNK]], np.float32)).astype(np.float16)
+                    for a in range(0, len(part), CHUNK)
+                ]
+            ),
+        )
+    (d / "dataset-metadata.json").write_text(
+        json.dumps({"title": DS.split("/")[1], "id": DS, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]})
+    )
     print(len(rows), "pool vectors;", kaggle("datasets", "create", "-p", str(d), timeout=7200)[-300:])
 
 
@@ -81,10 +89,26 @@ def cmd_push(a):
     d = WORK / "kernel"
     d.mkdir(parents=True, exist_ok=True)
     (d / "run.py").write_text(f"N = {a.n}\n" + KERNEL)
-    (d / "kernel-metadata.json").write_text(json.dumps({
-        "id": KID, "title": KID.split("/")[1], "code_file": "run.py", "language": "python", "kernel_type": "script", "is_private": True,
-        "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "dataset_sources": [DS], "kernel_sources": [],
-        "competition_sources": [], "model_sources": [], "machine_shape": "NvidiaTeslaT4"}))
+    (d / "kernel-metadata.json").write_text(
+        json.dumps(
+            {
+                "id": KID,
+                "title": KID.split("/")[1],
+                "code_file": "run.py",
+                "language": "python",
+                "kernel_type": "script",
+                "is_private": True,
+                "enable_gpu": True,
+                "enable_tpu": False,
+                "enable_internet": False,
+                "dataset_sources": [DS],
+                "kernel_sources": [],
+                "competition_sources": [],
+                "model_sources": [],
+                "machine_shape": "NvidiaTeslaT4",
+            }
+        )
+    )
     print(kaggle("kernels", "push", "-p", str(d)))
 
 
@@ -100,8 +124,18 @@ def cmd_fetch(_):
     P = pd.read_parquet(D.OUT / "pool.parquet")
     S = P.iloc[z["pick"]].assign(order=np.arange(len(z["pick"])), r=z["rad"]).reset_index(names="pool_i")
     S.to_parquet(D.OUT / "select.parquet")
-    np.savez(D.OUT / "cover.npz", d=z["cover"], cell=z["cell"])               # every pool page: distance to and pick order of its nearest set page
-    print(len(S), "pages of", S.doc.nunique(), "documents; covering radius", round(float(z["cover"].max()), 4), "->", D.OUT / "select.parquet")
+    np.savez(
+        D.OUT / "cover.npz", d=z["cover"], cell=z["cell"]
+    )  # every pool page: distance to and pick order of its nearest set page
+    print(
+        len(S),
+        "pages of",
+        S.doc.nunique(),
+        "documents; covering radius",
+        round(float(z["cover"].max()), 4),
+        "->",
+        D.OUT / "select.parquet",
+    )
 
 
 if __name__ == "__main__":

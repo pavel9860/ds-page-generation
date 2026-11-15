@@ -12,17 +12,20 @@ the elastic solution has none, so away from the ridge each crease field is Gauss
 Valley = the same profile negated. An optional per-crease spread widens lam: gentler, broader flanks, the
 crest as sharp. Crease severity k scales h (residual angle ~ yield strain).
 Overlapping creases add, the total saturates smoothly: w_max tanh(w / w_max). All lengths in mm."""
+
 import cv2
 import numpy as np
 from numba import njit, prange
 
+from .config import CH, KINDS  # noqa: F401
+
 
 def height(L):
-    return 0.0547 * L ** 0.80
+    return 0.0547 * L**0.80
 
 
 def lam(L):
-    return 1.91 * L ** 0.45
+    return 1.91 * L**0.45
 
 
 def r_ridge(L):
@@ -41,7 +44,7 @@ def arch(rng, p0, p1, sag=(0.0, 0.25), peak=(0.15, 0.85)):
     k1 = p0 + t * L * (2 * a / 3) + n * s * 4 / 3
     k2 = p0 + t * L * (a + (1 - a) / 3) + n * s * 4 / 3
     u = np.linspace(0, 1, max(int(L / 0.1), 8))[:, None]
-    return (1 - u) ** 3 * p0 + 3 * (1 - u) ** 2 * u * k1 + 3 * (1 - u) * u ** 2 * k2 + u ** 3 * p1
+    return (1 - u) ** 3 * p0 + 3 * (1 - u) ** 2 * u * k1 + 3 * (1 - u) * u**2 * k2 + u**3 * p1
 
 
 def length(rng, median=30.0, sigma=0.6, lo=5.0, hi=120.0):
@@ -59,25 +62,32 @@ def _tangent(line, k):
 
 def motif(rng, c, th, kind):
     """Centerlines of one crease unit at c with main direction th."""
-    if kind == "single":                                # straight to gently curved, or a hook
+    if kind == "single":  # straight to gently curved, or a hook
         L = length(rng)
         e = L / 2 * np.array([np.cos(th), np.sin(th)])
         hook = rng.random() < 0.2
         return [arch(rng, c - e, c + e, sag=(0.25, 0.45) if hook else (0.0, 0.12))]
-    if kind == "chain":                                 # 2-3 creases end to end, kinked
+    if kind == "chain":  # 2-3 creases end to end, kinked
         lines = [ray(rng, c, th, length(rng) * 0.6, sag=(0.0, 0.12))]
         for _ in range(rng.integers(1, 3)):
             a = lines[-1]
-            lines.append(ray(rng, a[-1], _tangent(a, len(a) - 1) + rng.choice([-1, 1]) * rng.uniform(0.2, 1.0),
-                             length(rng) * 0.6, sag=(0.0, 0.12)))
+            lines.append(
+                ray(
+                    rng,
+                    a[-1],
+                    _tangent(a, len(a) - 1) + rng.choice([-1, 1]) * rng.uniform(0.2, 1.0),
+                    length(rng) * 0.6,
+                    sag=(0.0, 0.12),
+                )
+            )
         return lines
-    if kind == "star":                                  # 3-4 creases meeting at a vertex
+    if kind == "star":  # 3-4 creases meeting at a vertex
         n = rng.integers(3, 5)
         a = th + np.sort(rng.uniform(0, 2 * np.pi, n))
         return [ray(rng, c, x, length(rng) * 0.7, sag=(0.0, 0.12)) for x in a]
     if kind == "V":
         return [ray(rng, c, th, length(rng) * 0.7), ray(rng, c, th + rng.uniform(0.35, 2.9), length(rng) * 0.7)]
-    if kind == "T":                                     # a crease branching off another
+    if kind == "T":  # a crease branching off another
         a = motif(rng, c, th, "single")[0]
         k = rng.integers(len(a) // 5, 4 * len(a) // 5)
         return [a, ray(rng, a[k], _tangent(a, k) + rng.choice([-1, 1]) * rng.uniform(0.35, 2.8), length(rng) * 0.6)]
@@ -85,11 +95,18 @@ def motif(rng, c, th, kind):
     return [motif(rng, c, th, "single")[0], motif(rng, c, th + rng.uniform(0.4, 2.7), "single")[0]]
 
 
-KINDS = {"single": 0.45, "chain": 0.15, "T": 0.15, "star": 0.10, "V": 0.10, "X": 0.05}
-
-
-def sample(rng, W, H, mean_groups=1.8, p_isolated=0.3, mean_extra=1.5, radius=(15.0, 45.0), spread_deg=25.0,
-           singles_per_group=(3.0, 4.0), k=(0.15, 0.9)):
+def sample(
+    rng,
+    W,
+    H,
+    mean_groups=1.8,
+    p_isolated=0.3,
+    mean_extra=1.5,
+    radius=(15.0, 45.0),
+    spread_deg=25.0,
+    singles_per_group=(3.0, 4.0),
+    k=(0.15, 0.9),
+):
     """Creases of one page. Groups ~ 1 + Poisson(mean_groups - 1) at random places. A group is one isolated
     unit (p_isolated) or a loose group of 2 + Poisson(mean_extra) units within its radius sharing a main
     direction (+- spread_deg). A unit is a single crease, a kinked chain, a T, a star vertex, a V or an X.
@@ -115,7 +132,6 @@ def sample(rng, W, H, mean_groups=1.8, p_isolated=0.3, mean_extra=1.5, radius=(1
 
 
 # ---------------- height map ----------------
-CH = 8                         # segments per culling chunk
 
 
 @njit(parallel=True, fastmath=True, cache=True)
@@ -141,17 +157,17 @@ def _fields(P, S, B, cp, cb, box, prm, off, rows, f, keep):
         r = prm[q, 3]
         dmax = prm[q, 4]
         amp = prm[q, 5]
-        gx0 = B[b0:b0 + nc, 0].min()
-        gy0 = B[b0:b0 + nc, 1].min()
-        gx1 = B[b0:b0 + nc, 2].max()
-        gy1 = B[b0:b0 + nc, 3].max()
+        gx0 = B[b0 : b0 + nc, 0].min()
+        gy0 = B[b0 : b0 + nc, 1].min()
+        gx1 = B[b0 : b0 + nc, 2].max()
+        gy1 = B[b0 : b0 + nc, 3].max()
         o = off[q] + i * nx
         cprev = 0
         for j in range(nx):
             px = x0 + j * h
             ex = max(gx0 - px, 0.0, px - gx1)
             ey = max(gy0 - py, 0.0, py - gy1)
-            if ex * ex + ey * ey >= dmax * dmax:            # whole line beyond the cutoff
+            if ex * ex + ey * ey >= dmax * dmax:  # whole line beyond the cutoff
                 f[o + j] = 0.0
                 keep[o + j] = 0.0
                 continue
@@ -190,9 +206,10 @@ def _fields(P, S, B, cp, cb, box, prm, off, rows, f, keep):
                 continue
             u = 2.0 * bs / L - 1.0
             fade = 1.0 - (d / dmax) ** 2
-            f[o + j] = (amp * (1.0 - 0.35 * u * u * (2.0 - u * u)) * fade * fade
-                        * np.exp(-(np.sqrt(d * d + r * r) - r) / lm))
-            keep[o + j] = np.exp(-(2.0 * d / lm) ** 2)
+            f[o + j] = (
+                amp * (1.0 - 0.35 * u * u * (2.0 - u * u)) * fade * fade * np.exp(-(np.sqrt(d * d + r * r) - r) / lm)
+            )
+            keep[o + j] = np.exp(-((2.0 * d / lm) ** 2))
 
 
 def render(creases, W, H, h=0.5, w_max=1.0, reach=4.0, step=0.5):
@@ -204,11 +221,11 @@ def render(creases, W, H, h=0.5, w_max=1.0, reach=4.0, step=0.5):
     w = np.zeros((ny, nx), np.float32)
     Ps, Ss, Bs, cp, cb, box, prm, off, rows, ij = [], [], [], [0], [0], [], [], [0], [], []
     for c in creases:
-        ln = c['line']
+        ln = c["line"]
         seg = np.r_[0, np.cumsum(np.linalg.norm(np.diff(ln, axis=0), axis=1))]
         L = seg[-1]
         Lf = min(L, 50.0)
-        lm = lam(Lf) * c.get('spread', 1.0)
+        lm = lam(Lf) * c.get("spread", 1.0)
         dmax = reach * lm
         j0, j1 = max(int((ln[:, 0].min() - dmax) / h), 0), min(int((ln[:, 0].max() + dmax) / h) + 2, nx)
         i0, i1 = max(int((ln[:, 1].min() - dmax) / h), 0), min(int((ln[:, 1].max() + dmax) / h) + 2, ny)
@@ -227,18 +244,29 @@ def render(creases, W, H, h=0.5, w_max=1.0, reach=4.0, step=0.5):
         cb.append(cb[-1] + len(Bq))
         box.append((j0 * h, i0 * h, i1 - i0, j1 - j0))
         off.append(off[-1] + (i1 - i0) * (j1 - j0))
-        prm.append((h, L, lm, r_ridge(Lf), dmax, c['sign'] * c['k'] * height(Lf)))
+        prm.append((h, L, lm, r_ridge(Lf), dmax, c["sign"] * c["k"] * height(Lf)))
         rows.append(np.c_[np.full(i1 - i0, q), np.arange(i1 - i0)])
         ij.append((i0, i1, j0, j1, lm))
     if not box:
         return w
     f = np.empty(off[-1], np.float32)
     keep = np.empty_like(f)
-    _fields(np.concatenate(Ps), np.concatenate(Ss), np.concatenate(Bs), np.array(cp), np.array(cb),
-            np.array(box), np.array(prm), np.array(off), np.concatenate(rows), f, keep)
+    _fields(
+        np.concatenate(Ps),
+        np.concatenate(Ss),
+        np.concatenate(Bs),
+        np.array(cp),
+        np.array(cb),
+        np.array(box),
+        np.array(prm),
+        np.array(off),
+        np.concatenate(rows),
+        f,
+        keep,
+    )
     for q, (i0, i1, j0, j1, lm) in enumerate(ij):
-        fq = f[off[q]:off[q + 1]].reshape(i1 - i0, j1 - j0)
-        kq = keep[off[q]:off[q + 1]].reshape(fq.shape)
+        fq = f[off[q] : off[q + 1]].reshape(i1 - i0, j1 - j0)
+        kq = keep[off[q] : off[q + 1]].reshape(fq.shape)
         sm = cv2.GaussianBlur(fq, (0, 0), 0.25 * lm / h, borderType=cv2.BORDER_CONSTANT)
-        w[i0:i1, j0:j1] += kq * fq + (1 - kq) * sm                  # sharp ridge kept, smoothed elsewhere
+        w[i0:i1, j0:j1] += kq * fq + (1 - kq) * sm  # sharp ridge kept, smoothed elsewhere
     return w_max * np.tanh(w / w_max)

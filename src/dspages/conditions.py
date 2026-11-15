@@ -6,6 +6,7 @@ form. A plan of n samples gives every factor value round(n p) samples by largest
 by independent shuffles (Latin hypercube): exact marginals for any n, no sampling retries. Continuous values are
 drawn within their bin per sample.
 """
+
 import itertools
 import json
 from dataclasses import replace
@@ -44,18 +45,21 @@ def factors(P: Preset):
         bend_deep=((True, g.deep.on_bends_prob), (False, 1 - g.deep.on_bends_prob)),
         sharp=((True, li.sharp_prob), (False, 1 - li.sharp_prob)),
         frame=P.render.camera.frames,
-        margin_bin=tuple((b, 1.0) for b in _bins(*m, 3)) if m[1] > m[0] else ((m, 1.0),))
+        margin_bin=tuple((b, 1.0) for b in _bins(*m, 3)) if m[1] > m[0] else ((m, 1.0),),
+    )
 
 
 def _canonical(c):
     crumple = c["combo"][3]
     out = {k: v for k, v in c.items() if k != "bend_deep"}
-    return dict(out, two=c["two"] and not crumple,
-                deep=c["deep"] if crumple else "light" if c.get("bend_deep") else "")
+    return dict(out, two=c["two"] and not crumple, deep=c["deep"] if crumple else "light" if c.get("bend_deep") else "")
 
 
-GROUPS = dict(geometry=("combo", "two", "along_long", "bend_bin", "gsm", "shallow", "deep", "bend_deep"),
-              view=("sharp", "frame"), layout=("margin_bin",))
+GROUPS = dict(
+    geometry=("combo", "two", "along_long", "bend_bin", "gsm", "shallow", "deep", "bend_deep"),
+    view=("sharp", "frame"),
+    layout=("margin_bin",),
+)
 
 
 def cells(P: Preset, group):
@@ -87,7 +91,7 @@ def _counts(w, n):
     """Integer counts with sum n in proportion to w (largest remainder)."""
     p = np.asarray(w, float) / np.sum(w)
     k = np.floor(n * p).astype(int)
-    k[np.argsort(-(n * p - k))[:n - k.sum()]] += 1
+    k[np.argsort(-(n * p - k))[: n - k.sum()]] += 1
     return k
 
 
@@ -121,21 +125,21 @@ def plan(P: Preset, n, seed, manifest):
     wsum = sum(w for _, w in share)
     mix = tuple((g, float(v)) for g, v in whole.items()) + tuple((g, rest * w / wsum) for g, w in share)
     cols = {k: _exact(rng, v, n) for k, v in (*factors(P).items(), ("script", mix))}
-    rows = {g: np.flatnonzero(np.array(cols["script"]) == g)[:len(pools[g])] for g, _ in mix}
+    rows = {g: np.flatnonzero(np.array(cols["script"]) == g)[: len(pools[g])] for g, _ in mix}
     entry = np.full(n, -1)
     refont = {g: sum(manifest[e]["kind"] == "refont" for e in pools[g]) for g in rows}
     opened = np.array([cb[0] == "open" for cb in cols["combo"]])
-    excess = [i for g, idx in rows.items() for i in idx[opened[idx]][refont[g]:]]
-    room = [i for g, idx in rows.items() for i in idx[~opened[idx]][:max(refont[g] - opened[idx].sum(), 0)]]
+    excess = [i for g, idx in rows.items() for i in idx[opened[idx]][refont[g] :]]
+    room = [i for g, idx in rows.items() for i in idx[~opened[idx]][: max(refont[g] - opened[idx].sum(), 0)]]
     for a, b in zip(excess, rng.permutation(room)):
         cols["combo"][a], cols["combo"][b] = cols["combo"][b], cols["combo"][a]
     opened = np.array([cb[0] == "open" for cb in cols["combo"]])
     for g, idx in rows.items():
         perm = rng.permutation(pools[g]).astype(int)
-        o = perm[[manifest[e]["kind"] == "refont" for e in perm]][:opened[idx].sum()]
-        e = perm[~np.isin(perm, o)][:(~opened[idx]).sum()]
-        entry[idx[opened[idx]][:len(o)]] = o
-        entry[idx[~opened[idx]][:len(e)]] = e
+        o = perm[[manifest[e]["kind"] == "refont" for e in perm]][: opened[idx].sum()]
+        e = perm[~np.isin(perm, o)][: (~opened[idx]).sum()]
+        entry[idx[opened[idx]][: len(o)]] = o
+        entry[idx[~opened[idx]][: len(e)]] = e
     t, F = _bend_cdf(P.geometry)
     font = np.full(n, np.nan)
     for sel, (lo, hi), k in ((opened, c.open_font_pt, open_scale(c)), (~opened, c.font_pt, 1.0)):
@@ -172,7 +176,9 @@ def _water(w, specs, seed):
 
 
 def geometry_cond(spec):
-    return {k: spec[k] for k in ("combo", "two", "along_long", "bend_dir", "gsm", "shallow", "deep", "water") if k in spec}
+    return {
+        k: spec[k] for k in ("combo", "two", "along_long", "bend_dir", "gsm", "shallow", "deep", "water") if k in spec
+    }
 
 
 def sample_preset(P: Preset, spec):
@@ -181,7 +187,16 @@ def sample_preset(P: Preset, spec):
     r, c, g = P.render, P.layout, P.geometry
     flip = (lambda t: t[::-1]) if spec["combo"][0] == "open" else (lambda t: t)
     frame = spec.get("frame", "page")
-    return replace(P, render=replace(r, light=replace(r.light, sharp_prob=float(spec["sharp"])), camera=replace(r.camera, frame=frame)),
-                   layout=replace(c, margin_frac=c.cut_margin_frac if frame != "page" else spec["margin_bin"],
-                                  sheet_mm=flip(c.sheet_mm), page_px=flip(c.page_px)),
-                   geometry=replace(g, sheet_mm=flip(g.sheet_mm), mesh=flip(g.mesh)))
+    return replace(
+        P,
+        render=replace(
+            r, light=replace(r.light, sharp_prob=float(spec["sharp"])), camera=replace(r.camera, frame=frame)
+        ),
+        layout=replace(
+            c,
+            margin_frac=c.cut_margin_frac if frame != "page" else spec["margin_bin"],
+            sheet_mm=flip(c.sheet_mm),
+            page_px=flip(c.page_px),
+        ),
+        geometry=replace(g, sheet_mm=flip(g.sheet_mm), mesh=flip(g.mesh)),
+    )

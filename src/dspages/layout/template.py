@@ -6,6 +6,7 @@ block (heading, table cell, label, header, footer) is a fixed box set at its pla
 the body; text a box cannot hold is cut at the box. Rules, frames and pictures stay where the source has them, so nothing can overlap and a column has no gap
 while the stream lasts.
 """
+
 import bisect
 import itertools
 import math
@@ -37,7 +38,7 @@ def _columns(cand):
         return i
 
     for i, a in enumerate(cand):
-        for b in cand[i + 1:]:
+        for b in cand[i + 1 :]:
             A, B = a["bbox"], b["bbox"]
             if min(A.x1, B.x1) - max(A.x0, B.x0) > 0.5 * min(A.width, B.width):
                 parent[root(id(a))] = root(id(b))
@@ -60,14 +61,20 @@ def _cells(cand, blocks, rules, g):
         band = R._band(rules, ys, p)
         if band:
             bands[(round(band[0] / C.table_step), round(band[1] / C.table_step))].append(b)
+
     def beside(a, b):
         A, B = a["bbox"], b["bbox"]
         return (A.x1 <= B.x0 or B.x1 <= A.x0) and min(A.y1, B.y1) - max(A.y0, B.y0) > 0.5 * min(A.height, B.height)
 
     def stacked(a, b):
         return min(a["bbox"].x1, b["bbox"].x1) > max(a["bbox"].x0, b["bbox"].x0)
-    return {id(a) for row in bands.values() for a in row
-            if any(b is not a and beside(a, b) for b in row) and not any(b is not a and stacked(a, b) for b in row)}
+
+    return {
+        id(a)
+        for row in bands.values()
+        for a in row
+        if any(b is not a and beside(a, b) for b in row) and not any(b is not a and stacked(a, b) for b in row)
+    }
 
 
 def _mates(cand, col):
@@ -75,12 +82,15 @@ def _mates(cand, col):
     out = set()
     ordered = sorted(cand, key=lambda b: b["bbox"].y0)
     for i, a in enumerate(ordered):
-        for b in ordered[i + 1:]:
+        for b in ordered[i + 1 :]:
             if b["bbox"].y0 >= a["bbox"].y1:
                 break
             overlap = min(a["bbox"].y1, b["bbox"].y1) - max(a["bbox"].y0, b["bbox"].y0)
-            if (col[id(a)] == col[id(b)] and overlap > C.row_overlap * min(a["bbox"].height, b["bbox"].height)
-                    and (b["bbox"].x0 >= a["bbox"].x1 - 1 or a["bbox"].x0 >= b["bbox"].x1 - 1)):
+            if (
+                col[id(a)] == col[id(b)]
+                and overlap > C.row_overlap * min(a["bbox"].height, b["bbox"].height)
+                and (b["bbox"].x0 >= a["bbox"].x1 - 1 or a["bbox"].x0 >= b["bbox"].x1 - 1)
+            ):
                 out |= {id(a), id(b)}
     return out
 
@@ -91,9 +101,17 @@ def _runs(cand, others, col):
     for b in sorted(cand, key=lambda b: (col[id(b)], b["bbox"].y0)):
         prev = runs[-1][-1] if runs else None
         pitch = b["src_pitch"]
-        split = (prev is None or col[id(prev)] != col[id(b)] or b["bbox"].y0 - prev["bbox"].y1 > C.frame_gap * pitch
-                 or any(min(o["bbox"].x1, b["bbox"].x1) > max(o["bbox"].x0, b["bbox"].x0) and prev["bbox"].y1 - pitch / 2 <= o["bbox"].y0
-                        and o["bbox"].y1 <= b["bbox"].y0 + pitch / 2 for o in others))
+        split = (
+            prev is None
+            or col[id(prev)] != col[id(b)]
+            or b["bbox"].y0 - prev["bbox"].y1 > C.frame_gap * pitch
+            or any(
+                min(o["bbox"].x1, b["bbox"].x1) > max(o["bbox"].x0, b["bbox"].x0)
+                and prev["bbox"].y1 - pitch / 2 <= o["bbox"].y0
+                and o["bbox"].y1 <= b["bbox"].y0 + pitch / 2
+                for o in others
+            )
+        )
         if split:
             runs.append([])
         runs[-1].append(b)
@@ -108,13 +126,21 @@ def _walled(cand, blocks, walls, rules, g):
     for b in cand:
         x0, x1, mid = b["bbox"].x0 * g, b["bbox"].x1 * g, (b["bbox"].y0 + b["bbox"].y1) / 2 * g
         xs = [x for x, a, z in walls if a <= mid <= z]
-        left, right = max((x for x in xs if x <= x0 + 2), default=None), min((x for x in xs if x >= x1 - 2), default=None)
+        left, right = (
+            max((x for x in xs if x <= x0 + 2), default=None),
+            min((x for x in xs if x >= x1 - 2), default=None),
+        )
         if left is None or right is None:
             continue
-        band = R._band(rules, ys, dict(x0=x0, x1=x1, y0=b["bbox"].y0 * g, y1=b["bbox"].y1 * g, tol=C.row_tol_em * b["size"] * g))
+        band = R._band(
+            rules, ys, dict(x0=x0, x1=x1, y0=b["bbox"].y0 * g, y1=b["bbox"].y1 * g, tol=C.row_tol_em * b["size"] * g)
+        )
         if (band and band[1] - band[0] <= (b["bbox"].height + 2 * b["src_pitch"]) * g) or any(
-                o is not b and min(o["bbox"].y1, b["bbox"].y1) > max(o["bbox"].y0, b["bbox"].y0)
-                and (o["bbox"].x1 * g <= left + 2 or o["bbox"].x0 * g >= right - 2) for o in blocks):
+            o is not b
+            and min(o["bbox"].y1, b["bbox"].y1) > max(o["bbox"].y0, b["bbox"].y0)
+            and (o["bbox"].x1 * g <= left + 2 or o["bbox"].x0 * g >= right - 2)
+            for o in blocks
+        ):
             out.add(id(b))
     return out
 
@@ -123,19 +149,38 @@ def split_page(blocks, rules, g, boxes=(), walls=()):
     """-> (sections, fixed): the frames (runs of body paragraphs of a column) grouped in sections, the frames between two
     blocks that span the columns, each in reading order; and the other blocks. A paragraph in a box (a cell, a panel) or on
     a tabbed line is not a frame's."""
-    classes = {_size_class(b["size"]) for b in blocks if not b["pinned"] and not b.get("image") and len(b["lines"]) >= C.paragraph_lines}
-    cand = [b for b in blocks if not b["pinned"] and not b.get("image") and _size_class(b["size"]) in classes
-            and not any(l.get("tabbed") for l in b["lines"]) and not any(x.contains(b["bbox"] + (2, 2, -2, -2)) for x in boxes)]
+    classes = {
+        _size_class(b["size"])
+        for b in blocks
+        if not b["pinned"] and not b.get("image") and len(b["lines"]) >= C.paragraph_lines
+    }
+    cand = [
+        b
+        for b in blocks
+        if not b["pinned"]
+        and not b.get("image")
+        and _size_class(b["size"]) in classes
+        and not any(l.get("tabbed") for l in b["lines"])
+        and not any(x.contains(b["bbox"] + (2, 2, -2, -2)) for x in boxes)
+    ]
     texts = [b for b in blocks if not b["pinned"] and not b.get("image")]
     cells = _cells(cand, texts, rules, g) | _mates(cand, _columns(cand)) | _walled(cand, texts, walls, rules, g)
     cand = [b for b in cand if id(b) not in cells]
     col = _columns(cand)
     taken = {id(b) for b in cand}
     others = [b for b in blocks if id(b) not in taken and not b["pinned"]]
-    runs = [r for r in _runs(cand, others, col) if sum(len(b["lines"]) for b in r) >= C.frame_lines and max(len(b["lines"]) for b in r) >= C.paragraph_lines]
+    runs = [
+        r
+        for r in _runs(cand, others, col)
+        if sum(len(b["lines"]) for b in r) >= C.frame_lines and max(len(b["lines"]) for b in r) >= C.paragraph_lines
+    ]
     framed = {id(b) for r in runs for b in r}
     cols = set(col.values())
-    breaks = sorted(b["bbox"].y1 for b in others if sum(min(b["bbox"].x1, c[1]) - max(b["bbox"].x0, c[0]) > 0 for c in cols) > min(1, len(cols) - 1))
+    breaks = sorted(
+        b["bbox"].y1
+        for b in others
+        if sum(min(b["bbox"].x1, c[1]) - max(b["bbox"].x0, c[0]) > 0 for c in cols) > min(1, len(cols) - 1)
+    )
     rtl = sum(b["rtl"] for b in cand) > len(cand) / 2
     region = lambda r: bisect.bisect_right(breaks, r[0]["bbox"].y0 + 1)
     runs.sort(key=lambda r: (region(r), -col[id(r[0])][0] if rtl else col[id(r[0])][0], r[0]["bbox"].y0))
@@ -153,8 +198,9 @@ def _letters(elems, blocks):
         r, fill = e[0]["rect"], e[0].get("fill")
         host = None
         if fill is not None and R._gray_f(fill) < C.letter_gray and r.get_area() > 0:
-            inside = ((np.minimum(box[:, 2], r.x1) - np.maximum(box[:, 0], r.x0)).clip(0) * (np.minimum(box[:, 3], r.y1) - np.maximum(box[:, 1], r.y0)).clip(0)
-                      >= C.contain_share * r.width * r.height)
+            inside = (np.minimum(box[:, 2], r.x1) - np.maximum(box[:, 0], r.x0)).clip(0) * (
+                np.minimum(box[:, 3], r.y1) - np.maximum(box[:, 1], r.y0)
+            ).clip(0) >= C.contain_share * r.width * r.height
             k = np.flatnonzero((r.height <= C.letter_em * lh) & (r.width <= C.letter_em * lh) & inside)
             host = lines[k[0]] if len(k) else None
         span = host and max(host["spans"], key=lambda sp: (r & sp["bbox"]).get_area())
@@ -172,7 +218,11 @@ def _metrics(b, toks, px_of, g):
     """Line metrics of a paragraph set at the page's sizes: ascent, descent, pitch, indents, alignment."""
     bpx = px_of(b["size"])
     lettered = next((t for t in toks if t["path"] is not None), None)
-    asc, desc = R.font(lettered["path"], bpx, lettered["wght"]).getmetrics() if lettered else (C.ascent_share * bpx, (1 - C.ascent_share) * bpx)
+    asc, desc = (
+        R.font(lettered["path"], bpx, lettered["wght"]).getmetrics()
+        if lettered
+        else (C.ascent_share * bpx, (1 - C.ascent_share) * bpx)
+    )
     ind = R.indents(b, g, bpx) if len(b["lines"]) > 1 else (0.0, 0.0)
     return dict(asc=asc, desc=desc, pitch=R.line_pitch(b, bpx, asc, desc), ind=ind, align=b["align"], rtl=b["rtl"])
 
@@ -218,17 +268,33 @@ def _set_lines(lines, x0, W, top, m, final, out, kind, fill=None, pinned=False, 
         if rtl and m["align"] == "justify" and a == "justify":
             x = x0
         start = x
-        for t, f, w, sw in (R.visual(ln) if rtl else ln):
+        for t, f, w, sw in R.visual(ln) if rtl else ln:
             x += 0.0 if rtl else sw
             if t["path"] is None:
-                out["glyphs"].append((x, top + C.ascent_share * t["glyph"][1].height * t["px"] / t["size"] if t["tall"] else y, t))
+                out["glyphs"].append(
+                    (x, top + C.ascent_share * t["glyph"][1].height * t["px"] / t["size"] if t["tall"] else y, t)
+                )
             else:
                 out["items"].append((x, y, f, t["text"], t["gray"], "rtl" if t["rtl"] else "ltr", clip))
             x += w + (sw if rtl else 0.0) + extra
         y0, y1 = (y - asc, y + desc) if box is None else (max(y - asc, box[1]), min(y + desc, box[3]))
         if y1 > y0:
-            out["rects"].append(dict(x0=start, x1=x - extra, y0=y0, y1=y1, block=len(out["rects"]), src=(x0, x0 + W),
-                                     pinned=pinned, kind=kind, align=a, line=li, lines=len(lines), tokens=len(ln)))
+            out["rects"].append(
+                dict(
+                    x0=start,
+                    x1=x - extra,
+                    y0=y0,
+                    y1=y1,
+                    block=len(out["rects"]),
+                    src=(x0, x0 + W),
+                    pinned=pinned,
+                    kind=kind,
+                    align=a,
+                    line=li,
+                    lines=len(lines),
+                    tokens=len(ln),
+                )
+            )
         y += pitch
     return top + len(lines) * pitch
 
@@ -315,8 +381,22 @@ def _balance(frames, units, obstacles, typesetter, role_of, px_of, g, width, pag
 
     def fits(cut):
         trial = deque(dict(u) for u in units)
-        _pour(frames, trial, lambda: False, obstacles, typesetter, role_of, px_of, g, width, page_h,
-              dict(items=[], glyphs=[], rects=[]), up, False, cut)
+        _pour(
+            frames,
+            trial,
+            lambda: False,
+            obstacles,
+            typesetter,
+            role_of,
+            px_of,
+            g,
+            width,
+            page_h,
+            dict(items=[], glyphs=[], rects=[]),
+            up,
+            False,
+            cut,
+        )
         return not trial
 
     if not fits(0.0):
@@ -342,8 +422,14 @@ def layout(src, number, rng, fonts, width_px, k=1.0, turn=False, pick=None):
     gfx, found = R.graphics(src, number, True, sh, sw, below=bottom), R.pictures(src, number, sh, sw, below=bottom)
     k_units = k
     if T:
-        frames = {id(b) for sec in split_page(first + found, R._hrules(gfx, 1.0), 1.0, R.cell_boxes(gfx, sw * sh), R._vrules(gfx, 1.0))[0]
-                  for fr in sec for b in fr}
+        frames = {
+            id(b)
+            for sec in split_page(
+                first + found, R._hrules(gfx, 1.0), 1.0, R.cell_boxes(gfx, sw * sh), R._vrules(gfx, 1.0)
+            )[0]
+            for fr in sec
+            for b in fr
+        }
         first, gfx, found, squeeze = T.apply(first, gfx, found, frames)
         k *= squeeze
     elems = _letters(gfx, first)
@@ -368,7 +454,11 @@ def layout(src, number, rng, fonts, width_px, k=1.0, turn=False, pick=None):
     later = {}
 
     out = dict(items=[], glyphs=[], rects=[])
-    fixed_ps = [p for p in (R.prepare(b, boxes[ids != id(b)], pw, g, typesetter, role_of, px_of, cols_px, walls) for b in texts) if p]
+    fixed_ps = [
+        p
+        for p in (R.prepare(b, boxes[ids != id(b)], pw, g, typesetter, role_of, px_of, cols_px, walls) for b in texts)
+        if p
+    ]
     pics = [(b["bbox"].x0 * g, b["bbox"].y0 * g, dict(b, scale=1.0)) for b in fixed if b.get("image")]
     st = dict(used=1)
     gap = C.gap_body * px_of(body)
@@ -401,23 +491,73 @@ def layout(src, number, rng, fonts, width_px, k=1.0, turn=False, pick=None):
         top, bottom = min(fr[0]["bbox"].y0 for fr in sec) * g, max(fr[-1]["bbox"].y1 for fr in sec) * g
         d = up(top)
         moved = [(a, b - up(b), c, e - up(b)) for a, b, c, e in obstacles]
-        cut = 0.0 if last or len(sec) < 2 else _balance(sec, units[n], moved, typesetter, role_of, px_of, g, width_px, page_h, d, bottom - top)
-        ok, low = _pour(sec, units[n], more if last else (lambda: False), moved, typesetter, role_of, px_of, g, width_px, page_h, out, d, last, cut)
+        cut = (
+            0.0
+            if last or len(sec) < 2
+            else _balance(sec, units[n], moved, typesetter, role_of, px_of, g, width_px, page_h, d, bottom - top)
+        )
+        ok, low = _pour(
+            sec,
+            units[n],
+            more if last else (lambda: False),
+            moved,
+            typesetter,
+            role_of,
+            px_of,
+            g,
+            width_px,
+            page_h,
+            out,
+            d,
+            last,
+            cut,
+        )
         full = full and ok
         done.append((bottom, 0.0 if last else max(bottom - d - low, 0.0)))
     for p in fixed_ps:
         d = 0.0 if p["pinned"] else up(p["y0"])
         top, h = p["y0"] - d, p["y1"] - p["y0"]
-        _set_lines(p["lines"], p["bx0"], p["W"], top + max(h - len(p["lines"]) * p["pitch"], 0.0) / 2, p, not p["b"].get("flush"), out, "fixed", p["x1"] - p["x0"],
-                   p["pinned"], (p["bx0"] - 1, top, p["bx0"] + p["W"] + 1, top + h + C.descent_room * p["desc"]))
+        _set_lines(
+            p["lines"],
+            p["bx0"],
+            p["W"],
+            top + max(h - len(p["lines"]) * p["pitch"], 0.0) / 2,
+            p,
+            not p["b"].get("flush"),
+            out,
+            "fixed",
+            p["x1"] - p["x0"],
+            p["pinned"],
+            (p["bx0"] - 1, top, p["bx0"] + p["W"] + 1, top + h + C.descent_room * p["desc"]),
+        )
     pics = [(x, t if b["pinned"] else t - up(t), b) for x, t, b in pics]
     elems = [(dr, fx, 0.0 if fx else up(dr["rect"].y0 * g)) for dr, fx in elems]
-    info = dict(head=typesetter.role["head"], body=typesetter.role["body"], mono=typesetter.role["mono"],
-                body_src_pt=body, k=k, pages=st["used"], dropped=typesetter.dropped, full=full,
-                wrapped=sum(1 for p in fixed_ps if not p["multi"] and len(p["lines"]) > 1),
-                unresolved={" ".join(f"U+{ord(x):04X} {unicodedata.name(x, '?')}" for x in c): n for c, n in typesetter.unresolved.items()})
-    return dict(items=out["items"], glyphs=out["glyphs"], pics=pics, rects=out["rects"], elems=elems, cols=cols_px, g=g,
-                size=(width_px, page_h), info=info)
+    info = dict(
+        head=typesetter.role["head"],
+        body=typesetter.role["body"],
+        mono=typesetter.role["mono"],
+        body_src_pt=body,
+        k=k,
+        pages=st["used"],
+        dropped=typesetter.dropped,
+        full=full,
+        wrapped=sum(1 for p in fixed_ps if not p["multi"] and len(p["lines"]) > 1),
+        unresolved={
+            " ".join(f"U+{ord(x):04X} {unicodedata.name(x, '?')}" for x in c): n
+            for c, n in typesetter.unresolved.items()
+        },
+    )
+    return dict(
+        items=out["items"],
+        glyphs=out["glyphs"],
+        pics=pics,
+        rects=out["rects"],
+        elems=elems,
+        cols=cols_px,
+        g=g,
+        size=(width_px, page_h),
+        info=info,
+    )
 
 
 def _open(path, number):
@@ -425,8 +565,8 @@ def _open(path, number):
     doc = pymupdf.open(path)
     box = R.content_box(doc[number])
     for k in range(number, min(number + C.max_pages, len(doc))):
-        cb, mb = doc[k].cropbox, doc[k].mediabox      # set_cropbox: x in PDF units, y down from the MediaBox top;
-        inside = pymupdf.Rect(mb.x0, 0, mb.x1, mb.height) + (0.01, 0.01, -0.01, -0.01)   # its check is exact
+        cb, mb = doc[k].cropbox, doc[k].mediabox  # set_cropbox: x in PDF units, y down from the MediaBox top;
+        inside = pymupdf.Rect(mb.x0, 0, mb.x1, mb.height) + (0.01, 0.01, -0.01, -0.01)  # its check is exact
         doc[k].set_cropbox((box + (cb.x0, cb.y0, cb.x0, cb.y0)) & inside)
     return doc, box
 
@@ -436,11 +576,16 @@ def _ink_box(lay):
     below), pictures, glyph runs and graphics."""
     g = lay["g"]
     boxes = [(r["x0"], r["y0"], r["x1"], r["y1"]) for r in lay["rects"]]
-    boxes += [(x, y - C.line_asc_em * f.key[1], x + R.text_width(*f.key, text, direction), y + C.line_desc_em * f.key[1])
-              for x, y, f, text, _, direction, _ in lay["items"] if text.strip()]
+    boxes += [
+        (x, y - C.line_asc_em * f.key[1], x + R.text_width(*f.key, text, direction), y + C.line_desc_em * f.key[1])
+        for x, y, f, text, _, direction, _ in lay["items"]
+        if text.strip()
+    ]
     boxes += [(x, top, x + b["rect"].width * g, top + b["rect"].height * g) for x, top, b in lay["pics"]]
     boxes += [(x, y - t["px"], x + t["px"], y) for x, y, t in lay["glyphs"]]
-    boxes += [(d["rect"].x0 * g, d["rect"].y0 * g - dy, d["rect"].x1 * g, d["rect"].y1 * g - dy) for d, _, dy in lay["elems"]]
+    boxes += [
+        (d["rect"].x0 * g, d["rect"].y0 * g - dy, d["rect"].x1 * g, d["rect"].y1 * g - dy) for d, _, dy in lay["elems"]
+    ]
     if not boxes:
         return (0.0, 0.0) + tuple(lay["size"])
     b = np.array(boxes, float)
@@ -461,7 +606,9 @@ def sheet_layout(path, number, seed, fonts, margin, size, body_px=None, turn=Fal
     g = w / box.width
     body = R.body_size(R.page_blocks(src, number, True))
     k = body_px / (body * g) if body_px and body else 1.0
-    lay = layout(src, number, np.random.default_rng(seed), fonts, round(w * box.height / box.width) if turn else w, k, turn, pick)
+    lay = layout(
+        src, number, np.random.default_rng(seed), fonts, round(w * box.height / box.width) if turn else w, k, turn, pick
+    )
     lw, lh = lay["size"]
     x0, y0, x1, y1 = _ink_box(lay)
     if turn:

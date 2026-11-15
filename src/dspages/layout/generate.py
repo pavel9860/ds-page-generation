@@ -1,17 +1,16 @@
 """Part 1: flat page layouts from the manifest (restyled PDF pages and rasterized documents) with paper effects."""
+
 import cv2
 import numpy as np
+import pymupdf
 
 from ..config import Preset
 from . import paper
+from .config import INK_BORDER  # noqa: F401
 from .content import SCAN_MAX_SIDE, bbox, content_mask
 from .grid import crossings, grid_page
 from .sources import is_pdf, raster_page
-import pymupdf
-
 from .template import draw_sheet, sheet_layout
-
-INK_BORDER = 0.005
 
 
 def _crop(src, x, y, w, h, pad):
@@ -20,7 +19,7 @@ def _crop(src, x, y, w, h, pad):
     out = np.full((h, w), pad, np.uint8)
     xa, ya, xb, yb = max(x, 0), max(y, 0), min(x + w, W), min(y + h, H)
     if xb > xa and yb > ya:
-        out[ya - y:yb - y, xa - x:xb - x] = src[ya:yb, xa:xb]
+        out[ya - y : yb - y, xa - x : xb - x] = src[ya:yb, xa:xb]
     return out
 
 
@@ -30,8 +29,14 @@ def _raster_sheet(entry, pw, ph, c, image=None):
     x, y, w, h = entry["window"]
     k = min(pw / w, c.max_zoom) if is_pdf(entry) else 1.0
     src = raster_page(entry, k) if image is None else image
-    exact = k == pw / w                                     # rendered at the sheet's size: cut to it
-    crop = _crop(src, round(x * k), round(y * k), *((pw, ph) if exact else (round(w * k), round(h * k))), int(np.percentile(src, 95)))
+    exact = k == pw / w  # rendered at the sheet's size: cut to it
+    crop = _crop(
+        src,
+        round(x * k),
+        round(y * k),
+        *((pw, ph) if exact else (round(w * k), round(h * k))),
+        int(np.percentile(src, 95)),
+    )
     if crop.shape != (ph, pw):
         crop = cv2.resize(crop, (pw, ph), interpolation=cv2.INTER_AREA if crop.shape[1] >= pw else cv2.INTER_CUBIC)
     return crop, dict(window=(x, y, w, h), zoom=k, upscale=float(pw / round(w * k)))
@@ -60,15 +65,24 @@ def make_layout(rng, entry, P: Preset, fonts, spread=False, font_pt=None):
     c = P.layout
     pw, ph = c.page_px
     ppm = pw / c.sheet_mm[0]
-    meta = dict(source=entry["source_path"], page_index=entry["page_index"], kind=entry["kind"],
-                language=entry["language"], category=entry["category"])
+    meta = dict(
+        source=entry["source_path"],
+        page_index=entry["page_index"],
+        kind=entry["kind"],
+        language=entry["language"],
+        category=entry["category"],
+    )
     desc = dict(size=(pw, ph), ppm=ppm, entry=entry)
     if rng.random() < c.grid_prob:
         m = rng.uniform(*c.margin_frac)
         mx, my = round(m * pw), round(m * ph)
         desc.update(kind="grid", margin=(mx, my), ink=(mx / pw, my / ph, 1 - mx / pw, 1 - my / ph))
-        meta.update(kind="grid", margin=float(m), fill=1.0,
-                    crossings_mm=crossings((pw - 2 * mx) / ppm, (ph - 2 * my) / ppm, c.grid) + [mx / ppm, my / ppm])
+        meta.update(
+            kind="grid",
+            margin=float(m),
+            fill=1.0,
+            crossings_mm=crossings((pw - 2 * mx) / ppm, (ph - 2 * my) / ppm, c.grid) + [mx / ppm, my / ppm],
+        )
     elif entry["kind"] == "raster":
         x, y, w, h = entry["window"]
         k = min(1.0, SCAN_MAX_SIDE / max(w, h)) if is_pdf(entry) else 1.0
@@ -83,12 +97,21 @@ def make_layout(rng, entry, P: Preset, fonts, spread=False, font_pt=None):
             with pymupdf.open(entry["source_path"]) as doc:
                 pages = sorted((n, n + 1 if n + 1 < doc.page_count else max(n - 1, 0)))
         hw = pw // len(pages)
-        parts = [sheet_layout(entry["source_path"], k, seed, fonts, m, (hw, ph), font_pt and font_pt * ppm * 25.4 / 72)
-                 for k in pages]
-        ink = np.array([[d["ink"][0] + i * hw, d["ink"][1], d["ink"][2] + i * hw, d["ink"][3]] for i, (d, _) in enumerate(parts)])
-        desc.update(kind="refont", parts=[d for d, _ in parts],
-                    ink=(ink[:, 0].min() / pw, ink[:, 1].min() / ph, ink[:, 2].max() / pw, ink[:, 3].max() / ph))
-        meta.update(pages=pages, margin=float(m), fill=entry["fill"], body_pt=round(parts[0][1]["body_px"] / ppm * 72 / 25.4, 1))
+        parts = [
+            sheet_layout(entry["source_path"], k, seed, fonts, m, (hw, ph), font_pt and font_pt * ppm * 25.4 / 72)
+            for k in pages
+        ]
+        ink = np.array(
+            [[d["ink"][0] + i * hw, d["ink"][1], d["ink"][2] + i * hw, d["ink"][3]] for i, (d, _) in enumerate(parts)]
+        )
+        desc.update(
+            kind="refont",
+            parts=[d for d, _ in parts],
+            ink=(ink[:, 0].min() / pw, ink[:, 1].min() / ph, ink[:, 2].max() / pw, ink[:, 3].max() / ph),
+        )
+        meta.update(
+            pages=pages, margin=float(m), fill=entry["fill"], body_pt=round(parts[0][1]["body_px"] / ppm * 72 / 25.4, 1)
+        )
     desc["effects_seed"] = int(rng.integers(1 << 31))
     desc["rotate180"] = meta["rotate180"] = bool(rng.random() < c.rotate180_prob)
     if desc["rotate180"]:
@@ -110,7 +133,7 @@ def draw_layout(desc, s, P: Preset):
     if desc["kind"] == "grid":
         mx, my = (round(v * s) for v in desc["margin"])
         gray = np.full((ph, pw), 255, np.uint8)
-        gray[my:ph - my, mx:pw - mx] = grid_page(pw - 2 * mx, ph - 2 * my, ppm, c.grid)
+        gray[my : ph - my, mx : pw - mx] = grid_page(pw - 2 * mx, ph - 2 * my, ppm, c.grid)
     elif desc["kind"] == "raster":
         gray, _ = _raster_sheet(desc["entry"], pw, ph, c, desc["image"])
     else:
@@ -119,7 +142,7 @@ def draw_layout(desc, s, P: Preset):
         for i, d in enumerate(desc["parts"]):
             part = draw_sheet(d, s)
             x0 = round(i * hw * s)
-            gray[:, x0:x0 + part.shape[1]] = part[:ph, :pw - x0]
+            gray[:, x0 : x0 + part.shape[1]] = part[:ph, : pw - x0]
     page, effects = paper.apply(np.random.default_rng(desc["effects_seed"]), gray, ppm, c, P.geometry.shallow)
     if desc["rotate180"]:
         page, gray = np.ascontiguousarray(page[::-1, ::-1]), np.ascontiguousarray(gray[::-1, ::-1])

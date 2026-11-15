@@ -3,17 +3,17 @@
   2. handwriting / print boxes (yolo26s, fp16, imgsz 1024, conf floor 0.25), one process per GPU -> hw/<shard>.npz (ids, offsets, cls 0 hw / 1 print, conf, failed)
 Fill / pic is CPU work: it runs as its own CPU kernel (dspages.fillpic kernel.py, `kaggle.push`), never on the GPU session.
 `kaggle.push` fills EMBED_SRC (the source of the embedding script) in front of this file."""
+
 import os
 import subprocess
 import sys
 
-
 W = "/kaggle/working"
-open(f"{W}/embed_kaggle.py", "w").write(EMBED_SRC)    # noqa: F821
+open(f"{W}/embed_kaggle.py", "w").write(EMBED_SRC)  # noqa: F821
 subprocess.run([sys.executable, "-u", f"{W}/embed_kaggle.py", "/kaggle/input", W], check=True)
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ultralytics==8.4.175"], check=True)
 
-DET = r'''
+DET = r"""
 import glob, io, os, sys, numpy as np
 from PIL import Image
 from ultralytics import YOLO
@@ -42,7 +42,7 @@ for s in sorted(glob.glob("/kaggle/input/**/pages_*.npz", recursive=True))[gpu::
     np.savez("/kaggle/working/hw/" + name, ids=np.array(out_ids, np.int32).reshape(-1, 2), offsets=np.array(offs, np.int64),
              cls=np.array(cls, np.uint8), conf=np.array(conf, np.uint8), failed=np.array(failed, np.int32).reshape(-1, 2))
     print(f"gpu{gpu} {name}: {len(out_ids)} pages, {len(cls)} boxes, {len(failed)} failed", flush=True)
-'''
+"""
 os.makedirs(f"{W}/hw", exist_ok=True)
 open(f"{W}/det.py", "w").write(DET)
 ps = [subprocess.Popen([sys.executable, "-u", f"{W}/det.py", str(g), "2"]) for g in range(2)]

@@ -10,23 +10,23 @@ the layout values; mean squared distance of random pairs per head; then k-center
 Data: ds100k/metric (OUT).
 
 python tools/ds_metric.py prep | push | test | fetch | report"""
+
 import argparse
 import json
 import sqlite3
-
-import numpy as np
-import pandas as pd
 
 import ds100k as D
 import ds_lda as LD
 import ds_spread as S
 import kaggle_fps as KF
+import numpy as np
+import pandas as pd
 
 OUT = D.OUT / "metric"
 AUX, KID = "pavel9860/ds-metric-aux", "pavel9860/ds-metric"
 HOLD, DIM = 0.1, 8
 
-KERNEL = r'''
+KERNEL = r"""
 import glob, json, time, numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 t0 = time.time()
 def log(*a):
@@ -192,7 +192,7 @@ np.savez(f"{OUTDIR}/metric.npz", pool_i=real[rows], Z=torch.cat(Z, 1).half().cpu
 json.dump({"knn": res, "pair_msd": share}, open(f"{OUTDIR}/metric.json", "w"), indent=1)
 torch.save(net.state_dict(), f"{OUTDIR}/head.pt")
 log("DONE")
-'''
+"""
 
 
 def hw_class(hw, text):
@@ -206,7 +206,9 @@ def cmd_prep(_):
     m = np.load(S.OUT / "aux" / "mask.npy")
     real = np.flatnonzero(m)
     R = P.iloc[real].reset_index(drop=True)
-    sp = pd.read_parquet(S.M.LAYOUTS / "archive" / "info" / "scan_pct.parquet", columns=["doc", "page", "fill", "pic", "wx", "wy", "ww"])
+    sp = pd.read_parquet(
+        S.M.LAYOUTS / "archive" / "info" / "scan_pct.parquet", columns=["doc", "page", "fill", "pic", "wx", "wy", "ww"]
+    )
     R = R.merge(sp, on=["doc", "page"], how="left")
     assert len(R) == len(real)
     lay = np.column_stack([R.fill, R.pic, R.wx, R.wy, R.ww, np.log1p(R.text)]).astype(np.float32)
@@ -227,32 +229,64 @@ def cmd_prep(_):
     d = OUT / "aux"
     d.mkdir(parents=True, exist_ok=True)
     np.save(d / "mask.npy", m)
-    np.savez(d / "labels.npz", hw=hw_class(R.hw, R.text), type=tid, layout=lay.astype(np.float16), kind=kind, hold=hold,
-             types=np.array(types))
-    print(f"pages {len(real)}; hw classes (none, filled, hw) {np.bincount(hw_class(R.hw, R.text), minlength=3).tolist()}; typed {float((tid >= 0).mean()):.3f} in {len(types)} types; "
-          f"human page-kind labels {int((kind != '').sum())}; held-out pages {int(hold.sum())} of {len(held)} documents")
-    (d / "dataset-metadata.json").write_text(json.dumps({"title": AUX.split("/")[1], "id": AUX, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+    np.savez(
+        d / "labels.npz",
+        hw=hw_class(R.hw, R.text),
+        type=tid,
+        layout=lay.astype(np.float16),
+        kind=kind,
+        hold=hold,
+        types=np.array(types),
+    )
+    print(
+        f"pages {len(real)}; hw classes (none, filled, hw) {np.bincount(hw_class(R.hw, R.text), minlength=3).tolist()}; typed {float((tid >= 0).mean()):.3f} in {len(types)} types; "
+        f"human page-kind labels {int((kind != '').sum())}; held-out pages {int(hold.sum())} of {len(held)} documents"
+    )
+    (d / "dataset-metadata.json").write_text(
+        json.dumps({"title": AUX.split("/")[1], "id": AUX, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]})
+    )
     print(KF.kaggle("datasets", "version", "-p", str(d), "-m", "hw classes", timeout=3600)[-200:])
 
 
 def code(root, outdir, dev, sub, steps, npick):
-    return f"ROOT, OUTDIR, DEV, SUB, DIM, STEPS, BATCH, RNC_B, NPICK = {root!r}, {outdir!r}, {dev!r}, {sub}, {DIM}, {steps}, 1024, 128, {npick}\n" + KERNEL
+    return (
+        f"ROOT, OUTDIR, DEV, SUB, DIM, STEPS, BATCH, RNC_B, NPICK = {root!r}, {outdir!r}, {dev!r}, {sub}, {DIM}, {steps}, 1024, 128, {npick}\n"
+        + KERNEL
+    )
 
 
 def cmd_push(_):
     d = OUT / "kernel"
     d.mkdir(parents=True, exist_ok=True)
     (d / "run.py").write_text(code("/kaggle/input", "/kaggle/working", "cuda", None, 6000, 100_000))
-    (d / "kernel-metadata.json").write_text(json.dumps({
-        "id": KID, "title": KID.split("/")[1], "code_file": "run.py", "language": "python", "kernel_type": "script", "is_private": True,
-        "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "dataset_sources": [KF.DS, AUX], "kernel_sources": [],
-        "competition_sources": [], "model_sources": [], "machine_shape": "NvidiaTeslaT4"}))
+    (d / "kernel-metadata.json").write_text(
+        json.dumps(
+            {
+                "id": KID,
+                "title": KID.split("/")[1],
+                "code_file": "run.py",
+                "language": "python",
+                "kernel_type": "script",
+                "is_private": True,
+                "enable_gpu": True,
+                "enable_tpu": False,
+                "enable_internet": False,
+                "dataset_sources": [KF.DS, AUX],
+                "kernel_sources": [],
+                "competition_sources": [],
+                "model_sources": [],
+                "machine_shape": "NvidiaTeslaT4",
+            }
+        )
+    )
     print(KF.kaggle("kernels", "push", "-p", str(d)))
 
 
 def cmd_test(_):
     import glob
+
     import torch
+
     torch.set_num_threads(S.M.WORKERS)
     root = D.TESTS / "metric" / "test" / "in"
     root.mkdir(parents=True, exist_ok=True)
@@ -260,7 +294,10 @@ def cmd_test(_):
         t = root / f.rsplit("/", 1)[1]
         if not t.exists():
             t.symlink_to(f)
-    exec(compile(code(str(root), str(D.TESTS / "metric" / "test"), "cpu", 20_000, 30, 2000), "kernel", "exec"), {"__name__": "kernel"})
+    exec(
+        compile(code(str(root), str(D.TESTS / "metric" / "test"), "cpu", 20_000, 30, 2000), "kernel", "exec"),
+        {"__name__": "kernel"},
+    )
 
 
 def cmd_fetch(_):
@@ -280,13 +317,25 @@ def cmd_report(_):
     P["hw class"] = np.array(["none", "filled", "hw"])[hw_class(P.hw, P.text)]
     j = json.load(open(OUT / "out" / "metric.json"))
     print(pd.DataFrame(j["knn"]).T.round(3).to_string())
-    print("mean squared distance of random pairs per head before scaling to 1 (hw, content, layout):", [round(x, 3) for x in j["pair_msd"]])
+    print(
+        "mean squared distance of random pairs per head before scaling to 1 (hw, content, layout):",
+        [round(x, 3) for x in j["pair_msd"]],
+    )
     m = np.load(S.OUT / "aux" / "mask.npy")
     raw = pd.read_parquet(D.OUT / "select.parquet").pool_i.to_numpy()
-    sets = {"pool": np.flatnonzero(m), "raw 1536 k-center": raw[m[raw]], "head k-center": np.load(OUT / "out" / "metric.npz")["pick"]}
+    sets = {
+        "pool": np.flatnonzero(m),
+        "raw 1536 k-center": raw[m[raw]],
+        "head k-center": np.load(OUT / "out" / "metric.npz")["pick"],
+    }
     for col in ("hw class", "scan", "type", "lang"):
-        T = pd.DataFrame({k: P[col].iloc[v].value_counts(normalize=True) for k, v in sets.items()}).fillna(0).sort_values("pool", ascending=False)
-        print(f"\n{col} share"); print(T.head(16).round(4).to_string())
+        T = (
+            pd.DataFrame({k: P[col].iloc[v].value_counts(normalize=True) for k, v in sets.items()})
+            .fillna(0)
+            .sort_values("pool", ascending=False)
+        )
+        print(f"\n{col} share")
+        print(T.head(16).round(4).to_string())
 
 
 if __name__ == "__main__":

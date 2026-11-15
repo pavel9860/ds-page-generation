@@ -18,7 +18,12 @@ PKG = Path(__file__).resolve().parents[1] / "src" / "dspages" / "fillpic"
 
 
 def test_ink_rule_is_the_digital_one():
-    assert (CONFIG.geometry.mask_side, CONFIG.ink.line_ksize, CONFIG.ink.line_thresh, CONFIG.ink.eps) == (content.SCAN_MAX_SIDE, content.LINE_KSIZE, content.LINE_THRESH, content.PATCH_INK_EPS)
+    assert (CONFIG.geometry.mask_side, CONFIG.ink.line_ksize, CONFIG.ink.line_thresh, CONFIG.ink.eps) == (
+        content.SCAN_MAX_SIDE,
+        content.LINE_KSIZE,
+        content.LINE_THRESH,
+        content.PATCH_INK_EPS,
+    )
     assert CONFIG.geometry.grid == MF._LAYOUT.fill_grid
 
 
@@ -26,7 +31,12 @@ def test_config_overlay(tmp_path):
     p = tmp_path / "c.json"
     p.write_text(json.dumps({"geometry": {"margin": 0.1}, "maps": {"std_kernels": [3, 9]}}))
     c = Config.load(p)
-    assert c.geometry.margin == 0.1 and c.geometry.infer_margin == 0.05 and c.maps.std_kernels == (3, 9) and c.geometry.grid == 16
+    assert (
+        c.geometry.margin == 0.1
+        and c.geometry.infer_margin == 0.05
+        and c.maps.std_kernels == (3, 9)
+        and c.geometry.grid == 16
+    )
     assert Config.load() == CONFIG
 
 
@@ -44,8 +54,13 @@ def test_tile_sums_match_the_window():
     m = (rng.random((60, 40)) < 0.3).astype(np.float32)
     win = (-4.0, 6.0, 44.0, 52.0)
     got = tile_mean(m, win, 4)
-    ys, xs = np.clip(np.round(6 + 52 * np.linspace(0, 1, 5)).astype(int), 0, 60), np.clip(np.round(-4 + 44 * np.linspace(0, 1, 5)).astype(int), 0, 40)
-    want = np.array([[m[ys[i]:ys[i + 1], xs[j]:xs[j + 1]].sum() for j in range(4)] for i in range(4)]) / (44 * 52 / 16)
+    ys, xs = (
+        np.clip(np.round(6 + 52 * np.linspace(0, 1, 5)).astype(int), 0, 60),
+        np.clip(np.round(-4 + 44 * np.linspace(0, 1, 5)).astype(int), 0, 40),
+    )
+    want = np.array([[m[ys[i] : ys[i + 1], xs[j] : xs[j + 1]].sum() for j in range(4)] for i in range(4)]) / (
+        44 * 52 / 16
+    )
     assert np.allclose(got, want, atol=1e-6)
     Ty, Tx, area = tile_matrices(win, m.shape, 4)
     assert Ty.shape == (4, 60) and Tx.shape == (4, 40) and area == 44 * 52 / 16

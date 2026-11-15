@@ -4,20 +4,22 @@
 
 Whether the stored vectors are those of the pages they are filed under: tools/emb_check.py (a random sample embedded again on the Kaggle GPUs).
 Data goes to Layouts/archive/info/emb_sync (WORK). 2 workers for the page counts (the file's xref, no rendering)."""
+
 import argparse
-from concurrent.futures import ProcessPoolExecutor
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pymupdf
 
+from dspages import paths as _P
 from dspages.hand.config import PATHS
 
-sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting")
-from pagetype.layouts import Layouts, load_manifest      # noqa: E402
+sys.path.insert(0, f"{_P.CORPUS}")
+from pagetype.layouts import Layouts, load_manifest  # noqa: E402
 
 LAYOUTS = Path(PATHS.layouts)
 EMB = Path(PATHS.uvtm) / "emb_out"
@@ -57,13 +59,33 @@ def cmd_check(_):
     stale = has & D.manifest_pages.notna() & (D.manifest_pages != D.actual)
     print(f"{len(D)} embedded documents, {len(df)} rows")
     print("no file now:", int(D.path.isna().sum()), "| unreadable:", int((D.actual < 0).sum()))
-    print("rows of pages beyond the file's end (phantom):", int(df.merge(D[phantom][["doc", "actual"]], on="doc").pipe(lambda x: (x.page >= x.actual).sum())),
-          "in", int(phantom.sum()), "documents (images:", int((phantom & img).sum()), ")")
-    print("manifest page count != actual:", int(stale.sum()), "(fewer pages now:", int((stale & (D.actual < D.manifest_pages)).sum()),
-          ", more:", int((stale & (D.actual > D.manifest_pages)).sum()), ") | manifest has no count:", int((has & D.manifest_pages.isna()).sum()))
+    print(
+        "rows of pages beyond the file's end (phantom):",
+        int(df.merge(D[phantom][["doc", "actual"]], on="doc").pipe(lambda x: (x.page >= x.actual).sum())),
+        "in",
+        int(phantom.sum()),
+        "documents (images:",
+        int((phantom & img).sum()),
+        ")",
+    )
+    print(
+        "manifest page count != actual:",
+        int(stale.sum()),
+        "(fewer pages now:",
+        int((stale & (D.actual < D.manifest_pages)).sum()),
+        ", more:",
+        int((stale & (D.actual > D.manifest_pages)).sum()),
+        ") | manifest has no count:",
+        int((has & D.manifest_pages.isna()).sum()),
+    )
     gone = stale & (D.actual < D.manifest_pages)
-    print("pages deleted from the file (fewer than the manifest says) with phantom rows:", int((gone & phantom).sum()),
-          "| without (embedded pages still inside):", int((gone & ~phantom).sum()), "<- their page numbers may have shifted")
+    print(
+        "pages deleted from the file (fewer than the manifest says) with phantom rows:",
+        int((gone & phantom).sum()),
+        "| without (embedded pages still inside):",
+        int((gone & ~phantom).sum()),
+        "<- their page numbers may have shifted",
+    )
 
 
 if __name__ == "__main__":

@@ -25,5 +25,5 @@ def test_variants_keep_the_sheet():
             assert step_error(g)[1] < 0.01
             assert abs(g[..., 2].min()) < 1e-3 and g[..., 2].max() > 1.0
             du, dv = np.gradient(g, axis=1), np.gradient(g, axis=0)
-            assert (np.cross(du, -dv)[..., 2] > 0).mean() > 0.99          # face up, right-handed
-            assert g[0, :, 1].mean() > g[-1, :, 1].mean()                 # row 0 at the top
+            assert (np.cross(du, -dv)[..., 2] > 0).mean() > 0.99  # face up, right-handed
+            assert g[0, :, 1].mean() > g[-1, :, 1].mean()  # row 0 at the top

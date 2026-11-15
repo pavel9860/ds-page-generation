@@ -4,6 +4,7 @@ text is the full font's (cmap, and through GSUB the conjuncts and half forms bui
 order, as a text map gives it (refont puts Indic signs in logical order).
 
 Files: DSPAGES_FONTS_REF (default <UVTM>/fonts_ref), *.ttf / *.otf, known by the family of their name."""
+
 import hashlib
 import os
 from functools import lru_cache
@@ -12,8 +13,9 @@ from pathlib import Path
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.ttLib import TTFont
 
-from . import legacy
 from ..config import UVTM
+from . import legacy
+from .config import MAX_APART  # noqa: F401
 
 DIR = Path(os.environ.get("DSPAGES_FONTS_REF", f"{UVTM}/fonts_ref"))
 
@@ -28,14 +30,18 @@ def _hasher(data):
         pen = DecomposingRecordingPen(gs)
         try:
             gs[names[g]].draw(pen)
-        except Exception:                                                  # a glyph the program cannot draw: not matched
+        except Exception:  # a glyph the program cannot draw: not matched
             return None
         if not pen.value:
             return None
         k = 1000 / upem
-        rec = [(op, tuple(None if pt is None else (round(pt[0] * k), round(pt[1] * k)) for pt in pts)) for op, pts in pen.value]   # None: the implied
+        rec = [
+            (op, tuple(None if pt is None else (round(pt[0] * k), round(pt[1] * k)) for pt in pts))
+            for op, pts in pen.value
+        ]  # None: the implied
         # on-curve point of a contour of off-curve points only (qCurveTo)
         return hashlib.md5(repr(rec).encode()).hexdigest()[:16]
+
     return h
 
 
@@ -44,6 +50,7 @@ def references():
     """{family key: [({outline hash: (glyph id, text)}, {glyph id: text}, path) per file]} of the reference fonts (one family can have several versions).
     Kept in DIR/.references.pkl, made again when a font file changes (8 s to build, read in 0.1 s)."""
     import pickle
+
     fs = sorted(DIR.glob("*.[ot]tf")) if DIR.is_dir() else []
     sig = [(f.name, f.stat().st_size, f.stat().st_mtime_ns) for f in fs]
     cache = DIR / ".references.pkl"
@@ -61,6 +68,7 @@ def references():
 
 def _references():
     from .refont import _font_glyph_text
+
     out = {}
     for f in sorted(DIR.glob("*.[ot]tf")) if DIR.is_dir() else ():
         data = f.read_bytes()
@@ -69,7 +77,9 @@ def _references():
         text, direct, n = _font_glyph_text(data)
         h = _hasher(data)
         by_hash = {}
-        for g in sorted(text, key=lambda g: (g not in direct, g)):       # an outline drawn by several glyphs: the one the cmap names
+        for g in sorted(
+            text, key=lambda g: (g not in direct, g)
+        ):  # an outline drawn by several glyphs: the one the cmap names
             k = h(g) if g < n else None
             if k:
                 by_hash.setdefault(k, (g, text[g]))
@@ -102,12 +112,14 @@ def glyph_texts(name, data):
 @lru_cache(maxsize=16)
 def _hb(path):
     import uharfbuzz as hb
+
     return hb.Font(hb.Face(hb.Blob.from_file_path(path)))
 
 
 def shaped(path, text):
     """[(glyph id, x of its origin in em)] the reference font draws for a text (HarfBuzz)."""
     import uharfbuzz as hb
+
     font = _hb(path)
     buf = hb.Buffer()
     buf.add_str(text)
@@ -120,22 +132,20 @@ def shaped(path, text):
     return out
 
 
-MAX_APART = 2                                                                # search: the glyph texts with up to this many neighbours swapped
-
-
 def word(path, pieces):
     """The Unicode text of a word from its glyphs in drawing order [(text, reference glyph id, x of the origin in em)]: an order of the glyph texts
     that the reference font shapes (HarfBuzz) into exactly these glyphs in this order (the font's own rules decide where a prefix vowel, a reph, a below
     form goes). (text, True) when one is found, else (the Indic reading of the drawing order, False: counted as unverified)."""
     from . import indic
+
     want = [(g, x) for _, g, x in pieces]
     texts = [t.replace(indic.REPH, "") for t, _, _ in pieces]
     drawn = "".join(t for t, _, _ in pieces)
     first = (indic.to_logical(drawn) if indic.visual_order(drawn) else drawn).replace(indic.REPH, "")
     cands, n = {first: 0, "".join(texts): 0}, len(texts)
     orders = [list(range(n))]
-    for moved in range(1, MAX_APART + 1):                                     # the glyph texts with one, then two neighbours swapped
-        orders = [o[:i] + [o[i + 1], o[i]] + o[i + 2:] for o in orders for i in range(n - 1)]
+    for moved in range(1, MAX_APART + 1):  # the glyph texts with one, then two neighbours swapped
+        orders = [o[:i] + [o[i + 1], o[i]] + o[i + 2 :] for o in orders for i in range(n - 1)]
         for o in orders:
             cands.setdefault("".join(texts[i] for i in o), moved)
     for cand in cands:

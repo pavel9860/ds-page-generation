@@ -4,6 +4,7 @@ kind (dspages.hand.pagekind.kind); the pages most likely poems, one per book, be
 
 python tools/pagekind_poemfind.py --out DIR [--per 4] [--n 300] [--workers 6]
 """
+
 import argparse
 import json
 import random
@@ -16,11 +17,13 @@ import pymupdf
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting")
-import pagekind_border as B                                   # noqa: E402
-from dspages.hand import corpus                               # noqa: E402
-from dspages.hand import pagekind as PK                       # noqa: E402
-from dspages.hand.config import PATHS                         # noqa: E402
+from dspages import paths as _P
+
+sys.path.insert(0, f"{_P.CORPUS}")
+import pagekind_border as B  # noqa: E402
+
+from dspages.hand import corpus  # noqa: E402
+from dspages.hand import pagekind as PK  # noqa: E402
 
 
 def score(job):
@@ -53,15 +56,23 @@ def main():
     lang = corpus.languages(db, min_conf=0.0)
     _, _, stems = B.labelled()
     used = {s.split("_")[1] for s in stems if "_" in s}
-    jobs = [(d, corpus.resolve(p), a.per, i + 1000003 * a.seed) for i, (d, p) in enumerate(db.execute(
-        "select doc,new_path from plan where cls='text' and new_path like 'books_pdf/%' and lower(new_path) like '%.pdf'")) if d not in used]
+    jobs = [
+        (d, corpus.resolve(p), a.per, i + 1000003 * a.seed)
+        for i, (d, p) in enumerate(
+            db.execute(
+                "select doc,new_path from plan where cls='text' and new_path like 'books_pdf/%' and lower(new_path) like '%.pdf'"
+            )
+        )
+        if d not in used
+    ]
     with ProcessPoolExecutor(a.workers) as ex:
         res = [r for r in ex.map(score, jobs, chunksize=16) if r[2] >= 0]
     res.sort(key=lambda r: -r[3])
     print(len(res), "books scored; poem probability of the top", a.n, ":", round(res[a.n - 1][3], 3), flush=True)
     from pagetype.embedder import Embedder
+
     emb, X, keep = Embedder(), [], []
-    for d, path, no, p in res[:a.n]:
+    for d, path, no, p in res[: a.n]:
         k = len(keep)
         B.render(path, no, out / "img" / f"{k:04d}.jpg")
         X.append(emb([Image.open(out / "img" / f"{k:04d}.jpg").convert("RGB")])[0])

@@ -8,8 +8,8 @@ the Kaggle embedding: corpus_collecting pagetype/embed_kaggle.py, on the CPU). D
   embed     1536-d vectors -> PCA space of the pool -> distance to the target centroid / to the nearest pool page -> OUT/probe/result.parquet
 
 python tools/ds_probe.py cands [--per 5] [--base 20] | fetch | embed"""
+
 import argparse
-import io
 import json
 import random
 import re
@@ -18,14 +18,15 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
-import numpy as np
-import pandas as pd
-
 import diverse_ds as DD
 import ds100k as D
 import form_pages as F
+import numpy as np
+import pandas as pd
 
-CC = "/run/media/p/D/BUISNESS/corpus_collecting"
+from dspages import paths as _P  # noqa: E402
+
+CC = f"{_P.CORPUS}"
 sys.path.insert(0, CC)
 WORK = D.OUT / "probe"
 PAGES, HOST_MAX = 2, 2
@@ -48,7 +49,8 @@ def source_urls():
 
 def cmd_cands(a):
     import duckdb
-    T, R = pd.read_parquet(D.OUT / "thin.parquet"), pd.read_parquet(D.OUT / "regions.parquet")
+
+    T, _R = pd.read_parquet(D.OUT / "thin.parquet"), pd.read_parquet(D.OUT / "regions.parquet")
     urls = source_urls()
     T["url"] = T.h.map(urls)
     T = T[T.url.notna()].assign(host=lambda t: t.url.map(host))
@@ -62,13 +64,15 @@ def cmd_cands(a):
                            from {idx} where host in (select host from h)""").df()
     known = set(urls.values())
     rows = rows[~rows.url.isin(known)].drop_duplicates("url")
-    rng = random.Random(0)
+    random.Random(0)
     out = []
     for r, g in T.groupby("region"):
         c = rows[rows.host.isin(set(g.host))].sample(frac=1, random_state=r)
         c = c.groupby("host").head(HOST_MAX)
-        out.append(c.head(a.per * 3).assign(region=r))           # 3 x: a share fails to download or render
-    base = con.execute(f"select url, warc_filename f, warc_record_offset o, warc_record_length l from {idx} using sample {a.base * 3} rows").df()
+        out.append(c.head(a.per * 3).assign(region=r))  # 3 x: a share fails to download or render
+    base = con.execute(
+        f"select url, warc_filename f, warc_record_offset o, warc_record_length l from {idx} using sample {a.base * 3} rows"
+    ).df()
     C = pd.concat(out + [base.assign(region=-1, host=base.url.map(host))], ignore_index=True)
     WORK.mkdir(parents=True, exist_ok=True)
     C.to_parquet(WORK / "cands.parquet")
@@ -77,6 +81,7 @@ def cmd_cands(a):
 
 def fetch_one(r):
     from corpus import discovery
+
     data = None
     try:
         data = discovery.fetch_live(r["url"])
@@ -89,11 +94,16 @@ def fetch_one(r):
             return None
     try:
         import pymupdf
+
         with pymupdf.open(stream=data, filetype="pdf") as doc:
             out = []
             for i in range(min(doc.page_count, 6)):
                 pg = doc[i]
-                pm = pg.get_pixmap(matrix=pymupdf.Matrix(F.W / pg.rect.width, F.H / pg.rect.height), colorspace=pymupdf.csRGB, alpha=False)
+                pm = pg.get_pixmap(
+                    matrix=pymupdf.Matrix(F.W / pg.rect.width, F.H / pg.rect.height),
+                    colorspace=pymupdf.csRGB,
+                    alpha=False,
+                )
                 out.append((i, F.encode(np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.w, 3))))
                 if len(out) == PAGES:
                     break
@@ -121,14 +131,16 @@ def cmd_fetch(a):
 
 def cmd_embed(_):
     import torch
+
     sys.path.insert(0, f"{CC}/pagetype")
     import embed_kaggle as K
+
     torch.set_num_threads(6)
     P = pd.read_parquet(WORK / "pages.parquet")
     z = np.load(WORK / "jpegs.npz")
     raw = [torch.from_numpy(z[f"arr_{k}"].copy()) for k in P.k]
     model = K.load_model("cpu")
-    V = np.concatenate([K.embed_pages(model, raw[a:a + 4], "cpu")[0] for a in range(0, len(raw), 4)])
+    V = np.concatenate([K.embed_pages(model, raw[a : a + 4], "cpu")[0] for a in range(0, len(raw), 4)])
     pca = np.load(D.OUT / "pca.npz")
     Zp = (DD.unit_rows(V) - pca["mean"]) @ pca["components"].T
     cen = np.load(D.OUT / "regions.npz")["centers"]
@@ -148,16 +160,34 @@ def cmd_embed(_):
     np.save(WORK / "vectors.npy", V.astype(np.float16))
     t = P[P.region >= 0]
     base = P[P.region < 0]
-    d_base = np.array([np.linalg.norm(cen - Zp[i], axis=1) for i in base.index])          # baseline page to every region centroid
+    d_base = np.array(
+        [np.linalg.norm(cen - Zp[i], axis=1) for i in base.index]
+    )  # baseline page to every region centroid
     print(f"set spacing (final FPS radius) {r_set:.3f}")
-    print(f"targeted pages {len(t)}: distance to the target centroid median {t.d_target.median():.3f}; "
-          f"region radius median {t.target_radius.median():.3f}; within the radius {(t.d_target <= t.target_radius).mean():.2f}; "
-          f"nearest region = target {(t.nearest_region == t.region).mean():.2f} (chance {1 / len(cen):.2f})")
-    print(f"baseline pages {len(base)}: distance to a region centroid median {np.median(d_base):.3f}; within that region's radius "
-          f"{(d_base <= R.radius.values[None]).mean():.3f}")
-    print(f"novel (farther than the set spacing from every pool page): targeted {t.novel.mean():.2f}, baseline {base.novel.mean():.2f}")
-    print(t.assign(hit=t.nearest_region == t.region).groupby("region").agg(
-        pages=("url", "size"), d_target=("d_target", "median"), radius=("target_radius", "first"), hit=("hit", "mean")).round(3).to_string())
+    print(
+        f"targeted pages {len(t)}: distance to the target centroid median {t.d_target.median():.3f}; "
+        f"region radius median {t.target_radius.median():.3f}; within the radius {(t.d_target <= t.target_radius).mean():.2f}; "
+        f"nearest region = target {(t.nearest_region == t.region).mean():.2f} (chance {1 / len(cen):.2f})"
+    )
+    print(
+        f"baseline pages {len(base)}: distance to a region centroid median {np.median(d_base):.3f}; within that region's radius "
+        f"{(d_base <= R.radius.values[None]).mean():.3f}"
+    )
+    print(
+        f"novel (farther than the set spacing from every pool page): targeted {t.novel.mean():.2f}, baseline {base.novel.mean():.2f}"
+    )
+    print(
+        t.assign(hit=t.nearest_region == t.region)
+        .groupby("region")
+        .agg(
+            pages=("url", "size"),
+            d_target=("d_target", "median"),
+            radius=("target_radius", "first"),
+            hit=("hit", "mean"),
+        )
+        .round(3)
+        .to_string()
+    )
 
 
 if __name__ == "__main__":

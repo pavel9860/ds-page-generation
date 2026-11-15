@@ -1,4 +1,5 @@
 """Pages that are pictures without any text or handwriting"""
+
 import json
 from pathlib import Path
 
@@ -24,6 +25,7 @@ def load(path, page, long_side):
 def build(cfg: Config):
     """Keeps the photo items in which the detector (cfg.picture_model) finds no print and no handwriting."""
     from ultralytics import YOLO
+
     cfg.pictures.mkdir(parents=True, exist_ok=True)
     model = YOLO(str(cfg.picture_model), task="detect")
     for line in cfg.picture_items.read_text().splitlines():
@@ -35,7 +37,8 @@ def build(cfg: Config):
             img = load(r["path"], int(r.get("page", 0)), cfg.long_side)
         except Exception:
             continue
-        if min(img.shape[:2]) >= 400 and not len(model.predict(img, imgsz=cfg.long_side, conf=cfg.picture_conf,
-                                                               verbose=False, device="cpu")[0].boxes):
+        if min(img.shape[:2]) >= 400 and not len(
+            model.predict(img, imgsz=cfg.long_side, conf=cfg.picture_conf, verbose=False, device="cpu")[0].boxes
+        ):
             cv2.imwrite(str(out), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     return len(list(cfg.pictures.glob("*.png")))

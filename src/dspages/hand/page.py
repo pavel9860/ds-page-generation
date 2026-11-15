@@ -3,33 +3,69 @@ on a paper of a sheet format (A4 or a notebook page); ink is composed on the she
 
 make(plan, items) -> (rgb uint8 (H, W, 3), meta with the word boxes in px)
 """
+
 import re
 
-import numpy as np
-
 import hwsynth as H
-from hwsynth.pen import Pen, render
+import numpy as np
 from hwsynth.page import smudge
+from hwsynth.pen import Pen, render
 from hwsynth.scripts import text_script
 from hwsynth.writer import Stroke
 
-from .paper import H as PH, W as PW, paper
+from .config import SCRIPT_SCALE  # noqa: F401
+from .paper import H as PH
+from .paper import W as PW
+from .paper import paper
 from .tables import table_block
-from .util import (CHAR_W, MAX_GLYPH_MM, MAX_XH, MIN_XH, MIN_XH_SCRIPT, clean, flat_items, map_text, pick_fonts, strip_missing, trim, uncovered,
-                   usable, walk_text)
+from .util import (
+    CHAR_W,
+    MAX_GLYPH_MM,
+    MAX_XH,
+    MIN_XH,
+    MIN_XH_SCRIPT,
+    clean,
+    flat_items,
+    map_text,
+    pick_fonts,
+    strip_missing,
+    trim,
+    uncovered,
+    usable,
+    walk_text,
+)
 
 SENT_END = re.compile(r"[.!?。！？…؟।॥։]['\"”»)]*$")
 BULLETS = ("-", "-", "-", "*", "–")
-DISTORT = dict(theta0=0.008, bow0=0.5, rho_t=0.35, sd_t=0.0065, rho_b=0.3, sd_b=0.55, sd_drift=0.03, sd_off=0.07, rho_x=0.5, sd_x=0.7)
-SCRIPT_SCALE = {"Latin": 1.0, "Cyrillic": 1.0, "Greek": 1.0, "Han": 0.85, "Hangul": 0.85, "Hiragana": 0.85}     # other scripts: 0.7
+DISTORT = dict(
+    theta0=0.008,
+    bow0=0.5,
+    rho_t=0.35,
+    sd_t=0.0065,
+    rho_b=0.3,
+    sd_b=0.55,
+    sd_drift=0.03,
+    sd_off=0.07,
+    rho_x=0.5,
+    sd_x=0.7,
+)
 
 
 def style_of_page(rng):
     """Habits of the page: a blank line between paragraphs or a first-line indent (never both), headings, list marker."""
     block = rng.random() < 0.5
-    return dict(block=block, gap_len=float(rng.uniform(0.7, 1.0)), indent=0.0 if block else float(rng.uniform(4, 11)) * (rng.random() < 0.85),
-                center=rng.random() < 0.3, underline=rng.random() < 0.35, big=float(rng.uniform(1.0, 1.3)), bullet=str(rng.choice(BULLETS)),
-                list_indent=float(rng.uniform(4, 9)), after_head=int(rng.random() < 0.4), caps=False)
+    return dict(
+        block=block,
+        gap_len=float(rng.uniform(0.7, 1.0)),
+        indent=0.0 if block else float(rng.uniform(4, 11)) * (rng.random() < 0.85),
+        center=rng.random() < 0.3,
+        underline=rng.random() < 0.35,
+        big=float(rng.uniform(1.0, 1.3)),
+        bullet=str(rng.choice(BULLETS)),
+        list_indent=float(rng.uniform(4, 9)),
+        after_head=int(rng.random() < 0.4),
+        caps=False,
+    )
 
 
 def gap_lines(prev, k, st, rng):
@@ -89,14 +125,14 @@ def choose_size(plan, pp, w, items, scr):
     cw = CHAR_W.get(scr, 2.4)
     lo = max(MIN_XH, MIN_XH_SCRIPT.get(scr, 0))
     if pp.pitch:
-        for mult in (1, 2, 3):                                  # a line of text takes one, two or three rows of the ruling
+        for mult in (1, 2, 3):  # a line of text takes one, two or three rows of the ruling
             xh = float(np.clip(pp.pitch * mult * plan["xh_ratio"], lo, MAX_XH))
             if mult == 3 or est_lines(items, full / (xh * cw)) >= 0.92 * want(pp.pitch * mult):
                 return xh, mult
     xh = max(min(plan["xh"], MAX_XH) * SCRIPT_SCALE.get(scr, 0.7), lo)
     lh = max(w.p["pitch"], w.min_pitch()) * xh
     est = est_lines(items, full / (xh * cw))
-    if est < 0.92 * want(lh):                                   # little text: larger writing fills more of a free page
+    if est < 0.92 * want(lh):  # little text: larger writing fills more of a free page
         xh = min(xh * min(np.sqrt(want(lh) / est), 1.4), MAX_XH)
     return xh, 1
 
@@ -105,17 +141,21 @@ def layout(plan, items, w, pp, xh, st, rng, mult):
     """Strokes, words, line count of the items written at x-height xh. An item may carry `gap` (blank lines before it, as in the source);
     a cols item is blocks side by side. Returns (strokes, words, lines, meta, n_want, xh, line_of, line height)."""
     w.p["size"] = xh
-    w.pen.width = min(w.pen.width, xh / 5.2)                   # small writing is made with a fine tip
+    w.pen.width = min(w.pen.width, xh / 5.2)  # small writing is made with a fine tip
     w.pen.edge = min(w.pen.edge, xh / 4.2)
     full = pp.size[0] - pp.left - pp.right
     avail = pp.size[1] - pp.bottom - pp.first
     flat = list(flat_items(items))
     scr = text_script(" ".join(i["t"] for i in flat if "t" in i) or "a")
     body = next((i for i in flat if i["k"] in ("p", "li", "v", "l")), None)
-    probe = w.lines(clean(body["t"])[:60] if body else "abc def ghi", full, None)        # the line pitch the script needs at this size
-    row = pp.pitch * mult if pp.pitch else 0                    # rows of the ruling one line of text takes
+    probe = w.lines(
+        clean(body["t"])[:60] if body else "abc def ghi", full, None
+    )  # the line pitch the script needs at this size
+    row = pp.pitch * mult if pp.pitch else 0  # rows of the ruling one line of text takes
     lh = row or probe.pitch
-    if pp.pitch and probe.pitch > row * 1.05:                   # script taller than its rows: write smaller to fit them, else on more rows
+    if (
+        pp.pitch and probe.pitch > row * 1.05
+    ):  # script taller than its rows: write smaller to fit them, else on more rows
         fit = xh * row / probe.pitch * 0.97
         if fit >= MIN_XH:
             xh = fit
@@ -124,7 +164,7 @@ def layout(plan, items, w, pp, xh, st, rng, mult):
             lh = row * int(np.ceil(probe.pitch / row - 0.15))
     n_want = max(1, round((int(avail / lh) + 1) * plan["fill"]))
     strokes, words, meta, line_of = [], [], {}, {}
-    snap = (lambda g: float(round(g))) if pp.pitch else (lambda g: g)     # on ruled paper a gap is whole lines
+    snap = (lambda g: float(round(g))) if pp.pitch else (lambda g: g)  # on ruled paper a gap is whole lines
 
     def run(seq, x_off, wfull, cur):
         nonlocal meta
@@ -136,7 +176,10 @@ def layout(plan, items, w, pp, xh, st, rng, mult):
                 break
             if k == "cols":
                 cur += snap(float(it.get("gap", 0)))
-                ends = [run(c["items"], x_off + c["x"] * wfull, max(c["w"] * wfull, 30.0), cur + c.get("start", 0)) for c in it["cols"]]
+                ends = [
+                    run(c["items"], x_off + c["x"] * wfull, max(c["w"] * wfull, 30.0), cur + c.get("start", 0))
+                    for c in it["cols"]
+                ]
                 cur, prev = max(ends + [cur]), "cols"
                 continue
             explicit = "gap" in it
@@ -146,7 +189,7 @@ def layout(plan, items, w, pp, xh, st, rng, mult):
                 gap = 0.0
             if k == "table":
                 room = (n_want - cur - gap) * lh
-                if room < 3 * lh:                                          # a table that does not fit is left out: the items after it still fill the page
+                if room < 3 * lh:  # a table that does not fit is left out: the items after it still fill the page
                     continue
                 ts, tw, th = table_block(it["rows"], w, xh, wfull, room, rng, len(words), (cur + snap(gap)) * lh)
                 if not ts:
@@ -156,7 +199,10 @@ def layout(plan, items, w, pp, xh, st, rng, mult):
                     q.p = q.p + (x_off, 0)
                 strokes.extend(ts)
                 words.extend(tw)
-                cur, prev = cur + (np.ceil(th / lh) if pp.pitch else th / lh), "table"      # on ruled paper the table takes whole rows
+                cur, prev = (
+                    cur + (np.ceil(th / lh) if pp.pitch else th / lh),
+                    "table",
+                )  # on ruled paper the table takes whole rows
                 continue
             t = clean(it["t"])
             if not t:
@@ -179,7 +225,9 @@ def layout(plan, items, w, pp, xh, st, rng, mult):
             t = trim(t, int(1.25 * left * cpl))
             w.p["size"] = size
             lay = w.lines(t, wid, lh if pp.pitch else None)
-            while k == "h" and lay.lines > max(2, len(t.split()) // 2) and size > xh * 1.05:     # a heading that does not fit is written smaller
+            while (
+                k == "h" and lay.lines > max(2, len(t.split()) // 2) and size > xh * 1.05
+            ):  # a heading that does not fit is written smaller
                 size = max(size * 0.8, xh)
                 w.p["size"] = size
                 lay = w.lines(t, wid, lh if pp.pitch else None)
@@ -188,11 +236,15 @@ def layout(plan, items, w, pp, xh, st, rng, mult):
             if n_keep < 1:
                 break
             keep = {i for i, wd in enumerate(lay.words) if wd.line < n_keep}
-            if n_keep < lay.lines and k in ("p", "li", "v"):            # a cut paragraph ends at its last sentence end, not in mid-sentence
+            if n_keep < lay.lines and k in (
+                "p",
+                "li",
+                "v",
+            ):  # a cut paragraph ends at its last sentence end, not in mid-sentence
                 ends = [i for i in sorted(keep) if SENT_END.search(lay.words[i].text)]
                 if not ends or ends[-1] < 0.4 * len(keep):
                     if words:
-                        break                                                 # the page ends after the item before; on an empty page the lines that fit stay
+                        break  # the page ends after the item before; on an empty page the lines that fit stay
                 else:
                     keep = {i for i in keep if i <= ends[-1]}
                     n_keep = max(lay.words[i].line for i in keep) + 1
@@ -200,7 +252,9 @@ def layout(plan, items, w, pp, xh, st, rng, mult):
             shift = line_shifts(lay, wid, align)
             if k == "h" and not align and rng.random() < 0.3:
                 dx += float(rng.uniform(0, 8))
-            first_dx = st["indent"] if k == "p" and (prev not in (None, "h") or (st["indent"] and rng.random() < 0.5)) else 0.0
+            first_dx = (
+                st["indent"] if k == "p" and (prev not in (None, "h") or (st["indent"] and rng.random() < 0.5)) else 0.0
+            )
             base, mine = len(words), []
             for q in lay.strokes:
                 if q.word in keep:
@@ -213,14 +267,18 @@ def layout(plan, items, w, pp, xh, st, rng, mult):
             for i, wd in enumerate(lay.words):
                 wd.line += int(np.floor(cur))
                 words.append(wd if i in keep else None)
-            if k == "h" and st["underline"] and n_keep == lay.lines == 1 and mine:      # a line under the letters, not through them
+            if (
+                k == "h" and st["underline"] and n_keep == lay.lines == 1 and mine
+            ):  # a line under the letters, not through them
                 a = np.vstack([q.p for q in mine])
                 y = a[:, 1].max() + max(0.28 * size, 0.7) + rng.uniform(0, 0.5)
                 xs = np.linspace(a[:, 0].min() - 0.5, a[:, 0].max() + 0.5, 14)
                 ul = Stroke(np.stack([xs, y + rng.normal(0, 0.06, 14) + 0.012 * (xs - xs[0]) * rng.normal(0, 1.0)], 1))
                 ul.word = -1
                 strokes.append(ul)
-            cur += snap(n_keep) if pp.pitch else n_keep * lay.pitch / lh       # unruled: the item's own lines (a heading's are taller than the body's)
+            cur += (
+                snap(n_keep) if pp.pitch else n_keep * lay.pitch / lh
+            )  # unruled: the item's own lines (a heading's are taller than the body's)
             prev, meta = k, lay.meta
         return cur
 
@@ -251,7 +309,7 @@ def distort_lines(strokes, line_of, lh, rng, strength, cfg=DISTORT):
         for s in ss:
             q = s.p.copy()
             u = (q[:, 0] - xc) / (wl / 2)
-            q[:, 1] += off + theta * (q[:, 0] - xc) + bow * (u ** 2 - 1 / 3)
+            q[:, 1] += off + theta * (q[:, 0] - xc) + bow * (u**2 - 1 / 3)
             q[:, 0] += sx
             s.p = q
 
@@ -286,7 +344,14 @@ def word_strokes(strokes):
 
 def tallest(by, words):
     """Height [mm] of the tallest word: its ink from the top of an ascender to the bottom of a descender."""
-    return max([float(np.ptp(np.concatenate([p[:, 1] for p in pts]))) for i, pts in by.items() if i < len(words) and words[i] is not None] or [0.0])
+    return max(
+        [
+            float(np.ptp(np.concatenate([p[:, 1] for p in pts])))
+            for i, pts in by.items()
+            if i < len(words) and words[i] is not None
+        ]
+        or [0.0]
+    )
 
 
 def contrast(ink, pen):
@@ -300,7 +365,15 @@ def contrast(ink, pen):
 
 def prepare(plan, w, items):
     """Fonts that cover the page; the text cleaned (strict: nothing dropped); no jumping letters, no absurd widths."""
-    for g, v in (("caps", 0.0), ("allo", 0.0), ("size_sd", 0.05), ("base_sd", 0.05), ("rot_sd", 2.0), ("xs", 1.15), ("ws", 1.25)):
+    for g, v in (
+        ("caps", 0.0),
+        ("allo", 0.0),
+        ("size_sd", 0.05),
+        ("base_sd", 0.05),
+        ("rot_sd", 2.0),
+        ("xs", 1.15),
+        ("ws", 1.25),
+    ):
         w.p[g] = min(w.p[g], v)
     text = clean(" ".join(walk_text(items)))
     mapping = pick_fonts(w, text, plan.get("prefer_font"))
@@ -316,11 +389,12 @@ def _setup(plan, items):
     pp = paper(plan["paper"], rng, plan.get("fmt", "a4"), plan.get("dense", False))
     w = H.sample_writer(plan["persona"], plan["style"], seed=plan["wseed"])
     from dspages.pagegen.handfonts import Restricted
-    w.fonts = Restricted(w.fonts)                                 # the realistic fonts of each script (one policy with the filled forms)
+
+    w.fonts = Restricted(w.fonts)  # the realistic fonts of each script (one policy with the filled forms)
     w.pen = Pen.sample(np.random.default_rng(plan["seed"] + 7), {plan["pen"]: 1})
     w.pen.width *= plan.get("pen_scale", 1.0)
     items, mapping, missing = prepare(plan, w, items)
-    w.p.update(plan.get("tune", {}))                          # per-page overrides of the writer genes (after the caps of prepare)
+    w.p.update(plan.get("tune", {}))  # per-page overrides of the writer genes (after the caps of prepare)
     return rng, pp, w, items, mapping, missing, text_script(" ".join(walk_text(items)) or "a")
 
 
@@ -331,7 +405,9 @@ def fills(plan, items, part=0.8):
     xh, mult = choose_size(plan, pp, w, items, scr)
     full, avail = pp.size[0] - pp.left - pp.right, pp.size[1] - pp.bottom - pp.first
     lh = pp.pitch * mult if pp.pitch else max(w.p["pitch"], w.min_pitch()) * xh
-    return est_lines(items, full / (xh * CHAR_W.get(scr, 2.4))) >= part * max(1, round((int(avail / lh) + 1) * plan["fill"]))
+    return est_lines(items, full / (xh * CHAR_W.get(scr, 2.4))) >= part * max(
+        1, round((int(avail / lh) + 1) * plan["fill"])
+    )
 
 
 def make(plan, items):
@@ -339,7 +415,7 @@ def make(plan, items):
     st = style_of_page(rng)
     xh, mult = choose_size(plan, pp, w, items, scr)
     state = rng.bit_generator.state
-    for _ in range(3):                                          # a word taller than the cap: write smaller (rarely more than once)
+    for _ in range(3):  # a word taller than the cap: write smaller (rarely more than once)
         rng.bit_generator.state = state
         strokes, words, cur, lmeta, n_want, xh, line_of, lh = layout(plan, items, w, pp, xh, st, rng, mult)
         by = word_strokes(strokes)
@@ -348,7 +424,7 @@ def make(plan, items):
         if tall <= MAX_GLYPH_MM or xh <= lo:
             break
         xh = max(xh * (0.85 * MAX_GLYPH_MM / tall if tall > 1.3 * MAX_GLYPH_MM else 0.85), lo)
-    if not pp.pitch or pp.kind == "dotted":                     # no rules to follow: wandering lines
+    if not pp.pitch or pp.kind == "dotted":  # no rules to follow: wandering lines
         distort_lines(strokes, line_of, lh, rng, 1.0 if not pp.pitch else 0.5)
         by = word_strokes(strokes)
     if any(plan.get("wj", ())):
@@ -356,7 +432,7 @@ def make(plan, items):
         by = word_strokes(strokes)
     dy = plan["dy"] if pp.pitch else 0.0
     top = pp.first - dy + min(q.p[:, 1].min() for q in strokes)
-    shift = 0.0 if pp.pitch else max(0.0, 6.0 - top)            # nothing above the sheet
+    shift = 0.0 if pp.pitch else max(0.0, 6.0 - top)  # nothing above the sheet
     origin = np.array((-pp.left, -(pp.first - dy + shift)))
     ink, _ = render(strokes, w.pen, w.p, pp.k * 25.4, w.rng, (PH, PW), origin)
     ink = contrast(ink, w.pen)
@@ -367,9 +443,26 @@ def make(plan, items):
     for i, wd in enumerate(words):
         if wd is not None and by.get(i):
             a = np.vstack(by[i])
-            out.append((wd.text, [int(v) for v in (np.r_[a.min(0), a.max(0)] - np.r_[origin, origin]) * pp.k], wd.struck))
-    meta = dict(lmeta, paper=pp.kind, fmt=pp.fmt, paper_meta=pp.meta, pitch=pp.pitch, xh_mm=round(xh, 2), lines=round(cur, 1), lines_want=n_want,
-                rows=mult, tallest_mm=round(tall, 1), script=scr, chars=sum(len(x[0]) for x in out),
-                tables=sum(i["k"] == "table" for i in items), uncovered_chars=missing,
-                fonts={k: str(v).split("/")[-1] for k, v in mapping.items()}, struct=dict(st), words=out)
+            out.append(
+                (wd.text, [int(v) for v in (np.r_[a.min(0), a.max(0)] - np.r_[origin, origin]) * pp.k], wd.struck)
+            )
+    meta = dict(
+        lmeta,
+        paper=pp.kind,
+        fmt=pp.fmt,
+        paper_meta=pp.meta,
+        pitch=pp.pitch,
+        xh_mm=round(xh, 2),
+        lines=round(cur, 1),
+        lines_want=n_want,
+        rows=mult,
+        tallest_mm=round(tall, 1),
+        script=scr,
+        chars=sum(len(x[0]) for x in out),
+        tables=sum(i["k"] == "table" for i in items),
+        uncovered_chars=missing,
+        fonts={k: str(v).split("/")[-1] for k, v in mapping.items()},
+        struct=dict(st),
+        words=out,
+    )
     return (np.clip(rgb, 0, 1) * 255).astype(np.uint8), meta

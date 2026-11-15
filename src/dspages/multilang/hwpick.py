@@ -1,4 +1,5 @@
 """Real handwritten pages of the corpus in the 3K plan's language distribution"""
+
 import json
 import re
 from collections import Counter, defaultdict
@@ -40,7 +41,9 @@ class Corpus:
             r = json.loads(line)
             self.docs[r["doc"]] = r
         n = int(self.ids[:, 0].max()) + 1
-        self.lang = np.array([lang_of(self.docs[d]["path"]) or "" if d in self.docs else "" for d in range(n)], dtype=object)
+        self.lang = np.array(
+            [lang_of(self.docs[d]["path"]) or "" if d in self.docs else "" for d in range(n)], dtype=object
+        )
         self.label = np.array([self.docs[d]["label"] if d in self.docs else "" for d in range(n)], dtype=object)
 
     def vectors(self, rows):
@@ -68,7 +71,7 @@ def score(corpus, clf, langs):
     rows = np.flatnonzero(np.isin(corpus.lang[corpus.ids[:, 0]], list(langs)))
     p = np.zeros(len(corpus.ids), np.float32)
     for s in range(0, len(rows), C.chunk):
-        r = rows[s:s + C.chunk]
+        r = rows[s : s + C.chunk]
         p[r] = clf.predict_proba(corpus.vectors(r))[:, 1]
     return rows, p
 
@@ -88,7 +91,9 @@ def choose(cand, p, quota, n):
     chosen = {l: [i for i in cand[l] if p[i] >= C.lo][:q] for l, q in quota.items()}
     for floor in (C.hi, C.mid, C.lo):
         while sum(map(len, chosen.values())) < n:
-            open_ = [l for l in quota if len(chosen[l]) < min(C.cap, len(cand[l])) and p[cand[l][len(chosen[l])]] >= floor]
+            open_ = [
+                l for l in quota if len(chosen[l]) < min(C.cap, len(cand[l])) and p[cand[l][len(chosen[l])]] >= floor
+            ]
             if not open_:
                 break
             l = min(open_, key=lambda l: (len(chosen[l]), l))
@@ -115,9 +120,18 @@ def select(out, n, excluded_pages=(), excluded_docs=()):
             path = corpus.docs[d]["path"]
             name = f"{lang}_{Path(path).stem.split('_')[0]}_{page}"
             try:
-                cv2.imwrite(str(out / f"{name}.jpg"), render(path, page)[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, C.quality])
+                cv2.imwrite(
+                    str(out / f"{name}.jpg"), render(path, page)[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, C.quality]
+                )
             except Exception:
                 continue
-            meta[name] = dict(lang=lang, path=path, folder=path.split("/")[0], page=page, p=round(float(p[i]), 3), doc_label=corpus.docs[d]["label"])
+            meta[name] = dict(
+                lang=lang,
+                path=path,
+                folder=path.split("/")[0],
+                page=page,
+                p=round(float(p[i]), 3),
+                doc_label=corpus.docs[d]["label"],
+            )
     (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1))
     return meta

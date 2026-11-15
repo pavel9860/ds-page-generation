@@ -1,5 +1,6 @@
 """Printed grid pages: fine grid with a heavy grid every few cells, anti-aliased by line coverage, and the exact
 positions of the fine-grid crossings."""
+
 import numpy as np
 
 from ..config import GridCfg
@@ -7,6 +8,7 @@ from ..config import GridCfg
 
 def grid_page(w_px, h_px, px_per_mm, c: GridCfg):
     """uint8 (h_px, w_px), 0 ink .. 255 paper."""
+
     def coverage(coord_mm, half_px, every_mm):
         d = np.abs(coord_mm - np.round(coord_mm / every_mm) * every_mm) * px_per_mm
         return np.clip(half_px - d + 0.5, 0.0, 1.0)

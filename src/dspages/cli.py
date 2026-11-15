@@ -15,6 +15,7 @@ plan was made from (preset, n, seed, manifest and its sha256): a run with other 
 manifest and its rejected pages are copied to DIR.
 Each part of sample i draws from its own stream (seed, i, part): the parts are reproducible independently.
 """
+
 import argparse
 import hashlib
 import json
@@ -32,9 +33,9 @@ from . import io
 from .conditions import geometry_cond, plan, sample_preset
 from .config import get_preset
 from .geometry.surface import make_surface
+from .layout import refont
 from .layout.generate import draw_layout, make_layout
 from .layout.sources import load_manifest
-from .layout import refont
 from .render.generate import make_sample
 
 PARTS = dict(layout=0, geometry=1, render=2)
@@ -53,12 +54,20 @@ def load_plan(path):
 def _init(preset, out, seed, manifest=None, preview=False):
     import numba
     from threadpoolctl import threadpool_limits
+
     cv2.setNumThreads(1)
     numba.set_num_threads(1)
     threadpool_limits(1)
     P = get_preset(preset)
-    _W.update(P=P, out=Path(out), seed=seed, preview=preview, plan=load_plan(Path(out) / "plan.jsonl"),
-              manifest=load_manifest(manifest or P.paths.manifest), fonts=refont.font_set(P.paths.font_dirs))
+    _W.update(
+        P=P,
+        out=Path(out),
+        seed=seed,
+        preview=preview,
+        plan=load_plan(Path(out) / "plan.jsonl"),
+        manifest=load_manifest(manifest or P.paths.manifest),
+        fonts=refont.font_set(P.paths.font_dirs),
+    )
 
 
 def _rng(i, part):
@@ -78,15 +87,26 @@ def _shown(part, i, what):
     """(preview image, its path) of a part when previews are asked for, else (None, None)."""
     if not _W["preview"]:
         return None, None
-    img = {"layout": lambda: what, "geometry": lambda: io.height_preview(what),
-           "render": lambda: cv2.resize(np.hstack([what["flat"], what["warped"]]), None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)}[part]()
+    img = {
+        "layout": lambda: what,
+        "geometry": lambda: io.height_preview(what),
+        "render": lambda: cv2.resize(
+            np.hstack([what["flat"], what["warped"]]), None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA
+        ),
+    }[part]()
     return img, _preview(part, i)
 
 
 def _layout(i, save):
     spec = _W["plan"][i]
-    L = make_layout(_rng(i, "layout"), _W["manifest"][spec["entry"]],
-                    sample_preset(_W["P"], spec), _W["fonts"], spec["combo"][0] == "open", spec.get("font_pt"))
+    L = make_layout(
+        _rng(i, "layout"),
+        _W["manifest"][spec["entry"]],
+        sample_preset(_W["P"], spec),
+        _W["fonts"],
+        spec["combo"][0] == "open",
+        spec.get("font_pt"),
+    )
     if save:
         page = draw_layout(L["desc"], 0.5, sample_preset(_W["P"], spec))[0]
         io.save(_path("layout", i), dict(page=page), L["meta"], *_shown("layout", i, page))
@@ -98,8 +118,15 @@ def _geometry(i, save):
     s = make_surface(_rng(i, "geometry"), P.geometry, P.paper, geometry_cond(_W["plan"][i]), P.render.camera)
     surf = {k: s[k].astype(np.float32) for k in ("X", "Y", "Z")} | {k: s[k] for k in ("u", "v", "W", "Wu", "Wv")}
     if save:
-        meta = dict(label=s["label"], cond=s["cond"], paper=s["paper"], scene_a=s["scene_a"], scene_b=s["scene_b"],
-                    n_creases=len(s["creases"]), box_strain=s["box_strain"])
+        meta = dict(
+            label=s["label"],
+            cond=s["cond"],
+            paper=s["paper"],
+            scene_a=s["scene_a"],
+            scene_b=s["scene_b"],
+            n_creases=len(s["creases"]),
+            box_strain=s["box_strain"],
+        )
         io.save(_path("geometry", i), surf, meta, *_shown("geometry", i, surf["Z"]))
     return surf
 
@@ -114,7 +141,12 @@ def _render(i, saved, dt):
     surf = io.load(gp)[0] if saved and gp.exists() else _geometry(i, False)
     dt["geometry"], t = time.time() - t, time.time()
     o = make_sample(_rng(i, "render"), desc, surf, sample_preset(_W["P"], _W["plan"][i]))
-    io.save(_path("render", i), {k: o[k] for k in ("flat", "warped", "grid2d", "grid3d", "mask")}, None, *_shown("render", i, o))
+    io.save(
+        _path("render", i),
+        {k: o[k] for k in ("flat", "warped", "grid2d", "grid3d", "mask")},
+        None,
+        *_shown("render", i, o),
+    )
     dt["render"] = time.time() - t
     return dict(sample=f"{i:07d}", **o["meta"], layout=lmeta)
 
@@ -176,8 +208,9 @@ def _read_rows(path):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="dspages", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        prog="dspages", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("cmd", choices=("plan", "layout", "geometry", "render", "all"))
     ap.add_argument("--preset", default="demo")
     ap.add_argument("--out", required=True)
@@ -216,8 +249,13 @@ def main(argv=None):
     done = {r["sample"] for r in _read_rows(out / "meta.jsonl")} if a.cmd in ("render", "all") else set()
     idx = [i for i in range(a.start, min(n, a.start + (a.count or n))) if f"{i:07d}" not in done]
     t0, times = time.time(), {}
-    with ProcessPoolExecutor(a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed, a.manifest, a.preview)) as pool, \
-            open(out / "meta.jsonl", "a") as meta_f, open(out / "failed.jsonl", "a") as fail_f:
+    with (
+        ProcessPoolExecutor(
+            a.workers, initializer=_init, initargs=(a.preset, str(out), a.seed, a.manifest, a.preview)
+        ) as pool,
+        open(out / "meta.jsonl", "a") as meta_f,
+        open(out / "failed.jsonl", "a") as fail_f,
+    ):
         for k, (i, dt, row, err) in enumerate(pool.map(_job, [(a.cmd, i) for i in idx], chunksize=1), 1):
             if row is not None:
                 meta_f.write(json.dumps(row, default=io._json) + "\n")
@@ -230,5 +268,8 @@ def main(argv=None):
             if k % 50 == 0 or k == len(idx):
                 el = time.time() - t0
                 steps = "  ".join(f"{s_} {np.mean(v):.2f}" for s_, v in times.items())
-                print(f"{a.cmd}: {k}/{len(idx)}  s/sample/worker: {steps}  elapsed {el:.0f} s  "
-                      f"eta {el / k * (len(idx) - k):.0f} s", flush=True)
+                print(
+                    f"{a.cmd}: {k}/{len(idx)}  s/sample/worker: {steps}  elapsed {el:.0f} s  "
+                    f"eta {el / k * (len(idx) - k):.0f} s",
+                    flush=True,
+                )

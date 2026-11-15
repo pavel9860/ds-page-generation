@@ -1,5 +1,6 @@
 """Source pages spread over the ds_head space (16-d, tools/ds_head.py): the in-scope pages of the corpus with their vectors, and a farthest-first
 ranking of the pages of a candidate set, so that every chosen page is as different in layout and look as possible from the ones before."""
+
 import numpy as np
 import pandas as pd
 

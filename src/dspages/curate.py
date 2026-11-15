@@ -9,58 +9,206 @@ a floor; what the corpus lacks is downloaded, handwriting is scanned or generate
 receipts, maps, picture-dominated pages, pages that do not crop to the A4 ratio, coarse rasters, near duplicates and pages of one
 template. Everything here is pure (frames in, frames out).
 """
+
 import numpy as np
 import pandas as pd
 
-OUT_LABELS = ("images", "pages_photo", "recieps", "maps", "blueprints")   # never in the set: pictures, photographed pages, receipts,
-                                                                          # maps and blueprints (out of scope)
+from .config import DUP_SIM, MAX_CROP, MIN_FORMS, MIN_NATIVE, PIC_OUT, RATIO  # noqa: F401
+
+OUT_LABELS = (
+    "images",
+    "pages_photo",
+    "recieps",
+    "maps",
+    "blueprints",
+)  # never in the set: pictures, photographed pages, receipts,
+# maps and blueprints (out of scope)
 OUT_FOLDERS = ("pages_photo", "receipts", "maps", "blueprints", "maps_blueprints")
-OUT_TYPES = frozenset({"postcard", "greeting card", "envelope", "receipt", "coupon", "lottery ticket", "ticket", "boarding pass",
-                       "shipping label", "label sticker", "business card",                         # small formats: out of scope
-                       "blank page", "photocopy", "fax", "dot matrix printout", "old typewritten document", "old printed book page",
-                       "page with stamps and signatures",
-                       "map", "floor plan", "engineering drawing", "electrical schematic"})                         # maps, drawings                                         # styles, not document types
-HW_TYPES = ("handwritten letter", "handwritten notes", "homework in a notebook", "diary page", "lined notebook page",
-            "graph paper page", "recipe", "filled form with handwriting")
+OUT_TYPES = frozenset(
+    {
+        "postcard",
+        "greeting card",
+        "envelope",
+        "receipt",
+        "coupon",
+        "lottery ticket",
+        "ticket",
+        "boarding pass",
+        "shipping label",
+        "label sticker",
+        "business card",  # small formats: out of scope
+        "blank page",
+        "photocopy",
+        "fax",
+        "dot matrix printout",
+        "old typewritten document",
+        "old printed book page",
+        "page with stamps and signatures",
+        "map",
+        "floor plan",
+        "engineering drawing",
+        "electrical schematic",
+    }
+)  # maps, drawings                                         # styles, not document types
+HW_TYPES = (
+    "handwritten letter",
+    "handwritten notes",
+    "homework in a notebook",
+    "diary page",
+    "lined notebook page",
+    "graph paper page",
+    "recipe",
+    "filled form with handwriting",
+)
 PROMPT = "a scan of a {}"
 TYPES = (
-    "letter", "business letter with letterhead", "email printout", "invoice", "receipt", "bank statement", "payslip", "utility bill",
-    "purchase order", "price list", "contract", "legal document with numbered clauses", "court document",
-    "official government decree", "certificate", "diploma", "ID card application form", "passport application form", "tax form",
-    "filled form with handwriting", "blank form with empty fields", "questionnaire", "checklist", "medical prescription",
-    "medical report", "lab test results", "patient information leaflet", "product manual with diagrams", "warranty card",
-    "technical datasheet", "safety data sheet", "spreadsheet printout", "financial report with tables", "timetable", "calendar",
-    "school timetable", "school worksheet", "exam paper", "answer sheet with checkboxes", "homework in a notebook",
-    "handwritten letter", "handwritten notes", "lined notebook page", "graph paper page", "diary page", "recipe", "restaurant menu",
-    "flyer", "poster", "brochure", "newsletter", "newspaper page", "magazine page", "comic page", "children's book page",
-    "novel page", "poetry book page", "textbook page", "dictionary page", "encyclopedia page", "bible page", "scientific article",
-    "thesis page", "slide printout", "presentation handout", "table of contents", "index page", "bibliography", "sheet music",
-    "song lyrics with chords", "crossword puzzle", "sudoku", "map", "floor plan", "engineering drawing", "electrical schematic",
-    "chart and graph page", "infographic", "organizational chart", "ticket", "boarding pass", "envelope", "postcard",
-    "greeting card", "business card", "label sticker", "form with barcode", "packing list", "shipping label", "delivery note",
-    "meeting minutes", "agenda", "memo", "resume", "cover letter", "report cover page", "title page", "blank page",
-    "page with stamps and signatures", "old typewritten document", "old printed book page", "dot matrix printout", "fax",
-    "photocopy", "church bulletin", "event program", "certificate of award", "lottery ticket", "coupon", "catalog page",
-    "real estate listing", "advertisement page")
+    "letter",
+    "business letter with letterhead",
+    "email printout",
+    "invoice",
+    "receipt",
+    "bank statement",
+    "payslip",
+    "utility bill",
+    "purchase order",
+    "price list",
+    "contract",
+    "legal document with numbered clauses",
+    "court document",
+    "official government decree",
+    "certificate",
+    "diploma",
+    "ID card application form",
+    "passport application form",
+    "tax form",
+    "filled form with handwriting",
+    "blank form with empty fields",
+    "questionnaire",
+    "checklist",
+    "medical prescription",
+    "medical report",
+    "lab test results",
+    "patient information leaflet",
+    "product manual with diagrams",
+    "warranty card",
+    "technical datasheet",
+    "safety data sheet",
+    "spreadsheet printout",
+    "financial report with tables",
+    "timetable",
+    "calendar",
+    "school timetable",
+    "school worksheet",
+    "exam paper",
+    "answer sheet with checkboxes",
+    "homework in a notebook",
+    "handwritten letter",
+    "handwritten notes",
+    "lined notebook page",
+    "graph paper page",
+    "diary page",
+    "recipe",
+    "restaurant menu",
+    "flyer",
+    "poster",
+    "brochure",
+    "newsletter",
+    "newspaper page",
+    "magazine page",
+    "comic page",
+    "children's book page",
+    "novel page",
+    "poetry book page",
+    "textbook page",
+    "dictionary page",
+    "encyclopedia page",
+    "bible page",
+    "scientific article",
+    "thesis page",
+    "slide printout",
+    "presentation handout",
+    "table of contents",
+    "index page",
+    "bibliography",
+    "sheet music",
+    "song lyrics with chords",
+    "crossword puzzle",
+    "sudoku",
+    "map",
+    "floor plan",
+    "engineering drawing",
+    "electrical schematic",
+    "chart and graph page",
+    "infographic",
+    "organizational chart",
+    "ticket",
+    "boarding pass",
+    "envelope",
+    "postcard",
+    "greeting card",
+    "business card",
+    "label sticker",
+    "form with barcode",
+    "packing list",
+    "shipping label",
+    "delivery note",
+    "meeting minutes",
+    "agenda",
+    "memo",
+    "resume",
+    "cover letter",
+    "report cover page",
+    "title page",
+    "blank page",
+    "page with stamps and signatures",
+    "old typewritten document",
+    "old printed book page",
+    "dot matrix printout",
+    "fax",
+    "photocopy",
+    "church bulletin",
+    "event program",
+    "certificate of award",
+    "lottery ticket",
+    "coupon",
+    "catalog page",
+    "real estate listing",
+    "advertisement page",
+)
 # crawl folder -> the page type its documents are meant to be (keep rates: share of a folder's documents that are digital and that type)
-FOLDER_TYPE = {"forms": ("forms_blank",), "filled_forms": ("forms_filled",), "tables": ("tables",), "bureaucracy": ("bureaucracy",),
-               "sheet_music": ("music",), "maps": ("maps",), "blueprints": ("blueprints",), "magazines": ("magazines",),
-               "flyers": ("flyers",), "certificates": ("certificates",), "text": ("plain", "formatted", "poems")}
+FOLDER_TYPE = {
+    "forms": ("forms_blank",),
+    "filled_forms": ("forms_filled",),
+    "tables": ("tables",),
+    "bureaucracy": ("bureaucracy",),
+    "sheet_music": ("music",),
+    "maps": ("maps",),
+    "blueprints": ("blueprints",),
+    "magazines": ("magazines",),
+    "flyers": ("flyers",),
+    "certificates": ("certificates",),
+    "text": ("plain", "formatted", "poems"),
+}
 TEXT_LABELS = ("plain", "formatted", "scientific", "poems")
-FORM_P, FILL_LO, FILL_HI = 0.5, 0.3, 0.5                # p_form of a form page; p_fill below: blank, above: filled-looking
-MIN_FORMS = 10                                          # a cluster with fewer form pages is not a form cluster
+FORM_P, FILL_LO, FILL_HI = 0.5, 0.3, 0.5  # p_form of a form page; p_fill below: blank, above: filled-looking
 
 
-RATIO = 2 ** 0.5                                        # page h / w of the set (A4); other pages are cropped to it
-MAX_CROP = 0.15                                         # at most this share of a side is cropped, else the page is out
-MIN_NATIVE = 1000                                       # long side px of a raster page under this: too coarse
-PIC_OUT = 0.10                                          # the pages with the highest picture score (this share of the pool) are out
-PIC_POS = ("a page dominated by a large photograph", "a page with big colourful illustrations", "a poster with a large picture",
-           "a page with a large chart or diagram", "a page with a grid of photographs", "a comic page")          # picture score = max cosine to these - max cosine to PIC_NEG
-PIC_NEG = ("a page of printed text", "a scanned document page with text", "a page of handwritten text", "a form with fields",
-           "a page with a table")
-DUP_SIM = 0.95                                          # cosine above this (1536-d page vectors: pooled | mid-layer patch mean): the same page or template / series
-                                                        # office, a listing split into files); pages of one cluster: ~0.73
+PIC_POS = (
+    "a page dominated by a large photograph",
+    "a page with big colourful illustrations",
+    "a poster with a large picture",
+    "a page with a large chart or diagram",
+    "a page with a grid of photographs",
+    "a comic page",
+)  # picture score = max cosine to these - max cosine to PIC_NEG
+PIC_NEG = (
+    "a page of printed text",
+    "a scanned document page with text",
+    "a page of handwritten text",
+    "a form with fields",
+    "a page with a table",
+)
+# office, a listing split into files); pages of one cluster: ~0.73
 
 
 def crop_box(w, h, ratio=RATIO, max_crop=MAX_CROP):
@@ -90,7 +238,7 @@ def near_duplicates(X, c1, sim=DUP_SIM, prefer=None, block=2048):
     drop = np.zeros(len(c1), bool)
     c1 = np.asarray(c1)
     oc = c1[order]
-    srt = np.argsort(oc, kind="stable")                                  # pages of a cluster together, in the order of prefer
+    srt = np.argsort(oc, kind="stable")  # pages of a cluster together, in the order of prefer
     order, oc = order[srt], oc[srt]
     cuts = np.r_[0, np.flatnonzero(np.diff(oc)) + 1, len(oc)]
     for a, b in zip(cuts[:-1], cuts[1:]):
@@ -98,10 +246,10 @@ def near_duplicates(X, c1, sim=DUP_SIM, prefer=None, block=2048):
         Z = X[idx]
         alive = np.ones(len(idx), bool)
         for s in range(0, len(idx), block):
-            S = (Z[s:s + block] @ Z[s:].T) > sim                           # rows s.., columns s..
+            S = (Z[s : s + block] @ Z[s:].T) > sim  # rows s.., columns s..
             for j in range(min(block, len(idx) - s)):
                 if alive[s + j]:
-                    alive[s + j + 1:] &= ~S[j, j + 1:]
+                    alive[s + j + 1 :] &= ~S[j, j + 1 :]
         drop[idx[~alive]] = True
     return drop
 
@@ -134,15 +282,17 @@ def keep_pages(P):
 def supply(P):
     """Per fine cluster: n pages, digital pages, deep (0: every page of a document is a row of the pool), group."""
     g = P.groupby("c1")
-    deep = P.pages * 0                                                    # every page is its own embedded row: no estimate of pages not embedded
-    return pd.DataFrame({"n": g.size(), "dig": (~P.scan).groupby(P.c1).sum(), "deep": deep.groupby(P.c1).sum(), "c2": g.c2.first()})
+    deep = P.pages * 0  # every page is its own embedded row: no estimate of pages not embedded
+    return pd.DataFrame(
+        {"n": g.size(), "dig": (~P.scan).groupby(P.c1).sum(), "deep": deep.groupby(P.c1).sum(), "c2": g.c2.first()}
+    )
 
 
 def allocate(sup, budget, alpha=0.5):
     """Quota per fine cluster: water filling over the groups, then over the clusters of each group, weights supply ** alpha."""
     tot = sup.n + sup.deep
     t2 = tot.groupby(sup.c2).sum()
-    q2 = water(t2, budget, t2 ** alpha)
+    q2 = water(t2, budget, t2**alpha)
     q1 = pd.concat([water(tot[sup.c2 == k], q2[k], tot[sup.c2 == k] ** alpha) for k in q2.index if q2[k] > 0])
     return q1.reindex(sup.index, fill_value=0).round()
 
@@ -151,8 +301,8 @@ def demand(sup, budget, alpha=0.5):
     """The quota per fine cluster without the supply cap (what coverage would ask for)."""
     tot = sup.n + sup.deep
     t2 = tot.groupby(sup.c2).sum()
-    d2 = budget * t2 ** alpha / (t2 ** alpha).sum()
-    w = tot ** alpha
+    d2 = budget * t2**alpha / (t2**alpha).sum()
+    w = tot**alpha
     return d2.reindex(sup.c2).values * w / w.groupby(sup.c2).transform("sum")
 
 
@@ -173,9 +323,15 @@ def forms_plan(P, sup, q1, filled_share=0.5):
     F = P[P.p_form > FORM_P]
     blank = (F.p_fill < FILL_LO) & ~F.scan
     cand = (F.p_fill > FILL_HI) & ~F.reviewed
-    f = pd.DataFrame({"forms": F.groupby("c1").size(), "real_avail": F.real_filled.groupby(F.c1).sum(),
-                      "blank": blank.groupby(F.c1).sum(), "cand_dig": (cand & ~F.scan).groupby(F.c1).sum(),
-                      "cand_scan": (cand & F.scan).groupby(F.c1).sum()})
+    f = pd.DataFrame(
+        {
+            "forms": F.groupby("c1").size(),
+            "real_avail": F.real_filled.groupby(F.c1).sum(),
+            "blank": blank.groupby(F.c1).sum(),
+            "cand_dig": (cand & ~F.scan).groupby(F.c1).sum(),
+            "cand_scan": (cand & F.scan).groupby(F.c1).sum(),
+        }
+    )
     f = f[f.forms >= MIN_FORMS].join(q1.rename("q")).join(sup.n)
     f["need"] = (filled_share * f.q * f.forms / f.n).round()
     f["real"] = np.minimum(f.real_avail, f.need)
@@ -224,7 +380,7 @@ def density(X, ref, r=0.2, chunk=10000):
     """Share of the `ref` embeddings within cosine distance r of every row of X (rows are L2-normalised)."""
     out = np.zeros(len(X), np.float32)
     for i in range(0, len(X), chunk):
-        out[i:i + chunk] = ((X[i:i + chunk] @ ref.T) > 1 - r).mean(1)
+        out[i : i + chunk] = ((X[i : i + chunk] @ ref.T) > 1 - r).mean(1)
     return out
 
 
@@ -232,16 +388,17 @@ def nearest(X, C, chunk=20000):
     """Cosine distance of every row of X to its nearest row of C."""
     out = np.empty(len(X), np.float32)
     for i in range(0, len(X), chunk):
-        out[i:i + chunk] = 1 - (X[i:i + chunk] @ C.T).max(1)
+        out[i : i + chunk] = 1 - (X[i : i + chunk] @ C.T).max(1)
     return out
 
 
 def medoids(X, k, weight=None, seed=0):
     """Indices of the pages nearest to the k centres of a (weighted) spherical k-means: the bulk, k-medoid coverage."""
     from sklearn.cluster import MiniBatchKMeans
+
     km = MiniBatchKMeans(k, random_state=seed, batch_size=8192, n_init=1, max_iter=60).fit(X, sample_weight=weight)
     c = km.cluster_centers_ / np.linalg.norm(km.cluster_centers_, axis=1, keepdims=True)
-    return np.unique(np.concatenate([(X @ c[i:i + 200].T).argmax(0) for i in range(0, len(c), 200)]))
+    return np.unique(np.concatenate([(X @ c[i : i + 200].T).argmax(0) for i in range(0, len(c), 200)]))
 
 
 def farthest(X, k, have, cand):
@@ -275,7 +432,7 @@ def select_hybrid(X, dens, k, boundary=0.15, gamma=0.5, n_ref=30000, trim=25):
 def select_by_group(X, dens, groups, k, alpha=0.5, boundary=0.15, **kw):
     """Hybrid selection per group (language): quota ~ pages ** alpha, at least 1, capped by the group."""
     n = pd.Series(groups).value_counts()
-    q = water(n, k, n ** alpha).round().astype(int).clip(lower=1)
+    q = water(n, k, n**alpha).round().astype(int).clip(lower=1)
     sel = []
     for g, qg in q.items():
         ix = np.where(groups == g)[0]

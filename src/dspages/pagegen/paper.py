@@ -1,11 +1,12 @@
 """Pixels of a page: print boxes and form fields of a PDF page, free paper, ink blended on it, the scan look."""
+
 from dataclasses import replace
 
 import cv2
 import numpy as np
-
 from hwsynth import scan
 from hwsynth.config import ScanCfg
+
 from .config import GenCfg
 
 
@@ -15,8 +16,12 @@ def page_segments(pg, cfg: GenCfg, textpage=None):
     leaders = set(cfg.leader_chars)
 
     def bbox(cs):
-        return (min(c["bbox"][0] for c in cs), min(c["bbox"][1] for c in cs),
-                max(c["bbox"][2] for c in cs), max(c["bbox"][3] for c in cs))
+        return (
+            min(c["bbox"][0] for c in cs),
+            min(c["bbox"][1] for c in cs),
+            max(c["bbox"][2] for c in cs),
+            max(c["bbox"][3] for c in cs),
+        )
 
     for b in pg.get_text("rawdict", textpage=textpage)["blocks"]:
         for ln in b.get("lines", []):
@@ -58,7 +63,7 @@ def free_mask(img, prints, cfg: GenCfg):
     ver = cv2.morphologyEx(ink, cv2.MORPH_OPEN, kernel(1, cfg.vrule_len)) & ~solid
     occ = ink & ~(hor | ver)
     for x0, y0, x1, y1 in prints:
-        occ[int(y0):int(y1) + 1, int(x0):int(x1) + 1] = 1
+        occ[int(y0) : int(y1) + 1, int(x0) : int(x1) + 1] = 1
     _, _, st, _ = cv2.connectedComponentsWithStats(hor)
     rules = [(x, y, x + w, y + h) for x, y, w, h, _ in st[1:] if w >= cfg.rule_len and h <= cfg.rule_max_h]
     k = np.ones((cfg.occ_dilate, cfg.occ_dilate), np.uint8)
@@ -67,7 +72,9 @@ def free_mask(img, prints, cfg: GenCfg):
 
 def blend(img, alpha, rgb, x, y, density):
     h, w = alpha.shape
-    img[y:y + h, x:x + w] = (img[y:y + h, x:x + w] * (1 - density * alpha[..., None] * (1 - rgb[None, None]))).astype(np.uint8)
+    img[y : y + h, x : x + w] = (
+        img[y : y + h, x : x + w] * (1 - density * alpha[..., None] * (1 - rgb[None, None]))
+    ).astype(np.uint8)
 
 
 def degrade(img, rng, cfg: GenCfg, p_scan):

@@ -1,13 +1,15 @@
 """One index of every decoding table dspages.layout.legacy_tables can route: tables/INDEX.json and tables/INDEX.md.
 Per kind: where the table comes from; per font family key: the kind, the table, how many codes it has (labelled: by hand / guessed).
 python tools/tables_index.py"""
+
 import json
 import os
 import sys
 from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-from dspages.layout import legacy_tables as T, padma
+from dspages.layout import legacy_tables as T
+from dspages.layout import padma
 
 SOURCE = {
     "padma": "Padma (Mozilla Public License), encodings/*.js: Telugu, Devanagari, Tamil, Bengali, Malayalam, Gurmukhi newspaper and DTP fonts",
@@ -53,10 +55,19 @@ out = {"kinds": SOURCE, "fonts": {k: v for k, v in sorted(fonts.items())}}
 json.dump(out, open(os.path.join(T.TABLES, "INDEX.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 kinds = Counter(next(iter(v)) for v in fonts.values())
 with open(os.path.join(T.TABLES, "INDEX.md"), "w", encoding="utf-8") as f:
-    f.write("# Legacy font decoding tables\n\nLookup order in `legacy_tables.route`: published table first; a hand label or guess only fills codes the table leaves as typed.\n\n## Table kinds\n\n")
+    f.write(
+        "# Legacy font decoding tables\n\nLookup order in `legacy_tables.route`: published table first; a hand label or guess only fills codes the table leaves as typed.\n\n## Table kinds\n\n"
+    )
     for k, v in SOURCE.items():
         f.write(f"- **{k}** ({sum(1 for x in fonts.values() if k in x)} font keys): {v}\n")
     f.write("\n## Font keys\n\n| font key | tables |\n|---|---|\n")
     for k, v in sorted(fonts.items()):
-        f.write(f"| {k} | " + "; ".join(f"{a}:{b if not isinstance(b, dict) else str(b['by_hand']) + ' by hand + ' + str(b['guessed']) + ' guessed'}" for a, b in v.items()) + " |\n")
+        f.write(
+            f"| {k} | "
+            + "; ".join(
+                f"{a}:{b if not isinstance(b, dict) else str(b['by_hand']) + ' by hand + ' + str(b['guessed']) + ' guessed'}"
+                for a, b in v.items()
+            )
+            + " |\n"
+        )
 print(len(fonts), "font keys", dict(kinds), "->", T.TABLES + "/INDEX.md")

@@ -1,11 +1,9 @@
 """Content detection on a gray page and the choice of a content-filled window of any aspect ratio."""
+
 import cv2
 import numpy as np
 
-SCAN_MAX_SIDE = 512
-LINE_KSIZE = 15
-LINE_THRESH = 36
-PATCH_INK_EPS = 0.01
+from .config import LINE_KSIZE, LINE_THRESH, PATCH_INK_EPS, POSITIONS, SCAN_MAX_SIDE, WIDTHS  # noqa: F401
 
 
 def content_mask(gray, max_side=SCAN_MAX_SIDE):
@@ -22,8 +20,12 @@ def bbox(mask):
     rows, cols = mask.any(1), mask.any(0)
     if not rows.any():
         return None
-    return (int(rows.argmax()), len(rows) - 1 - int(rows[::-1].argmax()),
-            int(cols.argmax()), len(cols) - 1 - int(cols[::-1].argmax()))
+    return (
+        int(rows.argmax()),
+        len(rows) - 1 - int(rows[::-1].argmax()),
+        int(cols.argmax()),
+        len(cols) - 1 - int(cols[::-1].argmax()),
+    )
 
 
 def window_limits(bw, bh, aspect, max_margin):
@@ -31,10 +33,6 @@ def window_limits(bw, bh, aspect, max_margin):
     margins <= max_margin of the window on the axis where the content is relatively narrower (the other axis is
     cropped when lo > hi)."""
     return max(bw, bh * aspect), min(bw, bh * aspect) / (1 - 2 * max_margin)
-
-
-WIDTHS = 6
-POSITIONS = 9
 
 
 def window_stats(ink, pics, s, wins, grid):
@@ -78,8 +76,14 @@ def place_window(rng, box, aspect, max_margin, min_w, mask, s, pics, min_fill, g
     widths = np.linspace(a, hi, WIDTHS) if a <= hi else np.array([a])
     ink = cv2.integral(mask.astype(np.uint8)).astype(np.int64)
     pic = cv2.integral(pics.astype(np.uint8)).astype(np.int64)
-    wins = np.array([(x, y, w, w / aspect) for w in widths for x in _axis(x0, bw, w, max_margin)
-                     for y in _axis(y0, bh, w / aspect, max_margin)])
+    wins = np.array(
+        [
+            (x, y, w, w / aspect)
+            for w in widths
+            for x in _axis(x0, bw, w, max_margin)
+            for y in _axis(y0, bh, w / aspect, max_margin)
+        ]
+    )
     fill, share = window_stats(ink, pic, s, wins, grid)
     ok = np.flatnonzero((fill >= min_fill) & (share <= max_image))
     k = int(ok[rng.integers(len(ok))]) if ok.size else int(np.lexsort((-fill, np.maximum(share - max_image, 0)))[0])

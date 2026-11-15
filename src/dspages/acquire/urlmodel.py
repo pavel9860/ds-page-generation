@@ -1,6 +1,7 @@
 """Link text -> the ds_head space (16-d). Learned on the corpus documents with a known source url: the target is the mean head vector of the
 document's in-scope pages. A url is a bag of hashed tokens (host, tld, directory names, words of the path, number shapes), mean-pooled by an
 EmbeddingBag and a small MLP. It places the 100M urls of the Common Crawl pdf index near the open points of a selection without opening the files."""
+
 import re
 import zlib
 
@@ -9,9 +10,9 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
+from .config import BUCKETS  # noqa: F401
 from .paths import WORK
 
-BUCKETS = 1 << 20
 MODEL = WORK / "urlmodel.pt"
 WORD = re.compile(r"[a-z]+|\d+")
 
@@ -27,7 +28,7 @@ def tokens(url, text=""):
     for w in WORD.findall(path):
         t.append(f"#{min(len(w), 6)}" if w.isdigit() else w)
     t += [f"b:{a}_{b}" for a, b in zip(t[4:], t[5:])]
-    t += [f"w:{w}" for w in WORD.findall(text.lower()[:600]) if not w.isdigit()][:60]          # the description
+    t += [f"w:{w}" for w in WORD.findall(text.lower()[:600]) if not w.isdigit()][:60]  # the description
     return t
 
 
@@ -52,12 +53,18 @@ class Net(nn.Module):
 def corpus(cc_source_urls, Z, paths, texts):
     """(urls, texts, targets, hosts): one row per corpus document with a url, a description (descr.corpus) and in-scope pages; target = mean head vector of its pages."""
     from .paths import doc_hash
+
     d = pd.Series([doc_hash(p) for p, _ in paths])
     M = pd.DataFrame(Z).groupby(d.to_numpy()).mean()
     U = cc_source_urls()
     k = [h for h in M.index if U.get(h) and len(texts.get(h, "")) >= 30]
     urls = [U[h] for h in k]
-    return urls, [texts[h] for h in k], M.loc[k].to_numpy(np.float32), [u.split("://", 1)[-1].split("/", 1)[0] for u in urls]
+    return (
+        urls,
+        [texts[h] for h in k],
+        M.loc[k].to_numpy(np.float32),
+        [u.split("://", 1)[-1].split("/", 1)[0] for u in urls],
+    )
 
 
 def train(urls, texts, Y, hosts, epochs=8, bs=256, r=None):
@@ -74,7 +81,7 @@ def train(urls, texts, Y, hosts, epochs=8, bs=256, r=None):
         net.train()
         o = np.random.permutation(len(tr))
         for a in range(0, len(o), bs):
-            b = o[a:a + bs]
+            b = o[a : a + bs]
             ids, off = encode([urls[tr[i]] for i in b], [texts[tr[i]] for i in b])
             loss = ((net(ids, off) - Yt[b]) ** 2).sum(1).mean()
             for o_ in opt:
@@ -88,7 +95,15 @@ def train(urls, texts, Y, hosts, epochs=8, bs=256, r=None):
         base = (Ye - Yt.mean(0)).norm(dim=1)
         if err.mean() < best[0]:
             best = (err.mean().item(), {k: v.clone() for k, v in net.state_dict().items()})
-        print(f"epoch {ep}: held-out error {err.mean():.3f} (mean vector {base.mean():.3f})" + (f", within r {(err <= r).float().mean():.3f} (mean vector {(base <= r).float().mean():.3f})" if r else ""), flush=True)
+        print(
+            f"epoch {ep}: held-out error {err.mean():.3f} (mean vector {base.mean():.3f})"
+            + (
+                f", within r {(err <= r).float().mean():.3f} (mean vector {(base <= r).float().mean():.3f})"
+                if r
+                else ""
+            ),
+            flush=True,
+        )
     WORK.mkdir(parents=True, exist_ok=True)
     torch.save(best[1], MODEL)
     return net

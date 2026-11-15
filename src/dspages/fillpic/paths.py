@@ -1,4 +1,5 @@
 """Where the data of the pipeline lives (outside the repo): the corpus, the manifest, the embedding table, the model and the results."""
+
 import json
 import re
 from pathlib import Path

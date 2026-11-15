@@ -1,12 +1,13 @@
 """Where the evidence about a legacy font comes from: the corpus documents that use it, the pictures of its text spans and glyphs, and what readers (Tesseract, agents) saw in them.
 
-    Corpus(families)                           documents per font family and their languages (manifest.sqlite)
-    traces(fam, docs, paths)                   the text spans of the family in the documents
-    typed_codes(fam, ...)                      the typed codes of its spans (no reading)
-    ocr_pairs(fam, script, ...)                [(typed codes, text)] read by Tesseract in the script of the font
-    dump_lines / dump_sheet                    pictures for an agent to read (.tmp/reads/<family>/): lines.json + NN.png, sheet.png + glyphs.json (second: sheet2.png ...)
-    agent_pairs(fam), agent_glyphs(fam)        what the agent wrote back (texts.json, glyph_texts.json + glyph_texts2.json: the glyphs both readings agree on)
-    signature(fam)                             a string that changes when the evidence of a family does"""
+Corpus(families)                           documents per font family and their languages (manifest.sqlite)
+traces(fam, docs, paths)                   the text spans of the family in the documents
+typed_codes(fam, ...)                      the typed codes of its spans (no reading)
+ocr_pairs(fam, script, ...)                [(typed codes, text)] read by Tesseract in the script of the font
+dump_lines / dump_sheet                    pictures for an agent to read (.tmp/reads/<family>/): lines.json + NN.png, sheet.png + glyphs.json (second: sheet2.png ...)
+agent_pairs(fam), agent_glyphs(fam)        what the agent wrote back (texts.json, glyph_texts.json + glyph_texts2.json: the glyphs both readings agree on)
+signature(fam)                             a string that changes when the evidence of a family does"""
+
 import collections
 import glob
 import json
@@ -17,17 +18,36 @@ import unicodedata
 import pymupdf
 from PIL import Image
 
-from . import legacy as L, legacy_fit as F, legacy_tables as T
+from . import legacy as L
+from . import legacy_fit as F
+from . import legacy_tables as T
 
 LAYOUTS = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(T.TABLES))))
-READS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), ".tmp", "reads")
-TESS_OF = {"Devanagari": "hin", "Tamil": "tam", "Telugu": "tel", "Gujarati": "guj", "Oriya": "ori", "Sinhala": "sin", "Khmer": "khm", "Bengali": "ben", "Kannada": "kan",
-           "Malayalam": "mal", "Gurmukhi": "pan", "Thai": "tha", "Arabic": "urd", "Myanmar": "mya"}
+READS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), ".tmp", "reads"
+)
+TESS_OF = {
+    "Devanagari": "hin",
+    "Tamil": "tam",
+    "Telugu": "tel",
+    "Gujarati": "guj",
+    "Oriya": "ori",
+    "Sinhala": "sin",
+    "Khmer": "khm",
+    "Bengali": "ben",
+    "Kannada": "kan",
+    "Malayalam": "mal",
+    "Gurmukhi": "pan",
+    "Thai": "tha",
+    "Arabic": "urd",
+    "Myanmar": "mya",
+}
 MIN_CONF, DPI = 75, 300
 
 
 class Corpus:
     """The documents of the manifest that use a set of font families: .docs {family: [document]}, .paths {document: pdf path}, .lang {document: language}."""
+
     def __init__(self, families, docs_per_family=12):
         db = sqlite3.connect("file:" + os.path.join(LAYOUTS, "manifest.sqlite") + "?mode=ro", uri=True)
         self.paths = {h: p for h, p in db.execute("select hash, path from files where ext = '.pdf'")}
@@ -40,13 +60,20 @@ class Corpus:
 
     def language(self, fam, script):
         """The most common language of the documents of the family written in the script (else any language of the script)."""
-        c = collections.Counter(self.lang.get(d) for d in self.docs[fam] if L.LANG_SCRIPT.get(self.lang.get(d)) == script)
+        c = collections.Counter(
+            self.lang.get(d) for d in self.docs[fam] if L.LANG_SCRIPT.get(self.lang.get(d)) == script
+        )
         return c.most_common(1)[0][0] if c else next((lg for lg, sc in L.LANG_SCRIPT.items() if sc == script), None)
 
     def scan(self, fam, script, limit=150):
         """For a font the manifest's font table does not list: the documents of the languages of the script that use it (every such document is opened: first 6 pages)."""
         from concurrent.futures import ProcessPoolExecutor
-        jobs = [(fam, d, self.paths[d]) for d, lg in self.lang.items() if L.LANG_SCRIPT.get(lg) == script and d in self.paths]
+
+        jobs = [
+            (fam, d, self.paths[d])
+            for d, lg in self.lang.items()
+            if L.LANG_SCRIPT.get(lg) == script and d in self.paths
+        ]
         with ProcessPoolExecutor(4) as ex:
             return [d for d in ex.map(_has_font, jobs, chunksize=16) if d][:limit]
 
@@ -92,10 +119,22 @@ def lines(corpus, fam, pages=3, min_chars=3):
                 trs.sort(key=lambda t: t["bbox"][0])
                 group = []
                 for t in trs + [None]:
-                    if group and (t is None or t["bbox"][0] - group[-1]["bbox"][2] > 3 * (group[-1]["bbox"][3] - group[-1]["bbox"][1])):
+                    if group and (
+                        t is None
+                        or t["bbox"][0] - group[-1]["bbox"][2] > 3 * (group[-1]["bbox"][3] - group[-1]["bbox"][1])
+                    ):
                         codes = "".join(codes_of(g) for g in group)
                         if len(codes.strip()) >= min_chars:
-                            yield pg, codes, (min(g["bbox"][0] for g in group), min(g["bbox"][1] for g in group), max(g["bbox"][2] for g in group), max(g["bbox"][3] for g in group))
+                            yield (
+                                pg,
+                                codes,
+                                (
+                                    min(g["bbox"][0] for g in group),
+                                    min(g["bbox"][1] for g in group),
+                                    max(g["bbox"][2] for g in group),
+                                    max(g["bbox"][3] for g in group),
+                                ),
+                            )
                         group = []
                     if t is not None:
                         group.append(t)
@@ -132,7 +171,9 @@ def ocr_pairs(corpus, fam, script, limit=1500, pages=3):
     if script not in TESS_OF:
         return []
     import tesserocr
+
     from dspages.hand.ocr import TESS
+
     api = tesserocr.PyTessBaseAPI(path=TESS, lang=TESS_OF[script] + "+eng", psm=tesserocr.PSM.SINGLE_LINE)
     out = []
     for codes, im in span_pictures(corpus, fam, limit, pages):
@@ -168,7 +209,7 @@ def dump_lines(corpus, fam, n=60, pages=10, more=False):
         if len(codes.strip()) >= 3 and codes not in seen:
             seen.add(codes)
             out.append((codes, im))
-    out = out[::max(len(out) // n, 1)][:n]
+    out = out[:: max(len(out) // n, 1)][:n]
     for i, (_, im) in enumerate(out):
         im.save(os.path.join(folder(fam), f"{'m' if more else ''}{i:02d}.png"))
     if out:
@@ -196,7 +237,11 @@ def dump_sheet(corpus, fam, n=80, second=False):
     glyphs2.json), the independent second reading. Returns the number of glyphs."""
     font, use = font_program(corpus, fam)
     drawn = lambda c: c if font.has_glyph(ord(c)) else chr(0xF000 + ord(c))
-    codes = [c for c, _ in use.most_common() if c.strip() and font and (font.has_glyph(ord(c)) or font.has_glyph(0xF000 + ord(c)))][:n]
+    codes = [
+        c
+        for c, _ in use.most_common()
+        if c.strip() and font and (font.has_glyph(ord(c)) or font.has_glyph(0xF000 + ord(c)))
+    ][:n]
     if not codes:
         return 0
     cell, cols = (120, 8) if second else (96, 10)
@@ -238,7 +283,15 @@ def agent_glyphs(fam):
 def signature(fam):
     """A string that changes when the readings (the json files) of the family change; the pictures can be regenerated and are not part of it."""
     path = os.path.join(READS, fam)
-    return ",".join(f"{f}:{os.path.getmtime(os.path.join(path, f)):.0f}" for f in sorted(os.listdir(path)) if f.endswith(".json")) if os.path.isdir(path) else ""
+    return (
+        ",".join(
+            f"{f}:{os.path.getmtime(os.path.join(path, f)):.0f}"
+            for f in sorted(os.listdir(path))
+            if f.endswith(".json")
+        )
+        if os.path.isdir(path)
+        else ""
+    )
 
 
 def dump_paths(path, page, per_sheet=30, dpi=200, min_px=48, second=False):
@@ -246,6 +299,7 @@ def dump_paths(path, page, per_sheet=30, dpi=200, min_px=48, second=False):
     line k of the page numbered k) + lines.json [glyphs of each line]; the agent writes texts.json [text of each line, "" for a line that is no text]. second=True: the
     independent second reading, 10 lines a sheet (second_NN.png; the agent writes texts2.json). Returns the lines."""
     from PIL import ImageDraw
+
     pdf = pymupdf.open(path)
     lines = L.path_glyphs(pdf[page])
     if not lines:
@@ -260,7 +314,9 @@ def dump_paths(path, page, per_sheet=30, dpi=200, min_px=48, second=False):
             for r in lines[k]:
                 box |= r
             pad = box.height
-            pix = pdf[page].get_pixmap(dpi=max(dpi, round(min_px * 72 / max(box.height, 1))), clip=box + (-pad, -pad / 2, pad, pad / 2))    # small text drawn min_px tall at least
+            pix = pdf[page].get_pixmap(
+                dpi=max(dpi, round(min_px * 72 / max(box.height, 1))), clip=box + (-pad, -pad / 2, pad, pad / 2)
+            )  # small text drawn min_px tall at least
             crops.append((k, Image.frombytes("RGB", (pix.width, pix.height), pix.samples)))
         W, H = max(im.width for _, im in crops) + 60, sum(im.height + 8 for _, im in crops)
         sheet = Image.new("RGB", (W, H), "white")
@@ -283,14 +339,21 @@ def collect_paths():
     for d in sorted(glob.glob(os.path.join(READS, "paths", "*", "lines.json"))):
         d = os.path.dirname(d)
         glyphs = json.load(open(os.path.join(d, "lines.json")))
-        reads = [json.load(open(f, encoding="utf-8")) for f in (os.path.join(d, f"texts{t}.json") for t in ("", "2", "3")) if os.path.exists(f)]
+        reads = [
+            json.load(open(f, encoding="utf-8"))
+            for f in (os.path.join(d, f"texts{t}.json") for t in ("", "2", "3"))
+            if os.path.exists(f)
+        ]
         if any(len(r) != len(glyphs) for r in reads[:2]):
             raise ValueError(f"{d}: a reading of another number of lines than {len(glyphs)}")
         if len(reads) < 2:
             open_ += [(os.path.basename(d), k) for k in range(len(glyphs))]
             continue
         third = reads[2] if len(reads) > 2 else {}
-        texts = [norm(a) if norm(a) == norm(b) else norm(third[str(k)]) if str(k) in third else None for k, (a, b) in enumerate(zip(*reads[:2]))]
+        texts = [
+            norm(a) if norm(a) == norm(b) else norm(third[str(k)]) if str(k) in third else None
+            for k, (a, b) in enumerate(zip(*reads[:2]))
+        ]
         open_ += [(os.path.basename(d), k) for k, t in enumerate(texts) if t is None]
         if None not in texts:
             got[os.path.basename(d)] = dict(glyphs=glyphs, texts=texts)

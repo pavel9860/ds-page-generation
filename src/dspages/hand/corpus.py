@@ -1,4 +1,5 @@
 """Access to the corpus catalogue: documents, their languages and page types (SQLite manifest + embedding classification)."""
+
 import json
 import os
 import sqlite3
@@ -28,7 +29,11 @@ def page_types(min_p=0.0):
 
 def languages(db, min_conf=0.95, min_chars=0):
     """{document: language} of the confident language labels."""
-    return {d: lg for d, lg, cf, ch in db.execute("select doc,lang,conf,chars from lang_res") if cf >= min_conf and (ch or 0) >= min_chars}
+    return {
+        d: lg
+        for d, lg, cf, ch in db.execute("select doc,lang,conf,chars from lang_res")
+        if cf >= min_conf and (ch or 0) >= min_chars
+    }
 
 
 def resolve(rel):
@@ -42,8 +47,11 @@ def resolve(rel):
 
 def pdf_documents(db):
     """[(document, path, pages)] of the PDFs with a digital text layer."""
-    return [(d, resolve(p), n or 1) for d, p, c, n in db.execute("select doc,new_path,cls,pages from plan")
-            if c == "text" and p.lower().endswith(".pdf")]
+    return [
+        (d, resolve(p), n or 1)
+        for d, p, c, n in db.execute("select doc,new_path,cls,pages from plan")
+        if c == "text" and p.lower().endswith(".pdf")
+    ]
 
 
 def pdf_paths(db):

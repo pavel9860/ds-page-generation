@@ -1,13 +1,15 @@
 """Google Translate in a headless browser (Brave through selenium), no tokens
 python scripts/translation/gt_run.py [--workers 3] [--lang xx] [--extra]   (--extra: source/jobs_extra.json, files gt_<lang>x.json)"""
+
 import json
 import sys
 import time
 from multiprocessing import Pool
 from urllib.parse import quote
 
-from dspages.multilang.paths import TRANSLATION
 from selenium import webdriver
+
+from dspages.multilang.paths import TRANSLATION
 
 D = TRANSLATION / "source"
 OUT = TRANSLATION / "google"
@@ -24,7 +26,7 @@ def translate(d, lines):
     text = "\n".join(lines)
     d.execute_script(SET, "")
     t0 = time.time()
-    while d.execute_script(GET) and time.time() - t0 < 5:           # the last text's output gone: nothing stale is read
+    while d.execute_script(GET) and time.time() - t0 < 5:  # the last text's output gone: nothing stale is read
         time.sleep(0.1)
     d.execute_script(SET, text)
     last, stable, t0 = "", 0, time.time()
@@ -35,7 +37,9 @@ def translate(d, lines):
             stable = stable + 1 if t == last else 0
             last = t
             parts = t.split("\n")
-            if stable >= 12 or stable >= 4 and len(parts) == len(lines):    # 1 s unchanged with every line there, else 3 s (Google refines a long text in steps)
+            if (
+                stable >= 12 or stable >= 4 and len(parts) == len(lines)
+            ):  # 1 s unchanged with every line there, else 3 s (Google refines a long text in steps)
                 return parts if len(parts) == len(lines) else None
     return None
 
@@ -82,7 +86,7 @@ def run_lang(args):
                 if tr is not None:
                     p = 0
                     for key, ls in grp:
-                        res[key] = tr[p:p + len(ls)]
+                        res[key] = tr[p : p + len(ls)]
                         p += len(ls)
                 else:
                     for key, ls in grp:
@@ -93,7 +97,9 @@ def run_lang(args):
         if bad == 0:
             f.write_text(json.dumps(dict(lang=lang, tl=tl, items=items), ensure_ascii=False))
         else:
-            (OUT / f"bad_{lang}{SUF}.json").write_text(json.dumps(dict(lang=lang, tl=tl, items=items), ensure_ascii=False))
+            (OUT / f"bad_{lang}{SUF}.json").write_text(
+                json.dumps(dict(lang=lang, tl=tl, items=items), ensure_ascii=False)
+            )
         return lang, "ok" if bad == 0 else f"{bad} forms with failed lines"
     except Exception as e:
         return lang, f"err {e!r}"[:150]
@@ -104,7 +110,9 @@ def run_lang(args):
 def main():
     w = int(sys.argv[sys.argv.index("--workers") + 1]) if "--workers" in sys.argv else 3
     only = sys.argv[sys.argv.index("--lang") + 1] if "--lang" in sys.argv else None
-    jobs = [j for j in json.loads((D / ("jobs_extra.json" if SUF else "jobs.json")).read_text()) if not only or j[0] == only]
+    jobs = [
+        j for j in json.loads((D / ("jobs_extra.json" if SUF else "jobs.json")).read_text()) if not only or j[0] == only
+    ]
     with Pool(w) as p:
         for lang, st in p.imap_unordered(run_lang, jobs):
             print(lang, st, flush=True)

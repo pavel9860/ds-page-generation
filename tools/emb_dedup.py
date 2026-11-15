@@ -11,6 +11,7 @@ embedding rows, scan_pct and hw_det (the files stay). Data: Layouts/archive/info
           `pages` deleted (the .bak of apply is the one backup)
 
 python tools/emb_dedup.py plan | apply | rows"""
+
 import argparse
 import itertools
 import os
@@ -18,17 +19,24 @@ import shutil
 import sqlite3
 from pathlib import Path
 
+import layouts_revise as LR
 import numpy as np
 import pandas as pd
 
-import layouts_revise as LR
+from dspages import paths as _P  # noqa: E402
 from dspages.hand.config import PATHS
 
 LAYOUTS = Path(PATHS.layouts)
 WORK = Path(PATHS.uvtm) / "tests" / "work" / "emb_dedup"
-SAME = "/run/media/p/D/ML_DS/UVTM/tests/ds_border/same.parquet"
+SAME = f"{_P.ROOT}/tests/ds_border/same.parquet"
 EMB = Path(PATHS.uvtm) / "Labels" / "embedding" / "emb_out"
-BACKUP = [EMB / "embeddings.npy", EMB / "ids.npy", EMB / "manifest.jsonl", LAYOUTS / "archive" / "info" / "scan_pct.parquet", LR.WORK / "dups.parquet"]
+BACKUP = [
+    EMB / "embeddings.npy",
+    EMB / "ids.npy",
+    EMB / "manifest.jsonl",
+    LAYOUTS / "archive" / "info" / "scan_pct.parquet",
+    LR.WORK / "dups.parquet",
+]
 
 
 def cmd_plan(_):
@@ -57,7 +65,9 @@ def cmd_plan(_):
     WORK.mkdir(parents=True, exist_ok=True)
     M.to_parquet(WORK / "doc_moves.parquet")
     Dp.to_parquet(WORK / "page_drops.parquet")
-    print(f"documents to move (all pages in another document): {len(M)}  (smaller {int((M.pages < M.kept_pages).sum())}, equal size {int((M.pages == M.kept_pages).sum())})")
+    print(
+        f"documents to move (all pages in another document): {len(M)}  (smaller {int((M.pages < M.kept_pages).sum())}, equal size {int((M.pages == M.kept_pages).sum())})"
+    )
     print(f"pages to drop from the data (identical page kept once): {len(Dp)} of {Dp.h.nunique()} documents")
 
 
@@ -86,10 +96,12 @@ def cmd_rows(_):
     keep = np.array([(int(d), int(p)) not in drop for d, p in ids])
     print(f"embedding rows {len(ids)} -> {int(keep.sum())} ({len(drop)} pages to drop, {int((~keep).sum())} found)")
     E = np.load(EMB / "embeddings.npy", mmap_mode="r")
-    out = np.lib.format.open_memmap(EMB / "embeddings.new.npy", mode="w+", dtype=E.dtype, shape=(int(keep.sum()), E.shape[1]))
+    out = np.lib.format.open_memmap(
+        EMB / "embeddings.new.npy", mode="w+", dtype=E.dtype, shape=(int(keep.sum()), E.shape[1])
+    )
     rows = np.flatnonzero(keep)
     for a in range(0, len(rows), 50_000):
-        out[a:a + 50_000] = E[rows[a:a + 50_000]]
+        out[a : a + 50_000] = E[rows[a : a + 50_000]]
     out.flush()
     del out, E
     os.replace(EMB / "embeddings.new.npy", EMB / "embeddings.npy")

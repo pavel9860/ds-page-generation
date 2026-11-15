@@ -17,6 +17,7 @@ OUT/maps.jsonl                    id, source, group, split, aug (flip, half, mod
 OUT/sources.jsonl                 source, group, split, variants, category, stem, qc; OUT/sources/s<source>.npz the unaugmented grid3d
 OUT/qc.json                       checks of the written maps (files, leakage between splits, step uniformity)
 """
+
 import argparse
 import csv
 import json
@@ -29,19 +30,15 @@ from pathlib import Path
 
 import numpy as np
 from scipy import ndimage
-from scipy.spatial import cKDTree
 from scipy.interpolate import LinearNDInterpolator
+from scipy.spatial import cKDTree
 
 from ..config import UVTM
+from .config import DUP_MM, MESH, ROUNDS, SHEET, SPLIT  # noqa: F401
 
 SRC = Path(f"{UVTM}/GridPages/3d_maps")
 OUT = Path(f"{UVTM}/GridPages/maps3d_256x360")
-SHEET = (210.0, 297.0)                     # mm (width, height)
-MESH = (256, 360)                          # nodes (across, down)
-ROUNDS = 4                                 # column and row passes of `even`
 ROT_DEG, SLIDE, ZOOM = (5.0, 15.0), (0.05, 0.15), (1.4, 1.6)
-DUP_MM = 1.0                               # rms height difference [mm] under which two shapes are one group
-SPLIT = (("val", 0.05), ("test", 0.05))
 RARE = ("Book_v1.1.0", "Book_water1.1.0")  # few sources: they get the most variants
 ZOOMED = ("Book_water1.1.0",)
 
@@ -53,7 +50,7 @@ def load(path):
         head = next(rd)
         d = np.array([[float(x) if x else np.nan for x in row] for row in rd]).reshape(-1, len(head))
     d = {k: d[:, i] for i, k in enumerate(head)}
-    g = np.isfinite(d["row"]) & np.isfinite(d["col"])                   # nodes without a grid index: left as holes
+    g = np.isfinite(d["row"]) & np.isfinite(d["col"])  # nodes without a grid index: left as holes
     d = {k: v[g] for k, v in d.items()}
     r, c = d["row"].astype(int), d["col"].astype(int)
     P = np.full((r.max() + 1, c.max() + 1, 3), np.nan)
@@ -67,10 +64,12 @@ def frame(P, camera=None):
     """P (R, C, 3) in the page frame: Z along the page normal (mean cross of the row and column directions), X along the
     columns, Y up, rows going down; shifted to X, Y, Z >= 0. With `camera` (a point), the columns are reversed first when the
     page is seen from behind."""
+
     def axes(P):
         du, dv = np.gradient(P, axis=1), np.gradient(P, axis=0)
         n = np.cross(dv, du).mean((0, 1))
         return n / np.linalg.norm(n), du.mean((0, 1))
+
     n, du = axes(P)
     if camera is not None and n @ (camera - P.mean((0, 1))) < 0:
         P = P[:, ::-1]
@@ -139,8 +138,12 @@ def uniform(G, passes=3):
 
 def step_error(G):
     """Largest and 99th percentile |step / nominal step - 1| of the (360, 256) grid G, rows and columns."""
-    e = np.concatenate([(np.linalg.norm(np.diff(G, axis=1), axis=-1) / (SHEET[0] / (MESH[0] - 1)) - 1).ravel(),
-                        (np.linalg.norm(np.diff(G, axis=0), axis=-1) / (SHEET[1] / (MESH[1] - 1)) - 1).ravel()])
+    e = np.concatenate(
+        [
+            (np.linalg.norm(np.diff(G, axis=1), axis=-1) / (SHEET[0] / (MESH[0] - 1)) - 1).ravel(),
+            (np.linalg.norm(np.diff(G, axis=0), axis=-1) / (SHEET[1] / (MESH[1] - 1)) - 1).ravel(),
+        ]
+    )
     return float(np.abs(e).max()), float(np.percentile(np.abs(e), 99))
 
 
@@ -151,7 +154,7 @@ def prepare(args):
     if P.shape[0] < P.shape[1]:
         P, ok = np.rot90(P), np.rot90(ok)
     H, W = ok.shape
-    unit = np.mean([SHEET[0] / (W - 1), SHEET[1] / (H - 1)])           # mm per grid unit: the nodes span the sheet
+    unit = np.mean([SHEET[0] / (W - 1), SHEET[1] / (H - 1)])  # mm per grid unit: the nodes span the sheet
     V = fill(np.where(ok[..., None], P, 0.0) * unit, ok)
     for _ in range(ROUNDS):
         V = even(even(V, unit, 0), unit, 1)
@@ -159,7 +162,9 @@ def prepare(args):
     rr, cc = np.meshgrid(np.linspace(0, H - 1, MESH[1]), np.linspace(0, W - 1, MESH[0]), indexing="ij")
     G = uniform(np.stack([ndimage.map_coordinates(V[..., k], [rr, cc], order=3) for k in range(3)], -1), 1)
     err = step_error(G)
-    return dict(category=cat, stem=stem, missing=float(1 - ok.mean()), step_err=err, relief_mm=float(G[..., 2].max())), G.astype(np.float32)
+    return dict(
+        category=cat, stem=stem, missing=float(1 - ok.mean()), step_err=err, relief_mm=float(G[..., 2].max())
+    ), G.astype(np.float32)
 
 
 def sample(G, aug):
@@ -186,7 +191,9 @@ def sample(G, aug):
 def max_scale(R, C, t):
     """Largest crop side (share of the page) at a turn t [rad] that stays inside the grid."""
     t = abs(t)
-    return min((C - 1) / ((C - 1) * np.cos(t) + (R - 1) * np.sin(t)), (R - 1) / ((C - 1) * np.sin(t) + (R - 1) * np.cos(t)))
+    return min(
+        (C - 1) / ((C - 1) * np.cos(t) + (R - 1) * np.sin(t)), (R - 1) / ((C - 1) * np.sin(t) + (R - 1) * np.cos(t))
+    )
 
 
 def draw_aug(rng, mode, R, C):
@@ -204,7 +211,10 @@ def draw_aug(rng, mode, R, C):
         if a["theta"]:
             t = abs(np.radians(a["theta"]))
             w, h = a["scale"] * (C - 1), a["scale"] * (R - 1)
-            slack_xy = [((C - 1) - (w * np.cos(t) + h * np.sin(t))) / 2 / (C - 1), ((R - 1) - (w * np.sin(t) + h * np.cos(t))) / 2 / (R - 1)]
+            slack_xy = [
+                ((C - 1) - (w * np.cos(t) + h * np.sin(t))) / 2 / (C - 1),
+                ((R - 1) - (w * np.sin(t) + h * np.cos(t))) / 2 / (R - 1),
+            ]
         else:
             slack_xy = [slack, slack]
         a["centre"] = [float(rng.uniform(-v, v)) for v in slack_xy]
@@ -223,9 +233,11 @@ def variants(rng, cat, n, R, C):
 
 def groups(grids, mm=DUP_MM):
     """Group number per source: shapes that match under the flips and half turn within `mm` (rms height) are one group."""
+
     def desc(P):
         z = ndimage.zoom(P[..., 2], (24 / P.shape[0], 17 / P.shape[1]), order=1)
         return z - z.mean()
+
     D = [desc(P) for P in grids]
     V = np.stack([np.stack([d, d[:, ::-1], d[::-1], d[::-1, ::-1]]).ravel() for d in D]).reshape(len(D), 4, -1)
     base = np.stack(D).reshape(len(D), -1)
@@ -236,8 +248,9 @@ def groups(grids, mm=DUP_MM):
             parent[a] = parent[parent[a]]
             a = parent[a]
         return a
+
     for a in range(len(D)):
-        dist = np.sqrt(((V[a + 1:] - base[a]) ** 2).mean(-1)).min(1)
+        dist = np.sqrt(((V[a + 1 :] - base[a]) ** 2).mean(-1)).min(1)
         for b in np.where(dist < mm)[0] + a + 1:
             parent[find(b)] = find(a)
     roots = {}
@@ -281,30 +294,47 @@ def check(out, maps, srcs):
             bad.append(m["id"])
         errs.append(step_error(G))
     errs = np.array(errs)
-    leak = {k: sum(len({s["split"] for s in srcs if s[k] == v}) > 1 for v in {s[k] for s in srcs}) for k in ("source", "group")}
+    leak = {
+        k: sum(len({s["split"] for s in srcs if s[k] == v}) > 1 for v in {s[k] for s in srcs})
+        for k in ("source", "group")
+    }
     cats = {s["category"] for s in srcs} | {s["stem"] for s in srcs}
-    qc = dict(maps=len(maps), sources=len(srcs), groups=len({s["group"] for s in srcs}), bad_files=bad,
-              split_maps={n: sum(m["split"] == n for m in maps) for n in ("train", "val", "test")},
-              split_sources={n: sum(s["split"] == n for s in srcs) for n in ("train", "val", "test")},
-              leaks_across_splits=leak, names_with_category_or_stem=sum(any(c in m["id"] for c in cats) for m in maps),
-              maps_with_every_step_within_1pct=float((errs[:, 0] < 0.01).mean()), maps_p99_step_within_1pct=float((errs[:, 1] < 0.01).mean()),
-              maps_with_every_step_within_3pct=float((errs[:, 0] < 0.03).mean()),
-              maps_with_filled_nodes=float(np.mean([s["missing"] > 0 for s in srcs])),
-              sources_over_5pct_missing=sum(s["missing"] > 0.05 for s in srcs))
+    qc = dict(
+        maps=len(maps),
+        sources=len(srcs),
+        groups=len({s["group"] for s in srcs}),
+        bad_files=bad,
+        split_maps={n: sum(m["split"] == n for m in maps) for n in ("train", "val", "test")},
+        split_sources={n: sum(s["split"] == n for s in srcs) for n in ("train", "val", "test")},
+        leaks_across_splits=leak,
+        names_with_category_or_stem=sum(any(c in m["id"] for c in cats) for m in maps),
+        maps_with_every_step_within_1pct=float((errs[:, 0] < 0.01).mean()),
+        maps_p99_step_within_1pct=float((errs[:, 1] < 0.01).mean()),
+        maps_with_every_step_within_3pct=float((errs[:, 0] < 0.03).mean()),
+        maps_with_filled_nodes=float(np.mean([s["missing"] > 0 for s in srcs])),
+        sources_over_5pct_missing=sum(s["missing"] > 0.05 for s in srcs),
+    )
     (out / "qc.json").write_text(json.dumps(qc, indent=1))
     return qc
 
 
 def preview(out, rows, n=48):
     import cv2
+
     tiles = []
     for r in rows[:n]:
         Z = np.load(out / "maps" / f"{r['id']}.npz")["grid3d"][2]
         img = cv2.applyColorMap(np.clip(Z / max(Z.max(), 1) * 255, 0, 255).astype(np.uint8), cv2.COLORMAP_TURBO)
-        tiles.append(cv2.putText(cv2.resize(img, (128, 180)), f"{Z.max():.0f}mm {r['aug']['mode']}", (2, 12), 0, 0.4, (255, 255, 255), 1))
+        tiles.append(
+            cv2.putText(
+                cv2.resize(img, (128, 180)), f"{Z.max():.0f}mm {r['aug']['mode']}", (2, 12), 0, 0.4, (255, 255, 255), 1
+            )
+        )
     cols = 12
     tiles += [np.zeros_like(tiles[0])] * (-len(tiles) % cols)
-    cv2.imwrite(str(out / "preview.jpg"), np.vstack([np.hstack(tiles[i:i + cols]) for i in range(0, len(tiles), cols)]))
+    cv2.imwrite(
+        str(out / "preview.jpg"), np.vstack([np.hstack(tiles[i : i + cols]) for i in range(0, len(tiles), cols)])
+    )
 
 
 def main():
@@ -324,7 +354,7 @@ def main():
     items = sorted((a.src, r["category"], r["stem"]) for r in csv.DictReader(open(Path(a.src) / "index_stats.csv")))
     with ProcessPoolExecutor(a.workers) as ex:
         res = list(ex.map(prepare, items, chunksize=8))
-    res = [res[k] for k in rng.permutation(len(res))]                      # source numbers carry no category or time
+    res = [res[k] for k in rng.permutation(len(res))]  # source numbers carry no category or time
     grp = groups([G for _, G in res])
     split = split_groups(grp, rng)
     per = np.ones(len(res), int) if a.plain else allocate([r["category"] for r, _ in res], a.total, a.rare_cap, rng)
@@ -332,8 +362,11 @@ def main():
     for sid, ((r, G), g, sp, n) in enumerate(zip(res, grp, split, per)):
         np.savez(out / "sources" / f"s{sid:04d}.npz", grid3d=np.moveaxis(G, -1, 0))
         srcs.append(dict(source=sid, group=int(g), split=sp, variants=int(n), **r))
-        augs = [dict(flip=False, half=False, mode="full", theta=0.0, scale=1.0, centre=[0.0, 0.0])] if a.plain \
+        augs = (
+            [dict(flip=False, half=False, mode="full", theta=0.0, scale=1.0, centre=[0.0, 0.0])]
+            if a.plain
             else variants(rng, r["category"], int(n), *G.shape[:2])
+        )
         for k, aug in enumerate(augs):
             jobs.append((out, sid, k, aug, G))
             maps.append(dict(id=f"m{sid:04d}_{k:02d}", source=sid, group=int(g), split=sp, aug=aug))

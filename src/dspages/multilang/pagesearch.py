@@ -1,4 +1,5 @@
 """Pages of a wanted type among the documents of other folders (tables inside bureaucracy files, flyers among other documents, ...)."""
+
 import json
 import os
 import random
@@ -29,9 +30,11 @@ def thumb_job(job):
     import io
 
     from PIL import Image
+
     try:
         if path.lower().endswith(".pdf"):
             import pymupdf
+
             with pymupdf.open(path) as doc:
                 if page >= len(doc):
                     return None
@@ -57,6 +60,7 @@ def sample_pages(path, per_file, seed=0):
     if not path.lower().endswith(".pdf"):
         return [(path, 0)]
     import pymupdf
+
     try:
         with pymupdf.open(path) as doc:
             n = len(doc)
@@ -68,6 +72,7 @@ def sample_pages(path, per_file, seed=0):
 def classifier():
     sys.path.insert(0, C.pagetype)
     from pagetype import PageTypeClassifier
+
     return PageTypeClassifier()
 
 
@@ -76,6 +81,7 @@ def scan(files, out_jsonl, clf, ex, per_file=None, batch=32):
     import io
 
     from PIL import Image
+
     out_jsonl, per_file = Path(out_jsonl), per_file or C.max_pages
     done = set()
     if out_jsonl.exists():
@@ -85,12 +91,24 @@ def scan(files, out_jsonl, clf, ex, per_file=None, batch=32):
     got = [r for r in ex.map(thumb_job, jobs, chunksize=4) if r]
     with out_jsonl.open("a", encoding="utf-8") as f:
         for i in range(0, len(got), batch):
-            part = got[i:i + batch]
+            part = got[i : i + batch]
             ims = [Image.open(io.BytesIO(r[2])).convert("RGB") for r in part]
             probs = clf.head.predict_proba(clf.embedder(ims))
             for r, p in zip(part, probs, strict=True):
-                f.write(json.dumps(dict(path=r[0], page=r[1], lang=lang_of[r[0]], digital=r[3], words=r[4],
-                                        probs={c: round(v, 4) for c, v in zip(clf.classes, p.tolist(), strict=True)}), ensure_ascii=False) + "\n")
+                f.write(
+                    json.dumps(
+                        dict(
+                            path=r[0],
+                            page=r[1],
+                            lang=lang_of[r[0]],
+                            digital=r[3],
+                            words=r[4],
+                            probs={c: round(v, 4) for c, v in zip(clf.classes, p.tolist(), strict=True)},
+                        ),
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
             f.flush()
 
 
@@ -123,10 +141,11 @@ def search(layouts, lang, needs, cache_dir, found_dir, clf=None, workers=10):
                     taken[k] = taken.get(k, 0) + 1
                     out[t].append(dict(r, type=t, scan=not r["words"]))
         return out
+
     got = {}
     with ProcessPoolExecutor(workers) as ex:
         for i in range(0, len(by), C.search_chunk):
-            scan([(p, lang) for p in by[i:i + C.search_chunk]], cache, clf, ex)
+            scan([(p, lang) for p in by[i : i + C.search_chunk]], cache, clf, ex)
             got = chosen()
             if all(len(got.get(t, [])) >= n for t, n in needs.items()):
                 break

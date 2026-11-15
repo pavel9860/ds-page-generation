@@ -4,6 +4,7 @@ legacy.reference() knows the glyphs of a Noto font that its cmap and GSUB substi
 (the vowel sign left of its letter, the lower half of a conjunct, the stroke under a letter): those glyphs have no text there. Shaping every letter,
 letter + sign, letter + virama and letter + virama + letter with HarfBuzz at character level names each output glyph by the shortest text that made it;
 the new texts (with the shape of that glyph) are added to the reference, cached beside it."""
+
 import os
 import unicodedata as ud
 
@@ -12,6 +13,7 @@ import uharfbuzz as hb
 from fontTools.ttLib import TTFont
 
 from . import legacy
+from .config import SIMILAR_COST  # noqa: F401
 
 
 def _texts(script):
@@ -50,7 +52,7 @@ def reference_ext(script):
         cl = sorted({i.cluster for i in buf.glyph_infos})
         for i in buf.glyph_infos:
             nx = [c for c in cl if c > i.cluster]
-            piece = t[i.cluster:nx[0] if nx else len(t)]
+            piece = t[i.cluster : nx[0] if nx else len(t)]
             if piece and i.codepoint and (i.codepoint not in best or len(piece) < len(best[i.codepoint])):
                 best[i.codepoint] = piece
     T, S, G = list(T0), list(S0), list(G0)
@@ -68,7 +70,9 @@ def reference_ext(script):
     return _with_latin(script, T, np.asarray(S, np.float32), np.asarray(G, np.float32), f)
 
 
-LATIN_ADD = [chr(c) for c in range(0x21, 0x7F)] + list("\u2018\u2019\u201c\u201d\u2013\u2014\u2026\u2022\u00b7\u00a9\u00ae\u00b0\u00d7\u00f7\u00a1\u00bf\u00ab\u00bb")
+LATIN_ADD = [chr(c) for c in range(0x21, 0x7F)] + list(
+    "\u2018\u2019\u201c\u201d\u2013\u2014\u2026\u2022\u00b7\u00a9\u00ae\u00b0\u00d7\u00f7\u00a1\u00bf\u00ab\u00bb"
+)
 
 
 def _with_latin(script, T, S, G, f):
@@ -79,8 +83,12 @@ def _with_latin(script, T, S, G, f):
         have = {ud.normalize("NFC", t) for t in T}
         pick = [i for i, t in enumerate(TL) if t in LATIN_ADD and ud.normalize("NFC", t) not in have]
         T = list(T) + [TL[i] for i in pick]
-        S = np.concatenate([np.asarray(S, np.float32).reshape(-1, np.asarray(SL).shape[1]), np.asarray(SL, np.float32)[pick]])
-        G = np.concatenate([np.asarray(G, np.float32).reshape(-1, np.asarray(GL).shape[1]), np.asarray(GL, np.float32)[pick]])
+        S = np.concatenate(
+            [np.asarray(S, np.float32).reshape(-1, np.asarray(SL).shape[1]), np.asarray(SL, np.float32)[pick]]
+        )
+        G = np.concatenate(
+            [np.asarray(G, np.float32).reshape(-1, np.asarray(GL).shape[1]), np.asarray(GL, np.float32)[pick]]
+        )
     np.savez(f, T=np.array(T, dtype=object), S=np.asarray(S, np.float32), G=np.asarray(G, np.float32))
     return T, np.asarray(S, np.float32), np.asarray(G, np.float32)
 
@@ -91,11 +99,13 @@ def candidates(feats, script, k=8):
     out = {}
     gids = list(feats)
     for a in range(0, len(gids), 48):
-        blk = gids[a:a + 48]
-        d = legacy._dist(np.array([feats[g][0] for g in blk], np.float32), np.array([feats[g][1] for g in blk], np.float32), S, G)
+        blk = gids[a : a + 48]
+        d = legacy._dist(
+            np.array([feats[g][0] for g in blk], np.float32), np.array([feats[g][1] for g in blk], np.float32), S, G
+        )
         for row, g in enumerate(blk):
             seen, cand = set(), []
-            for i in np.argsort(d[row])[:4 * k]:
+            for i in np.argsort(d[row])[: 4 * k]:
                 if T[i] not in seen:
                     seen.add(T[i])
                     cand.append((T[i], float(d[row][i])))
@@ -106,65 +116,3 @@ def candidates(feats, script, k=8):
 
 
 INDIC = ["Devanagari", "Bengali", "Gurmukhi", "Gujarati", "Oriya", "Tamil", "Telugu", "Kannada", "Malayalam", "Sinhala"]
-SIMILAR_COST = 0.4                                         # distance added to a match found in another script's reference
-
-
-def _transpose(text, src, dst):
-    """The same text in another Indic script by character name (TELUGU LETTER KA -> KANNADA LETTER KA); None when one character has no counterpart."""
-    head, out = src.upper() + " ", []
-    for ch in text:
-        if ord(ch) < 0x0900 or ch in "\u200c\u200d":
-            out.append(ch)
-            continue
-        try:
-            nm = ud.name(ch)
-            if not nm.startswith(head):
-                return None
-            out.append(ud.lookup(dst.upper() + " " + nm[len(head):]))
-        except (ValueError, KeyError):
-            return None
-    return "".join(out)
-
-
-def candidates_similar(feats, script, k=8):
-    """The nearest texts of the glyph in the script's own extended reference and, for an Indic script, in the references of the sister scripts
-    (the same texts by character name): {glyph id: [(text, distance)]}, nearest first. A glyph a font cut from a letter may look like the part of
-    a sister script's letter that the own script's reference does not have."""
-    own = candidates(feats, script, k=k)
-    if script not in INDIC:
-        return own
-    out = {g: list(v) for g, v in own.items()}
-    for src in INDIC:
-        if src == script:
-            continue
-        for g, lst in candidates(feats, src, k=k).items():
-            for t, d in lst:
-                tt = _transpose(t, src, script)
-                if tt:
-                    out[g].append((tt, d + SIMILAR_COST))
-    res = {}
-    for g, lst in out.items():
-        seen, best = set(), []
-        for t, d in sorted(lst, key=lambda x: x[1]):
-            n = ud.normalize("NFC", t)
-            if n not in seen:
-                seen.add(n)
-                best.append((t, d))
-        res[g] = best[:k]
-    return res
-
-
-def line_candidates(feat, script, text, n=3, longest=4):
-    """The n texts nearest to the glyph's shape among the substrings (1..longest characters) of the text of its line: the line's reading narrows the
-    candidates to what the line can contain. Only substrings the script's extended reference has a shape for are tried."""
-    T, S, G = reference_ext(script)
-    idx = {}
-    for i, t in enumerate(T):
-        idx.setdefault(ud.normalize("NFC", t), i)
-    text = ud.normalize("NFC", text)
-    ids = {idx[text[a:a + m]] for a in range(len(text)) for m in range(1, longest + 1) if text[a:a + m] in idx}
-    if not ids:
-        return []
-    ids = sorted(ids)
-    d = legacy._dist(np.asarray(feat[0], np.float32)[None], np.asarray(feat[1], np.float32)[None], np.asarray(S)[ids], np.asarray(G)[ids])[0]
-    return [T[ids[j]] for j in np.argsort(d)[:n]]

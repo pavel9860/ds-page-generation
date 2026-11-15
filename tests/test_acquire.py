@@ -25,23 +25,29 @@ def test_farthest_first_takes_the_outlier_first():
 
 def test_legacy_devanagari_rules():
     from dspages.layout import legacy
-    assert legacy.logical("भ्ाारत", "Devanagari") == "भारत"          # half bha + stem + aa = bhaarat
-    assert legacy.logical("काे", "Devanagari") == "को"                                      # aa + e = o
+
+    assert legacy.logical("भ्ाारत", "Devanagari") == "भारत"  # half bha + stem + aa = bhaarat
+    assert legacy.logical("काे", "Devanagari") == "को"  # aa + e = o
 
 
 def test_published_legacy_tables():
     from dspages.layout import legacy_tables as L
+
     assert L.decode("Kruti Dev 010", "gSa") == "हैं"
     assert L.decode("Preeti", "s") == "क"
     assert L.decode("ML-TTRevathi", "DÕmlw") == "ഉത്സാഹം"
     import unicodedata
-    assert unicodedata.normalize("NFC", L.decode("SutonnyMJ", "Avwg evsjvq Mvb MvB")) == unicodedata.normalize("NFC", "আমি বাংলায় গান গাই")
+
+    assert unicodedata.normalize("NFC", L.decode("SutonnyMJ", "Avwg evsjvq Mvb MvB")) == unicodedata.normalize(
+        "NFC", "আমি বাংলায় গান গাই"
+    )
     assert L.decode("Calibri", "abc") is None
 
 
 def test_aliased_and_new_tables():
     """Close variants of a published font (aliases.json) and the tables added from the converters of Punjabi, Georgian, Tibetan, Hebrew."""
     from dspages.layout import legacy_tables as L
+
     assert L.decode("DevLys 010", "fdlku") == "किसान"
     assert L.decode("Chatrik,Bold", "Kfilsqfn") == "ਖਾਲਿਸਤਾਨ"
     assert L.decode("LitNusx", "gamarjoba") == "გამარჯობა"
@@ -51,6 +57,12 @@ def test_aliased_and_new_tables():
 
 def test_labelled_table():
     from dspages.layout import legacy_tables as LT
-    assert LT.decode("Geetanjalilight", "\u00f8") == "\u09bf" and LT.label_source("Geetanjalilight", "\u00f8") == "label"
-    assert LT.label_source("Geetanjalilight", "\u00ab", ) in (None, "label") or LT.label_source("Geetanjalilight", "\u00ab").startswith("guess")
+
+    assert (
+        LT.decode("Geetanjalilight", "\u00f8") == "\u09bf" and LT.label_source("Geetanjalilight", "\u00f8") == "label"
+    )
+    assert LT.label_source(
+        "Geetanjalilight",
+        "\u00ab",
+    ) in (None, "label") or LT.label_source("Geetanjalilight", "\u00ab").startswith("guess")
     assert LT.decode("Brahma", "\u00ea") == "\u0c3e"

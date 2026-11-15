@@ -3,6 +3,7 @@ never fetched again). Every pdf that opens is kept, with its scan pages counted 
 SCAN_IMAGE_AREA of the page); which pages enter the set is decided per page at placement. Kept files: STORE/pdf/<sha12>.pdf, one per content
 (sha256); a file whose sha256[:12] is a corpus hash is not kept (files edited in the corpus keep their old hash: place.py also drops pages that
 duplicate a corpus page)."""
+
 import hashlib
 import sqlite3
 import sys
@@ -11,10 +12,12 @@ import time
 import pandas as pd
 import pymupdf
 
+from .config import MAX_PAGES  # noqa: F401
 from .paths import CC_ROOT, DB, MANIFEST_DB, STORE, WORK
 
-MAX_PAGES = 400
-COLS = "url text primary key, point int, status text, sha text, pages int, scan_pages int, file text, t real, error text"
+COLS = (
+    "url text primary key, point int, status text, sha text, pages int, scan_pages int, file text, t real, error text"
+)
 
 
 def db():
@@ -27,7 +30,9 @@ def db():
 def corpus_hashes():
     """Content hashes (sha256[:12]) of the corpus documents: a download with one of them is a file the corpus has."""
     with sqlite3.connect(f"file:{MANIFEST_DB}?mode=ro", uri=True) as m:
-        return {h for (h,) in m.execute("select doc from plan")} | {h for (h,) in m.execute("select hash from src_urls")}
+        return {h for (h,) in m.execute("select doc from plan")} | {
+            h for (h,) in m.execute("select hash from src_urls")
+        }
 
 
 def check(data):
@@ -37,11 +42,12 @@ def check(data):
     try:
         sys.path.insert(0, str(CC_ROOT))
         from corpus.book_text import _scan
+
         with pymupdf.open(stream=data, filetype="pdf") as doc:
             if doc.page_count == 0 or doc.page_count > MAX_PAGES:
                 return "pages", doc.page_count, 0, ""
             return "ok", doc.page_count, sum(bool(_scan(p)) for p in doc), ""
-    except Exception as e:                                           # pymupdf cannot open the file
+    except Exception as e:  # pymupdf cannot open the file
         return "broken", 0, 0, f"{type(e).__name__}: {e}"[:300]
 
 
@@ -49,6 +55,7 @@ def rows(cands, batch=5000):
     """The candidate urls (parquet dir) not fetched yet, hosts in turn (one url of every host, then the next...; like corpus.fill: a host
     serves LIVE_HOST_CONNS requests at a time), streamed BATCH rows at a time."""
     import duckdb
+
     con = duckdb.connect()
     con.execute("set threads to 4")
     con.execute("set memory_limit = '2GB'")
@@ -60,6 +67,7 @@ def rows(cands, batch=5000):
     def gen():
         while chunk := r.fetchmany(batch):
             yield from (dict(zip(("url", "f", "o", "l", "point"), x)) for x in chunk)
+
     return total, gen()
 
 
@@ -69,8 +77,10 @@ def run(cands, workers=6, limit=0, fetchers=256, cc_threads=4):
     import queue
     import threading
     from concurrent.futures import ProcessPoolExecutor
+
     sys.path.insert(0, str(CC_ROOT))
     from corpus import discovery
+
     c = db()
     shas = {s for (s,) in c.execute("select sha from got where sha is not null")}
     corpus = corpus_hashes()
@@ -112,7 +122,7 @@ def run(cands, workers=6, limit=0, fetchers=256, cc_threads=4):
             except discovery.RateLimited:
                 pacer.limited()
                 cc_q.put(r)
-            except Exception as e:                                   # the capture could not be read: kept as the reason
+            except Exception as e:  # the capture could not be read: kept as the reason
                 got.put((r, None, f"{type(e).__name__}: {e}"[:300]))
         with lock:
             alive[0] -= 1
@@ -132,7 +142,11 @@ def run(cands, workers=6, limit=0, fetchers=256, cc_threads=4):
                     inflight.append((r, data, err, ex.submit(check, data) if data else None))
                 except queue.Empty:
                     pass
-                while inflight and (len(inflight) >= 4 * workers or got.empty()) and (inflight[0][3] is None or inflight[0][3].done()):
+                while (
+                    inflight
+                    and (len(inflight) >= 4 * workers or got.empty())
+                    and (inflight[0][3] is None or inflight[0][3].done())
+                ):
                     r, data, err, fut = inflight.pop(0)
                     status, pages, scans, e = fut.result() if fut else ("fetch_error" if err else "no_pdf", 0, 0, "")
                     sha = file = None
@@ -147,15 +161,21 @@ def run(cands, workers=6, limit=0, fetchers=256, cc_threads=4):
                             file = f"pdf/{sha[:12]}.pdf"
                             (STORE / file).write_bytes(data)
                             ok += 1
-                    c.execute("insert or replace into got (url, point, status, sha, pages, scan_pages, file, t, error) values (?,?,?,?,?,?,?,?,?)", (r["url"], int(r["point"]), status, sha, pages, scans, file, time.time(), err or e))
+                    c.execute(
+                        "insert or replace into got (url, point, status, sha, pages, scan_pages, file, t, error) values (?,?,?,?,?,?,?,?,?)",
+                        (r["url"], int(r["point"]), status, sha, pages, scans, file, time.time(), err or e),
+                    )
                     n += 1
                     if n % 1000 == 0:
                         c.commit()
                         rate = n / (time.time() - t0)
-                        print(f"[{int(time.time() - t0)} s] {n}/{total} urls, {ok} kept, {rate * 60:.0f} urls/min, "
-                              f"eta {int((total - n) / rate)} s", flush=True)
+                        print(
+                            f"[{int(time.time() - t0)} s] {n}/{total} urls, {ok} kept, {rate * 60:.0f} urls/min, "
+                            f"eta {int((total - n) / rate)} s",
+                            flush=True,
+                        )
         finally:
-            c.commit()                                               # an interrupt keeps the rows written so far
+            c.commit()  # an interrupt keeps the rows written so far
     print(f"done: {n} urls, {ok} kept, {n / (time.time() - t0) * 60:.0f} urls/min", flush=True)
 
 
@@ -163,10 +183,17 @@ def status():
     c = db()
     S = pd.read_sql("select status, count(*) n, count(distinct point) points from got group by status", c)
     print(S.to_string(index=False))
-    E = pd.read_sql("select status, substr(error, 1, 80) error, count(*) n from got where error != '' group by 1, 2 order by n desc limit 10", c)
+    E = pd.read_sql(
+        "select status, substr(error, 1, 80) error, count(*) n from got where error != '' group by 1, 2 order by n desc limit 10",
+        c,
+    )
     if len(E):
         print("errors:\n" + E.to_string(index=False))
-    print("kept files", c.execute("select count(*) from got where file is not null").fetchone()[0],
-          "points with a kept file", c.execute("select count(distinct point) from got where file is not null").fetchone()[0])
+    print(
+        "kept files",
+        c.execute("select count(*) from got where file is not null").fetchone()[0],
+        "points with a kept file",
+        c.execute("select count(distinct point) from got where file is not null").fetchone()[0],
+    )
     if c.execute("select count(*) from sqlite_master where name = 'placed'").fetchone()[0]:
         print("points filled", c.execute("select count(*) from placed").fetchone()[0])

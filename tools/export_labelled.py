@@ -5,6 +5,7 @@
 phrase-OCR statistics, then the server's shape / line / statistics list, the first one that belongs to the table's script).
 The server list needs the labelling server (tests/legacy_label/server.py, port 8770); without it only the checked words and the OCR statistics are used.
 python tools/export_labelled.py"""
+
 import json
 import re
 import sys
@@ -17,8 +18,10 @@ import regex
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 from ready_filter import ready
 
-L = "/run/media/p/D/ML_DS/UVTM/tests/legacy_label/"
-T = "/run/media/p/D/ML_DS/UVTM/Layouts/archive/info/legacy/tables/"
+from dspages import paths as _P  # noqa: E402
+
+L = f"{_P.ROOT}/tests/legacy_label/"
+T = f"{_P.ROOT}/Layouts/archive/info/legacy/tables/"
 key = lambda name: re.sub(r"[^a-z0-9]", "", name.split("+")[-1].lower())
 SCRIPT = {"Oriya": "Oriya"}
 lab = {}
@@ -31,14 +34,20 @@ ocr = json.load(open(L + "ocr_cands.json", encoding="utf-8"))
 
 def server_list(iid):
     try:
-        return json.load(urllib.request.urlopen("http://127.0.0.1:8770/cands?id=" + urllib.parse.quote(iid) + "&k=60", timeout=20))
+        return json.load(
+            urllib.request.urlopen("http://127.0.0.1:8770/cands?id=" + urllib.parse.quote(iid) + "&k=60", timeout=20)
+        )
     except Exception:
         return []
 
 
 def guess(iid, script):
-    ok = regex.compile(r"^[\p{Script=%s}\p{Script=Common}\p{Script=Inherited}]+$" % SCRIPT.get(script, script))
-    for src, lst in (("words", words.get(iid, [])), ("ocr", [c for c in ocr.get(iid, []) if len(c.strip()) == len(c) and len(c) <= 3]), ("shape", server_list(iid))):
+    ok = regex.compile(rf"^[\p{{Script={SCRIPT.get(script, script)}}}\p{{Script=Common}}\p{{Script=Inherited}}]+$")
+    for src, lst in (
+        ("words", words.get(iid, [])),
+        ("ocr", [c for c in ocr.get(iid, []) if len(c.strip()) == len(c) and len(c) <= 3]),
+        ("shape", server_list(iid)),
+    ):
         for c in lst:
             if c and ok.match(c):
                 return unicodedata.normalize("NFC", c), src
@@ -52,7 +61,7 @@ for t in json.load(open(L + "tables_all.json", encoding="utf-8")):
     for i in t["items"]:
         r = lab.get(i["id"])
         c = chr(int(i["id"].split("|")[1], 16))
-        if ready(i["font"], c):                                          # a published table decodes it: it wins over any label
+        if ready(i["font"], c):  # a published table decodes it: it wins over any label
             continue
         if r and r["status"] == "ok" and r["text"]:
             txt, src = unicodedata.normalize("NFC", r["text"]), "label"
@@ -66,7 +75,9 @@ for t in json.load(open(L + "tables_all.json", encoding="utf-8")):
             src = "guess:" + src
             n_guess += 1
         for f in fams | {key(i["font"])}:
-            if f in res and c in res[f] and not (f == key(i["font"])):      # an answer of the glyph's own font beats the table-wide default
+            if (
+                f in res and c in res[f] and not (f == key(i["font"]))
+            ):  # an answer of the glyph's own font beats the table-wide default
                 continue
             res.setdefault(f, {})[c] = txt
             srcs.setdefault(f, {})[c] = src

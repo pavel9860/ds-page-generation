@@ -10,15 +10,16 @@ gap to fill. Data: ds100k/grid (OUT).
   radius   gap counts for radius candidates (the radius that leaves 10-20K gaps)
 
 python tools/ds_grid.py prep | push [--n 100000] | fetch | radius"""
+
 import argparse
 import json
-from pathlib import Path
-
-import numpy as np
-import pandas as pd
 
 import ds100k as D
 import kaggle_fps as KF
+import numpy as np
+import pandas as pd
+
+from dspages import paths as _P  # noqa: E402
 
 OUT = D.OUT / "grid"
 WORK = OUT / "kaggle"
@@ -27,9 +28,9 @@ KID = "pavel9860/ds100k-grid"
 AUXW, KIDW = "pavel9860/ds100k-grid-weight", "pavel9860/ds100k-grid-w"
 FILL, PIC = 0.7, 0.2
 MPAIRS = 1_500_000
-LABELLED = "/run/media/p/D/ML_DS/UVTM/tests/ds_border/outliers_labelled.parquet"
+LABELLED = f"{_P.ROOT}/tests/ds_border/outliers_labelled.parquet"
 
-KERNEL = r'''
+KERNEL = r"""
 import glob, time, numpy as np, torch
 X = np.concatenate([np.load(f) for f in sorted(glob.glob("/kaggle/input/**/pool_*.npy", recursive=True))])
 mask = np.load(glob.glob("/kaggle/input/**/mask.npy", recursive=True)[0])
@@ -92,7 +93,7 @@ a_ = np.where(virt, pairs[np.clip(pick - nr, 0, None), 0], real[np.clip(pick, No
 b_ = np.where(virt, pairs[np.clip(pick - nr, 0, None), 1], -1)
 np.savez("/kaggle/working/grid.npz", virtual=virt, a=a_, b=b_, nn=np.concatenate(nn), d=np.concatenate(nd), r=np.array(rad, np.float32))
 print("DONE", len(pick), "points,", int(virt.sum()), "virtual;", int(time.time() - t0), "s", flush=True)
-'''
+"""
 
 
 def cmd_prep(_):
@@ -112,8 +113,20 @@ def cmd_prep(_):
     d.mkdir(parents=True, exist_ok=True)
     np.save(d / "mask.npy", m)
     np.save(d / "pairs.npy", pairs)
-    print(int(m.sum()), "pages in scope;", len(pairs), "virtual pairs of", int(k.sum()), "; pair distance", round(float(dist[top].min()), 4), "-", round(float(dist[top].max()), 4))
-    (d / "dataset-metadata.json").write_text(json.dumps({"title": AUX.split("/")[1], "id": AUX, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+    print(
+        int(m.sum()),
+        "pages in scope;",
+        len(pairs),
+        "virtual pairs of",
+        int(k.sum()),
+        "; pair distance",
+        round(float(dist[top].min()), 4),
+        "-",
+        round(float(dist[top].max()), 4),
+    )
+    (d / "dataset-metadata.json").write_text(
+        json.dumps({"title": AUX.split("/")[1], "id": AUX, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]})
+    )
     print(KF.kaggle("datasets", "create", "-p", str(d))[-300:])
 
 
@@ -122,10 +135,26 @@ def cmd_push(a):
     d = WORK / ("kernel_w" if a.weighted else "kernel")
     d.mkdir(parents=True, exist_ok=True)
     (d / "run.py").write_text(f"N, B = {a.n}, 100\n" + KERNEL)
-    (d / "kernel-metadata.json").write_text(json.dumps({
-        "id": kid, "title": kid.split("/")[1], "code_file": "run.py", "language": "python", "kernel_type": "script", "is_private": True,
-        "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "dataset_sources": sets, "kernel_sources": [],
-        "competition_sources": [], "model_sources": [], "machine_shape": "NvidiaTeslaT4"}))
+    (d / "kernel-metadata.json").write_text(
+        json.dumps(
+            {
+                "id": kid,
+                "title": kid.split("/")[1],
+                "code_file": "run.py",
+                "language": "python",
+                "kernel_type": "script",
+                "is_private": True,
+                "enable_gpu": True,
+                "enable_tpu": False,
+                "enable_internet": False,
+                "dataset_sources": sets,
+                "kernel_sources": [],
+                "competition_sources": [],
+                "model_sources": [],
+                "machine_shape": "NvidiaTeslaT4",
+            }
+        )
+    )
     print(KF.kaggle("kernels", "push", "-p", str(d)))
 
 
@@ -142,7 +171,7 @@ def cmd_fetch(a):
     G = pd.DataFrame({k: z[k] for k in ("virtual", "a", "b", "nn", "d", "r")}).reset_index(names="order")
     G.to_parquet(OUT / f"grid{tag}.parquet")
     print(len(G), "points,", int(G.virtual.sum()), "virtual; distance to the nearest real page:")
-    print(G.groupby("virtual").d.describe(percentiles=[.5, .8, .9, .95, .99]).round(4).to_string())
+    print(G.groupby("virtual").d.describe(percentiles=[0.5, 0.8, 0.9, 0.95, 0.99]).round(4).to_string())
 
 
 def cmd_radius(_):

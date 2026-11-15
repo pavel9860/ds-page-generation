@@ -9,27 +9,29 @@ boxes). Then farthest-point sampling of N pool pages (ds_grid mask) in that spac
   compare  label / hw / type / language shares: pool, raw 1536-d select (ds100k select.parquet), LDA select
 
 python tools/ds_lda.py fit | push [--n 100000] | fetch | compare"""
+
 import argparse
 import json
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
-import torch
 
 import ds100k as D
 import ds_border as B
 import ds_grid as G
 import ds_weight as WT
 import kaggle_fps as KF
+import numpy as np
+import pandas as pd
+import torch
+
+from dspages import paths as _P  # noqa: E402
 
 OUT = D.OUT / "lda"
 AUX, KID = "pavel9860/ds100k-lda-aux", "pavel9860/ds100k-lda"
 SHRINK = 0.1
-KINDS = "/run/media/p/D/ML_DS/UVTM/Labels/pagetype_labelled/cache/pagekind_full.npz"
-HW_GOOD = Path("/run/media/p/D/ML_DS/UVTM/Labels/real_hw_review/good")
+KINDS = f"{_P.ROOT}/Labels/pagetype_labelled/cache/pagekind_full.npz"
+HW_GOOD = Path(f"{_P.ROOT}/Labels/real_hw_review/good")
 
-KERNEL = r'''
+KERNEL = r"""
 import glob, time, numpy as np, torch
 X = np.concatenate([np.load(f) for f in sorted(glob.glob("/kaggle/input/**/pool_*.npy", recursive=True))])
 mask = np.load(glob.glob("/kaggle/input/**/mask.npy", recursive=True)[0])
@@ -63,14 +65,16 @@ while True:
         print(f"{len(pick) + len(acc)} picked, radius {r_acc[-1]:.3f}, {int(time.time() - t0)} s", flush=True)
 np.savez("/kaggle/working/lda.npz", pick=real[np.array(pick)], r=np.array(rad, np.float32), cover=d.sqrt().cpu().numpy())
 print("DONE", len(pick), int(time.time() - t0), "s", flush=True)
-'''
+"""
 
 
 def labelled():
     """(pool_i, class) of the labelled pool pages."""
     P = pd.read_parquet(D.OUT / "pool.parquet", columns=["h", "page", "hw"]).reset_index(names="pool_i")
     z = np.load(KINDS)
-    L = pd.DataFrame({"h": z["doc"], "page": z["page"], "cls": z["label"]}).merge(P, on=["h", "page"])[["pool_i", "cls"]]
+    L = pd.DataFrame({"h": z["doc"], "page": z["page"], "cls": z["label"]}).merge(P, on=["h", "page"])[
+        ["pool_i", "cls"]
+    ]
     hs = {f.name.split("_")[2] for f in HW_GOOD.glob("*.jpg")}
     H = P[P.h.isin(hs)].sort_values("hw").drop_duplicates("h", keep="last")
     L = pd.concat([L, pd.DataFrame({"pool_i": H.pool_i, "cls": "handwritten"})]).drop_duplicates("pool_i", keep="last")
@@ -105,9 +109,13 @@ def cmd_fit(_):
     between = np.mean([float((cen[a] - cen[b]).norm()) for a in cen for b in cen if a < b])
     Xr = X - X.mean(0)
     cr = {c: Xr[torch.from_numpy(y == c)].mean(0) for c in cen}
-    print(f"mean distance to own class centre / between class centres: raw {np.mean([float((Xr[torch.from_numpy(y == c)] - cr[c]).norm(dim=1).mean()) for c in cr]):.3f} / "
-          f"{np.mean([float((cr[a] - cr[b]).norm()) for a in cr for b in cr if a < b]):.3f}; rescaled {within:.2f} / {between:.2f}")
-    (d / "dataset-metadata.json").write_text(json.dumps({"title": AUX.split("/")[1], "id": AUX, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+    print(
+        f"mean distance to own class centre / between class centres: raw {np.mean([float((Xr[torch.from_numpy(y == c)] - cr[c]).norm(dim=1).mean()) for c in cr]):.3f} / "
+        f"{np.mean([float((cr[a] - cr[b]).norm()) for a in cr for b in cr if a < b]):.3f}; rescaled {within:.2f} / {between:.2f}"
+    )
+    (d / "dataset-metadata.json").write_text(
+        json.dumps({"title": AUX.split("/")[1], "id": AUX, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]})
+    )
     print(KF.kaggle("datasets", "create", "-p", str(d))[-150:])
 
 
@@ -115,10 +123,26 @@ def cmd_push(a):
     d = OUT / "kernel"
     d.mkdir(parents=True, exist_ok=True)
     (d / "run.py").write_text(f"N, B = {a.n}, 100\n" + KERNEL)
-    (d / "kernel-metadata.json").write_text(json.dumps({
-        "id": KID, "title": KID.split("/")[1], "code_file": "run.py", "language": "python", "kernel_type": "script", "is_private": True,
-        "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "dataset_sources": [KF.DS, AUX], "kernel_sources": [],
-        "competition_sources": [], "model_sources": [], "machine_shape": "NvidiaTeslaT4"}))
+    (d / "kernel-metadata.json").write_text(
+        json.dumps(
+            {
+                "id": KID,
+                "title": KID.split("/")[1],
+                "code_file": "run.py",
+                "language": "python",
+                "kernel_type": "script",
+                "is_private": True,
+                "enable_gpu": True,
+                "enable_tpu": False,
+                "enable_internet": False,
+                "dataset_sources": [KF.DS, AUX],
+                "kernel_sources": [],
+                "competition_sources": [],
+                "model_sources": [],
+                "machine_shape": "NvidiaTeslaT4",
+            }
+        )
+    )
     print(KF.kaggle("kernels", "push", "-p", str(d)))
 
 
@@ -143,15 +167,28 @@ def cmd_compare(_):
     cls = pd.Series("unlabelled", index=P.index)
     cls[L.pool_i.to_numpy()] = L.cls.to_numpy()
     raw = pd.read_parquet(D.OUT / "select.parquet").pool_i.to_numpy()
-    sets = {"pool": np.flatnonzero(m), "raw": raw[m[raw]], "lda": pd.read_parquet(OUT / "select.parquet").pool_i.to_numpy()}
+    sets = {
+        "pool": np.flatnonzero(m),
+        "raw": raw[m[raw]],
+        "lda": pd.read_parquet(OUT / "select.parquet").pool_i.to_numpy(),
+    }
     print("pages per set:", {k: len(v) for k, v in sets.items()})
-    for name, s in (("labelled class (count)", cls), ("hw", Lw.hw), ("type", Lw.type.fillna("untyped")), ("lang", P.lang)):
-        T = pd.DataFrame({k: s.iloc[v].value_counts(normalize=name != "labelled class (count)") for k, v in sets.items()}).fillna(0)
+    for name, s in (
+        ("labelled class (count)", cls),
+        ("hw", Lw.hw),
+        ("type", Lw.type.fillna("untyped")),
+        ("lang", P.lang),
+    ):
+        T = pd.DataFrame(
+            {k: s.iloc[v].value_counts(normalize=name != "labelled class (count)") for k, v in sets.items()}
+        ).fillna(0)
         T = T.sort_values("pool", ascending=False)
         if name == "lang":
             for k in sets:
                 p = T[k][T[k] > 0]
-                print(f"  lang {k}: {len(p)} languages, entropy-normalised spread {float(-(p * np.log(p)).sum() / np.log(len(p))):.3f}")
+                print(
+                    f"  lang {k}: {len(p)} languages, entropy-normalised spread {float(-(p * np.log(p)).sum() / np.log(len(p))):.3f}"
+                )
             T = T.head(12)
         if name == "labelled class (count)":
             T = T.drop(index="unlabelled")

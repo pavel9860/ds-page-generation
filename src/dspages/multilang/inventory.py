@@ -1,4 +1,5 @@
 """What the language dataset can be built from, per language"""
+
 import json
 import os
 from collections import defaultdict
@@ -39,11 +40,19 @@ def inventory(layouts, out, work):
     for lang in languages():
         real = Path(out) / "paras" / f"{lang}.json"
         pool = load_pools(lang, out, work, None)
-        rows.append(dict(
-            lang=lang, bucket=bucket[lang], files={t: files.get((lang, t), [0, 0]) for t in C.folders},
-            real_paras=len(json.loads(real.read_text()).get("p", [])) if real.exists() else 0, pool_p=len(pool["p"]),
-            docs=len(list(Path(work).glob(f"out_{lang}_?.json"))), fields=min(len(pool["labels"]), len(pool["heads"]), len(pool["cells"])),
-            writable=can_write(scripts_of(lang)), quota={t: quota.get((lang, t), 0) for t in C.types}))
+        rows.append(
+            dict(
+                lang=lang,
+                bucket=bucket[lang],
+                files={t: files.get((lang, t), [0, 0]) for t in C.folders},
+                real_paras=len(json.loads(real.read_text()).get("p", [])) if real.exists() else 0,
+                pool_p=len(pool["p"]),
+                docs=len(list(Path(work).glob(f"out_{lang}_?.json"))),
+                fields=min(len(pool["labels"]), len(pool["heads"]), len(pool["cells"])),
+                writable=can_write(scripts_of(lang)),
+                quota={t: quota.get((lang, t), 0) for t in C.types},
+            )
+        )
     return rows
 
 
@@ -67,7 +76,9 @@ def report(rows):
     print(f"{'lang':5}{'bucket':14}" + "".join(f"{t[:5]:>8}" for t in C.folders) + "  real_p pool_p docs fields hand")
     for r in rows:
         cells = "".join(f"{r['files'][t][0]:>4}/{r['files'][t][1]:<3}" for t in C.folders)
-        print(f"{r['lang']:5}{r['bucket'][:13]:14}{cells}  {r['real_paras']:>6} {r['pool_p']:>6} {r['docs']:>4} {r['fields']:>6} {'yes' if r['writable'] else 'no':>4}")
+        print(
+            f"{r['lang']:5}{r['bucket'][:13]:14}{cells}  {r['real_paras']:>6} {r['pool_p']:>6} {r['docs']:>4} {r['fields']:>6} {'yes' if r['writable'] else 'no':>4}"
+        )
     print("share of the plan:", {t: C.share[t] for t in C.types})
     for lang, what in gaps(rows):
         print("GAP", lang, what)

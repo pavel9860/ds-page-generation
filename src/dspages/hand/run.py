@@ -2,6 +2,7 @@
 
 python -m dspages.hand run --plan plan.jsonl --out OUT [--shard 0 --shards 4] [--workers 4] [--limit N]
 """
+
 import argparse
 import json
 import os
@@ -12,13 +13,31 @@ from pathlib import Path
 
 import cv2
 
-
-KEEP = ("i", "lang", "type", "persona", "style", "pen", "paper", "kind", "doc", "page", "seed", "wseed", "fill", "ocr", "fmt", "dense", "table")
+KEEP = (
+    "i",
+    "lang",
+    "type",
+    "persona",
+    "style",
+    "pen",
+    "paper",
+    "kind",
+    "doc",
+    "page",
+    "seed",
+    "wseed",
+    "fill",
+    "ocr",
+    "fmt",
+    "dense",
+    "table",
+)
 
 
 def work(job):
     plan, out = job
     from . import page
+
     f = Path(out) / "pages" / f"{plan['i']:05d}.jpg"
     if f.exists():
         return plan["i"], None
@@ -50,8 +69,11 @@ def main(argv=None):
     todo = [r for r in rows if not (Path(a.out) / "pages" / f"{r['i']:05d}.jpg").exists()]
     print(len(rows), "pages in shard,", len(todo), "to do", flush=True)
     t0, n = time.time(), 0
-    with Pool(a.workers, maxtasksperchild=20) as pool, open(Path(a.out) / f"meta_{a.shard}.jsonl", "a") as f, \
-            open(Path(a.out) / f"errors_{a.shard}.log", "a") as fe:
+    with (
+        Pool(a.workers, maxtasksperchild=20) as pool,
+        open(Path(a.out) / f"meta_{a.shard}.jsonl", "a") as f,
+        open(Path(a.out) / f"errors_{a.shard}.log", "a") as fe,
+    ):
         for i, res in pool.imap_unordered(work, [(r, a.out) for r in todo]):
             n += 1
             if res and res.startswith("ERR"):

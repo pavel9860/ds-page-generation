@@ -1,26 +1,29 @@
 """Text helpers of the page writer: cleaning, fonts that cover the text, item trees (h / p / li / v / table / cols)."""
+
 import re
 import unicodedata
 
-from hwsynth.scripts import script as char_script, text_script
+from hwsynth.scripts import script as char_script
+from hwsynth.scripts import text_script
 
-CHAR_W = {"Latin": 1.8, "Cyrillic": 2.0, "Greek": 2.2, "Han": 3.6, "Hiragana": 3.6, "Katakana": 3.6, "Hangul": 3.8, "Arabic": 2.5,
-          "Devanagari": 2.6, "Bengali": 2.4, "Tamil": 2.3, "Telugu": 1.95, "Thai": 1.4}   # x-heights per character, measured
-MIN_XH, MAX_XH = 3.0, 3.4                              # x-height of the writing [mm]; 3.0 mm is about 2.1% of the page height word height at 1024 px (hwdet rejects pages under 14)
-MIN_XH_SCRIPT = {"Han": 2.3, "Hangul": 2.3, "Arabic": 2.0}                  # complex glyphs smear below these x-heights
-MAX_GLYPH_MM = 15.0                                    # tallest word of a page (ascender to descender)
+from .config import CHAR_W, MAX_GLYPH_MM, MIN_XH_SCRIPT  # noqa: F401
+
+MIN_XH, MAX_XH = (
+    3.0,
+    3.4,
+)  # x-height of the writing [mm]; 3.0 mm is about 2.1% of the page height word height at 1024 px (hwdet rejects pages under 14)
 LEADERS = re.compile(r"[.…·_\-–—=~*|]{3,}")
 COMMON = ("Common", "Inherited", "Unknown", None)
 
 
 def clean(text):
-    text = LEADERS.sub(" ", unicodedata.normalize("NFC", text))          # dotted leaders and rules of forms
+    text = LEADERS.sub(" ", unicodedata.normalize("NFC", text))  # dotted leaders and rules of forms
     return re.sub(r"\s+", " ", "".join(c for c in text if c.isprintable() or c == " ")).strip()
 
 
 def usable(t):
     n = sum(not c.isspace() for c in t)
-    return n >= 1 and sum(unicodedata.category(c)[0] in "LMN" for c in t) >= 0.6 * n       # letters, vowel signs, digits
+    return n >= 1 and sum(unicodedata.category(c)[0] in "LMN" for c in t) >= 0.6 * n  # letters, vowel signs, digits
 
 
 def trim(text, chars):
@@ -91,22 +94,39 @@ def pick_fonts(w, text, prefer=None):
     mapping = {}
     for sc, chars in by.items():
         own = w.font(sc)
-        cands = ([own] if own else []) + list(w.fonts.candidates(sc, w.font_class)) + list(w.fonts.candidates(sc, "any"))
+        cands = (
+            ([own] if own else []) + list(w.fonts.candidates(sc, w.font_class)) + list(w.fonts.candidates(sc, "any"))
+        )
         name = (prefer or {}).get(sc)
         if name:
             cands = [f for f in cands if str(f).endswith(name)] + cands
         need = "".join(chars)
         mapping[sc] = next((f for f in cands if f and w.fonts.covers(f, need)), None)
-        if mapping[sc] is None:                              # no font has every character: the one with most of them (the rest is stripped, and a page that lost too much is rejected)
+        if (
+            mapping[sc] is None
+        ):  # no font has every character: the one with most of them (the rest is stripped, and a page that lost too much is rejected)
             cov = lambda f: sum(ord(c) in w.fonts.cmap.get(f, ()) for c in need)
             best = max((f for f in cands if f), key=cov, default=None)
             if best is not None and cov(best) >= 0.9 * len(need):
                 mapping[sc] = best
-    for sc, chars in by.items():                             # a script no font of its own covers: the hand font with most of its characters (the kana font of a Japanese page has its kanji)
+    for (
+        sc,
+        chars,
+    ) in by.items():  # a script no font of its own covers: the hand font with most of its characters (the kana font of a Japanese page has its kanji)
         if mapping[sc] is None:
             cov = lambda f: sum(ord(c) in w.fonts.cmap.get(f, ()) for c in chars)
-            mapping[sc] = next((f for fs in ([f for f in mapping.values() if f], w.fonts.hand)        # the page's own fonts first: one hand on the page
-                                for f in sorted(fs, key=cov, reverse=True)[:1] if cov(f) >= 0.9 * len(chars)), None)
+            mapping[sc] = next(
+                (
+                    f
+                    for fs in (
+                        [f for f in mapping.values() if f],
+                        w.fonts.hand,
+                    )  # the page's own fonts first: one hand on the page
+                    for f in sorted(fs, key=cov, reverse=True)[:1]
+                    if cov(f) >= 0.9 * len(chars)
+                ),
+                None,
+            )
     return {k: v for k, v in mapping.items() if v}
 
 
@@ -120,7 +140,9 @@ def strip_missing(w, text):
             start = True
             continue
         _, s, shared = next(sc)
-        if (unicodedata.category(ch)[0] == "M" and (start or unicodedata.combining(out[-1]) == 9)) or lacks(w, ch, s, shared):
+        if (unicodedata.category(ch)[0] == "M" and (start or unicodedata.combining(out[-1]) == 9)) or lacks(
+            w, ch, s, shared
+        ):
             start = True
             continue
         out.append(ch)

@@ -1,8 +1,8 @@
 from collections import Counter
 
 import numpy as np
-
 from conftest import fake_manifest
+
 from dspages.conditions import cells, entry_pools, factors, plan, script
 
 
@@ -14,7 +14,11 @@ def test_plan_marginals_exact(full_small):
     f = factors(full_small)
     gsm = Counter(s["gsm"] for s in specs if s["combo"][0] != "open")
     assert max(gsm.values()) - min(gsm.values()) <= 0.1 * n / len(f["gsm"])
-    assert all(full_small.paper.open_gsm[0] <= s["gsm"] <= full_small.paper.open_gsm[1] for s in specs if s["combo"][0] == "open")
+    assert all(
+        full_small.paper.open_gsm[0] <= s["gsm"] <= full_small.paper.open_gsm[1]
+        for s in specs
+        if s["combo"][0] == "open"
+    )
     combos = Counter(s["combo"] for s in specs)
     w = np.array([p for _, p in f["combo"]])
     for (c, p), m in zip(f["combo"], w / w.sum()):
@@ -45,8 +49,11 @@ def test_restyled_sizes_fill_the_ranges_in_source_order(full_small):
     specs = plan(full_small, 60, 2, man)
     c = full_small.layout
     for opened, (lo, hi) in ((True, c.open_font_pt), (False, c.font_pt)):
-        got = sorted((man[s["entry"]]["body_pt"], s["font_pt"]) for s in specs
-                     if man[s["entry"]]["kind"] == "refont" and (s["combo"][0] == "open") == opened)
+        got = sorted(
+            (man[s["entry"]]["body_pt"], s["font_pt"])
+            for s in specs
+            if man[s["entry"]]["kind"] == "refont" and (s["combo"][0] == "open") == opened
+        )
         pts = np.array([f for _, f in got])
         assert len(pts) and lo <= pts.min() and pts.max() <= hi
         assert all(b0 == b1 or f0 <= f1 for (b0, f0), (b1, f1) in zip(got, got[1:]))
@@ -61,6 +68,7 @@ def test_unknown_uses_all(full_small):
 
 def test_water_leaves_other_factors_unchanged(full_small):
     from dataclasses import replace
+
     n = 400
     man = [dict(e, source_path=f"{e['source_path']}.{k}") for k in range(20) for e in fake_manifest()]
     g = full_small.geometry

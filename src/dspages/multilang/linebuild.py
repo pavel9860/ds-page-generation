@@ -1,4 +1,5 @@
 """Builds langds/linebank/<lang>.json from the digital text pages of the corpus (language from the file name)."""
+
 import json
 import os
 import random
@@ -6,6 +7,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import pymupdf
+
 from dspages.pagegen.source import well_formed
 
 from .buckets import BUCKETS
@@ -27,7 +29,12 @@ def scan(files, lang, pages, rng, seen, lines):
             for i in random.Random(path).sample(range(len(doc)), min(len(doc), C.page_samples)):
                 tried += 1
                 pg = doc[i]
-                if got >= pages or pg.rect.width > C.max_page_width or len(pg.get_text("text")) < C.min_page_chars or not text_layer_ok(pg):
+                if (
+                    got >= pages
+                    or pg.rect.width > C.max_page_width
+                    or len(pg.get_text("text")) < C.min_page_chars
+                    or not text_layer_ok(pg)
+                ):
                     continue
                 got += 1
                 for p in paragraphs(pg, C.max_paragraphs):
@@ -48,8 +55,13 @@ def lang_bank(job):
     if f.exists():
         return lang, len(json.loads(f.read_text())["w"])
     rng, root = random.Random(f"{lang}{seed}"), Path(layouts)
-    files = lambda dirs: [str(root / d / n) for d in dirs if (root / d).is_dir() for n in os.listdir(root / d)
-                          if n.lower().endswith(".pdf") and parse_lang(n) == lang]
+    files = lambda dirs: [
+        str(root / d / n)
+        for d in dirs
+        if (root / d).is_dir()
+        for n in os.listdir(root / d)
+        if n.lower().endswith(".pdf") and parse_lang(n) == lang
+    ]
     own = files(D.folders["text"])
     rng.shuffle(own)
     seen, lines = set(), []

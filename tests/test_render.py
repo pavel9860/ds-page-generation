@@ -2,8 +2,8 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-
 from conftest import fake_manifest
+
 from dspages.conditions import plan
 from dspages.geometry.surface import make_surface
 from dspages.layout.generate import draw_layout, make_layout
@@ -15,8 +15,13 @@ def test_raster_plane_is_linear():
     nu, nv = 5, 4
     uu, vv = np.meshgrid(np.linspace(0, 1, nu), np.linspace(0, 1, nv))
     pix = np.stack([10 + 80 * uu.ravel(), 20 + 60 * vv.ravel()], -1)
-    uv, a, z = rasterize(pix, np.full(nu * nv, 100.0), np.stack([uu.ravel(), vv.ravel(), np.ones(nu * nv)], -1),
-                         grid_faces(nv, nu), (100, 100))
+    uv, a, z = rasterize(
+        pix,
+        np.full(nu * nv, 100.0),
+        np.stack([uu.ravel(), vv.ravel(), np.ones(nu * nv)], -1),
+        grid_faces(nv, nu),
+        (100, 100),
+    )
     ys, xs = np.mgrid[0:100, 0:100] + 0.5
     inside = np.isfinite(uv[..., 0])
     assert inside[25:75, 15:85].all() and not inside[:15].any()

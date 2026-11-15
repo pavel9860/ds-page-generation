@@ -4,6 +4,7 @@ images without a label record the document named by the file (<prefix>_<hash>_..
 
 python tools/pagekind_sources.py [--out UVTM/pagetype_labelled/cache/pagekind_src.jsonl] [--workers 6]
 """
+
 import argparse
 import json
 import re
@@ -18,13 +19,15 @@ from dspages.hand import corpus
 from dspages.hand.config import PATHS
 
 ROOT = Path(PATHS.uvtm) / "pagetype_labelled"
-LABELS = tuple(sorted(c.name for c in ROOT.iterdir() if c.is_dir() and c.name != "cache"))      # every class folder
+LABELS = tuple(sorted(c.name for c in ROOT.iterdir() if c.is_dir() and c.name != "cache"))  # every class folder
 SIZE = (64, 90)
 MIN_CORR = 0.6
 
 
 def thumb(img):
-    g = cv2.resize(img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_RGB2GRAY), SIZE, interpolation=cv2.INTER_AREA).astype(np.float32)
+    g = cv2.resize(
+        img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_RGB2GRAY), SIZE, interpolation=cv2.INTER_AREA
+    ).astype(np.float32)
     g -= g.mean()
     return g / (np.linalg.norm(g) + 1e-6)
 
@@ -86,7 +89,19 @@ def main():
         for (lab, _), (img, pdf, page, corr) in zip(js, res):
             ok = isinstance(corr, float) and corr >= MIN_CORR
             n += ok
-            f.write(json.dumps(dict(label=lab, image=img, pdf=pdf, page=page, corr=corr if isinstance(corr, str) else round(corr, 3), ok=ok)) + "\n")
+            f.write(
+                json.dumps(
+                    dict(
+                        label=lab,
+                        image=img,
+                        pdf=pdf,
+                        page=page,
+                        corr=corr if isinstance(corr, str) else round(corr, 3),
+                        ok=ok,
+                    )
+                )
+                + "\n"
+            )
     print(f"{n} of {len(js)} matched (corr >= {MIN_CORR}); no source document: {len(skipped)}", skipped[:10])
 
 

@@ -1,4 +1,3 @@
-
 import cv2
 import numpy as np
 
@@ -19,8 +18,9 @@ def test_window_stats_counts_padding_as_empty():
 
 def _place(box, aspect, M, min_w, seed=0):
     mask = np.ones((400, 300), bool)
-    return place_window(np.random.default_rng(seed), box, aspect, M, min_w, mask, 1.0, np.zeros_like(mask), 0.5, 10,
-                        0.6)
+    return place_window(
+        np.random.default_rng(seed), box, aspect, M, min_w, mask, 1.0, np.zeros_like(mask), 0.5, 10, 0.6
+    )
 
 
 def test_window_keeps_margins_within_limit():
@@ -44,7 +44,7 @@ def test_content_mask_finds_text_and_images():
     cv2.rectangle(page, (100, 400), (500, 700), 90, -1)
     cv2.circle(page, (300, 550), 80, 20, 6)
     mask, s = content_mask(page)
-    assert mask[int(200 * s) - 5:int(200 * s) + 2].any()
+    assert mask[int(200 * s) - 5 : int(200 * s) + 2].any()
     assert mask[int(550 * s)].any()
     assert not mask[: int(120 * s)].any()
 
@@ -61,7 +61,7 @@ def test_layouts_filled_visible_realistic(full_small, manifest, fonts):
         mx, my = round(m["margin"] * pw), round(m["margin"] * ph)
         if mx and m["kind"] == "refont":
             assert gray[:, :mx].min() == 255 and gray[:, -mx:].min() == 255
-        inner = gray[my:ph - my, mx:pw - mx]
+        inner = gray[my : ph - my, mx : pw - mx]
         mask, _ = content_mask(inner)
         cells = [c for row in np.array_split(mask, 4) for c in np.array_split(row, 4, axis=1)]
         assert np.mean([c.any() for c in cells]) >= 0.75
@@ -80,8 +80,9 @@ def test_picture_share_limit():
     mask = np.ones((400, 100), bool)
     pictures = np.zeros_like(mask)
     pictures[:200] = True
-    _, _, share, ok = place_window(np.random.default_rng(0), (0, 0, 100, 400), 1.0, 0.0, 0.0, mask, 1.0, pictures,
-                                   0.5, 10, 0.3)
+    _, _, share, ok = place_window(
+        np.random.default_rng(0), (0, 0, 100, 400), 1.0, 0.0, 0.0, mask, 1.0, pictures, 0.5, 10, 0.3
+    )
     assert share <= 0.3 and ok
 
 
@@ -89,18 +90,24 @@ def test_ruled_form_is_not_a_picture(full_small):
     from pathlib import Path
 
     import pytest
+
     from dspages.layout.pictures import picture_area
+
     if not Path(full_small.layout.pictures.model).expanduser().exists():
         pytest.skip("picture model not installed")
     page = np.full((1200, 850), 255, np.uint8)
     for y in range(100, 1100, 40):
         cv2.rectangle(page, (60, y), (790, y + 40), 0, 2)
         cv2.putText(page, "Name / Date / Signature", (80, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 0, 2)
-    assert picture_area(np.repeat(page[..., None], 3, -1), (600, 425), full_small.layout.pictures).mean() <= full_small.layout.max_image
+    assert (
+        picture_area(np.repeat(page[..., None], 3, -1), (600, 425), full_small.layout.pictures).mean()
+        <= full_small.layout.max_image
+    )
 
 
 def test_rotate180_turns_the_finished_layout_half_a_circle(full_small, manifest, fonts):
     from dataclasses import replace
+
     entry = manifest[0]
     turned = replace(full_small, layout=replace(full_small.layout, rotate180_prob=1.0))
     plain = replace(full_small, layout=replace(full_small.layout, rotate180_prob=0.0))

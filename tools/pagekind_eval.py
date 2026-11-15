@@ -9,11 +9,11 @@ Features are cached next to the source list (pagekind_feats.npz); --refresh reco
 
 python tools/pagekind_eval.py [--classes plain,poems,formatted] [--relabel FILE] [--fit] [--errors] [--importance]
 """
+
 import argparse
 import json
 import re
 import time
-from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -64,9 +64,13 @@ def features(recs, refresh=False):
 def doc_embeddings(docs):
     ids = np.load(UV / "emb_out" / "ids.npy")
     emb = np.load(UV / "emb_out" / "embeddings.npy", mmap_mode="r")
-    paths = {r["id"]: r["path"] for r in map(json.loads, open(UV / "emb_out" / "manifest.jsonl"))}     # ids are not line numbers
+    paths = {
+        r["id"]: r["path"] for r in map(json.loads, open(UV / "emb_out" / "manifest.jsonl"))
+    }  # ids are not line numbers
     want = {i for i, p in paths.items() if corpus.doc_id(p) in docs}
-    return {(corpus.doc_id(paths[d]), int(p)): np.asarray(emb[k], np.float32) for k, (d, p) in enumerate(ids) if d in want}
+    return {
+        (corpus.doc_id(paths[d]), int(p)): np.asarray(emb[k], np.float32) for k, (d, p) in enumerate(ids) if d in want
+    }
 
 
 def page_embeddings():
@@ -82,7 +86,7 @@ def page_embeddings():
 def load(src, classes, any_layer, refresh, relabel=None):
     recs = [r for r in map(json.loads, open(src)) if r["ok"]]
     X, Y, t = features(recs, refresh)
-    if relabel:                                         # label corrections from a visual review: {"<label dir>/<file>": {old, new}}
+    if relabel:  # label corrections from a visual review: {"<label dir>/<file>": {old, new}}
         fix = json.load(open(relabel))
         for r in recs:
             key = f"{Path(r['image']).parent.name}/{Path(r['image']).name}"
@@ -99,7 +103,7 @@ def load(src, classes, any_layer, refresh, relabel=None):
     de = doc_embeddings({r["doc"] for r in recs})
     nan = np.full(768, np.nan, np.float32)
     E = np.array([pe.get(Path(r["image"]).stem, nan) for r in recs])
-    D = np.array([de.get((r["doc"], r["page"]), nan) for r in recs])            # the corpus embedding of that very page
+    D = np.array([de.get((r["doc"], r["page"]), nan) for r in recs])  # the corpus embedding of that very page
     y = np.array([classes.index(r["label"]) for r in recs])
     g = np.array([r["doc"] for r in recs])
     return X, Y, E, D, y, g, recs, t
@@ -126,7 +130,16 @@ def balanced_w(y):
 
 
 def xgb(**kw):
-    p = dict(n_estimators=400, max_depth=3, learning_rate=0.05, subsample=0.8, colsample_bytree=0.5, min_child_weight=2, n_jobs=6, verbosity=0)
+    p = dict(
+        n_estimators=400,
+        max_depth=3,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.5,
+        min_child_weight=2,
+        n_jobs=6,
+        verbosity=0,
+    )
     p.update(kw)
     return XGBClassifier(**p)
 
@@ -141,7 +154,9 @@ class Model:
         if self.kind == "xgb":
             self.m = xgb(**self.kw).fit(X, y, sample_weight=balanced_w(y))
         else:
-            self.m = make_pipeline(StandardScaler(), LogisticRegression(C=self.kw.get("C", 0.3), max_iter=5000, class_weight="balanced")).fit(X, y)
+            self.m = make_pipeline(
+                StandardScaler(), LogisticRegression(C=self.kw.get("C", 0.3), max_iter=5000, class_weight="balanced")
+            ).fit(X, y)
         return self
 
     def proba(self, X):
@@ -161,7 +176,7 @@ def cv_proba(make, Z, y, g, seed, extra=None):
     P = np.zeros((len(y), len(set(y))))
     for tr, te in StratifiedGroupKFold(5, shuffle=True, random_state=seed).split(Z, y, g):
         Zt, yt = _train(Z, y, tr, te, g, extra)
-        present = np.unique(yt)                         # a small subset can miss a class in a training fold
+        present = np.unique(yt)  # a small subset can miss a class in a training fold
         remap = np.searchsorted(present, yt)
         P[np.ix_(te, present)] = make().fit(Zt, remap).proba(Z[te])
     return P
@@ -174,7 +189,9 @@ def stacked(parts, y, g, seed):
     for tr, te in StratifiedGroupKFold(5, shuffle=True, random_state=seed + 100).split(y, y, g):
         inner = [cv_proba(make, Z[tr], y[tr], g[tr], seed, ex) for make, Z, ex in parts]
         outer = [make().fit(*_train(Z, y, tr, te, g, ex)).proba(Z[te]) for make, Z, ex in parts]
-        meta = LogisticRegression(C=1.0, max_iter=5000, class_weight="balanced").fit(np.log(np.hstack(inner) + 1e-4), y[tr])
+        meta = LogisticRegression(C=1.0, max_iter=5000, class_weight="balanced").fit(
+            np.log(np.hstack(inner) + 1e-4), y[tr]
+        )
         P[te] = meta.predict_proba(np.log(np.hstack(outer) + 1e-4))
     return P
 
@@ -184,8 +201,11 @@ def report(name, Ps, y, classes):
     acc = np.array([(p == y).mean() for p in preds])
     f1 = np.array([f1_score(y, p, average="macro") for p in preds])
     per = f1_score(y, preds[0], average=None)
-    print(f"{name:46s} acc {acc.mean():.3f} +- {acc.std():.3f}  err {1 - acc.mean():.3f}  macro-F1 {f1.mean():.3f}  "
-          + " ".join(f"{c}={v:.2f}" for c, v in zip(classes, per)), flush=True)
+    print(
+        f"{name:46s} acc {acc.mean():.3f} +- {acc.std():.3f}  err {1 - acc.mean():.3f}  macro-F1 {f1.mean():.3f}  "
+        + " ".join(f"{c}={v:.2f}" for c, v in zip(classes, per)),
+        flush=True,
+    )
 
 
 def standard(name, Ps, y, classes):
@@ -225,8 +245,10 @@ def importance(X, y, g, names, seeds=3):
 def write_model(m, classes):
     sc, lr = m[0], m[1]
     fmt = lambda a: "np.array([" + ", ".join(f"{v:.6g}" for v in a) + "])"
-    code = (f"MODEL_KINDS = {tuple(classes)!r}\nMEAN = {fmt(sc.mean_)}\nSCALE = {fmt(sc.scale_)}\n"
-            f"COEF = np.array([{', '.join(fmt(r) for r in lr.coef_)}])\nINTERCEPT = {fmt(lr.intercept_)}\n")
+    code = (
+        f"MODEL_KINDS = {tuple(classes)!r}\nMEAN = {fmt(sc.mean_)}\nSCALE = {fmt(sc.scale_)}\n"
+        f"COEF = np.array([{', '.join(fmt(r) for r in lr.coef_)}])\nINTERCEPT = {fmt(lr.intercept_)}\n"
+    )
     s = PY.read_text()
     PY.write_text(re.sub(r"MODEL_KINDS = .*?\nINTERCEPT = [^\n]*\n", lambda _: code, s, flags=re.S))
 
@@ -245,8 +267,10 @@ def main():
     a = ap.parse_args()
     classes = a.classes.split(",")
     X, Y, E, D, y, g, recs, t = load(a.src, classes, a.any_layer, a.refresh, a.relabel)
-    print(f"{len(y)} pages, {len(set(g))} documents, {dict(zip(classes, np.bincount(y)))}; fast features {1000 * np.median(t[:, 0]):.0f} ms "
-          f"median, reader {1000 * np.median(t[:, 1]):.0f} ms median")
+    print(
+        f"{len(y)} pages, {len(set(g))} documents, {dict(zip(classes, np.bincount(y)))}; fast features {1000 * np.median(t[:, 0]):.0f} ms "
+        f"median, reader {1000 * np.median(t[:, 1]):.0f} ms median"
+    )
     XY = np.hstack([X, Y])
     if a.importance:
         importance(XY, y, g, list(PK.NAMES) + list(PK.READER))
@@ -267,23 +291,38 @@ def main():
     for name, (make, Z, ex) in runs.items():
         P[name] = [cv_proba(make, Z, y, g, s, ex) for s in range(a.seeds)]
         report(name, P[name], y, classes)
-    prod = [np.log(P["fast + reader format, xgb"][s] + 1e-4) + np.log(P["page emb + extra images, logreg C=0.3"][s] + 1e-4) for s in range(a.seeds)]
+    prod = [
+        np.log(P["fast + reader format, xgb"][s] + 1e-4) + np.log(P["page emb + extra images, logreg C=0.3"][s] + 1e-4)
+        for s in range(a.seeds)
+    ]
     report("product: format xgb x page emb (+extra)", prod, y, classes)
-    stacks = {"stack: format xgb + page emb": [(lambda: Model("xgb"), XY, None), (lambda: Model("lr", C=0.3), En, None)],
-              "stack: format xgb + page emb (+extra)": [(lambda: Model("xgb"), XY, None), (lambda: Model("lr", C=0.3), En, Ee)]}
+    stacks = {
+        "stack: format xgb + page emb": [(lambda: Model("xgb"), XY, None), (lambda: Model("lr", C=0.3), En, None)],
+        "stack: format xgb + page emb (+extra)": [
+            (lambda: Model("xgb"), XY, None),
+            (lambda: Model("lr", C=0.3), En, Ee),
+        ],
+    }
     for name, parts in stacks.items():
         P[name] = [stacked(parts, y, g, s) for s in range(a.seeds)]
         report(name, P[name], y, classes)
-    for name in ("fast format, logreg", "fast + reader format, xgb", "page emb, logreg C=0.05", "format + page emb, concat logreg"):
+    for name in (
+        "fast format, logreg",
+        "fast + reader format, xgb",
+        "page emb, logreg C=0.05",
+        "format + page emb, concat logreg",
+    ):
         standard(name, P[name], y, classes)
     standard("product: format xgb x page emb (+extra)", prod, y, classes)
     has_doc = ~np.isnan(D).any(1)
     if has_doc.sum() >= 50:
         Dn, ys, gs = normalize(D[has_doc]), y[has_doc], g[has_doc]
         print(f"\npages with a corpus page embedding: {has_doc.sum()}")
-        for name, (make, Z) in {"corpus page emb, logreg": (lambda: Model("lr", C=0.3), Dn),
-                                "format xgb (same pages)": (lambda: Model("xgb"), XY[has_doc]),
-                                "format + corpus page emb, concat logreg": (lambda: Model("lr", C=0.05), np.hstack([XY[has_doc], Dn]))}.items():
+        for name, (make, Z) in {
+            "corpus page emb, logreg": (lambda: Model("lr", C=0.3), Dn),
+            "format xgb (same pages)": (lambda: Model("xgb"), XY[has_doc]),
+            "format + corpus page emb, concat logreg": (lambda: Model("lr", C=0.05), np.hstack([XY[has_doc], Dn])),
+        }.items():
             report(name, [cv_proba(make, Z, ys, gs, s) for s in range(a.seeds)], ys, classes)
     if a.errors:
         best = "stack: format xgb + page emb (+extra)"
@@ -293,7 +332,9 @@ def main():
         for i in np.argsort(-wrong):
             if wrong[i] < 0.5:
                 break
-            print(f"  {classes[y[i]]:>12} -> {classes[np.bincount(pr[:, i]).argmax()]:<12} {Path(recs[i]['image']).parent.name}/{Path(recs[i]['image']).name}")
+            print(
+                f"  {classes[y[i]]:>12} -> {classes[np.bincount(pr[:, i]).argmax()]:<12} {Path(recs[i]['image']).parent.name}/{Path(recs[i]['image']).name}"
+            )
     if a.fit:
         write_model(Model("lr").fit(X, y).m, classes)
         print("fast logistic model written to", PY)

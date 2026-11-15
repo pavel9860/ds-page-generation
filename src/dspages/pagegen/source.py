@@ -1,15 +1,46 @@
 """Text of real documents for handwriting"""
+
 import random
 import unicodedata
 from collections import Counter
 
 SCRIPTS = {
-    "Arabic": "ar fa ur ps ku ckb sd ug", "Hebrew": "he yi", "Oriya": "or", "Thaana": "dv", "Meetei_Mayek": "mni", "Greek": "el", "Cyrillic": "ru be bg mk kk kz ky mn tg tj uk",
-    "Devanagari": "hi mr ne sa mai", "Bengali": "bn as", "Gujarati": "gu", "Gurmukhi": "pa", "Tamil": "ta", "Telugu": "te", "Kannada": "kn",
-    "Malayalam": "ml", "Sinhala": "si", "Khmer": "km", "Lao": "lo", "Myanmar": "my", "Thai": "th", "Tibetan": "bo dz",
-    "Ethiopic": "am ti", "Armenian": "hy", "Georgian": "ka", "Hangul": "ko", "Han": "zh", "Hiragana": "ja", "Katakana": "ja",
+    "Arabic": "ar fa ur ps ku ckb sd ug",
+    "Hebrew": "he yi",
+    "Oriya": "or",
+    "Thaana": "dv",
+    "Meetei_Mayek": "mni",
+    "Greek": "el",
+    "Cyrillic": "ru be bg mk kk kz ky mn tg tj uk",
+    "Devanagari": "hi mr ne sa mai",
+    "Bengali": "bn as",
+    "Gujarati": "gu",
+    "Gurmukhi": "pa",
+    "Tamil": "ta",
+    "Telugu": "te",
+    "Kannada": "kn",
+    "Malayalam": "ml",
+    "Sinhala": "si",
+    "Khmer": "km",
+    "Lao": "lo",
+    "Myanmar": "my",
+    "Thai": "th",
+    "Tibetan": "bo dz",
+    "Ethiopic": "am ti",
+    "Armenian": "hy",
+    "Georgian": "ka",
+    "Hangul": "ko",
+    "Han": "zh",
+    "Hiragana": "ja",
+    "Katakana": "ja",
 }
-ALSO = {"ku": {"Latin"}, "mni": {"Bengali"}, "sr": {"Cyrillic", "Latin"}, "uz": {"Latin", "Cyrillic"}, "ja": {"Han", "Hiragana", "Katakana"}}
+ALSO = {
+    "ku": {"Latin"},
+    "mni": {"Bengali"},
+    "sr": {"Cyrillic", "Latin"},
+    "uz": {"Latin", "Cyrillic"},
+    "ja": {"Han", "Hiragana", "Katakana"},
+}
 
 
 def scripts_of(lang):

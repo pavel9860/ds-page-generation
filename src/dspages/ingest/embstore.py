@@ -1,4 +1,5 @@
 """The embedding table emb_out (embeddings.npy float16 (n, 1536), ids.npy int32 (n, 2) [doc, page] sorted by (doc, page), manifest.jsonl {id, path})."""
+
 import json
 import os
 import shutil
@@ -56,7 +57,7 @@ def merge_rows(E_new, I_new, drop=None):
     loc = np.concatenate([keep, add])
     out = np.lib.format.open_memmap(EMB / "embeddings.new.npy", mode="w+", dtype=np.float16, shape=(n, DIM))
     for s in range(0, n, BLOCK):
-        o = order[s:s + BLOCK]
+        o = order[s : s + BLOCK]
         blk = np.empty((len(o), DIM), np.float16)
         for t, E in enumerate((Ea, E_new)):
             m = src[o] == t
@@ -66,7 +67,7 @@ def merge_rows(E_new, I_new, drop=None):
                 res = np.empty((len(li), DIM), np.float16)
                 res[srt] = np.asarray(E[li[srt]])
                 blk[m] = res
-        out[s:s + len(o)] = blk
+        out[s : s + len(o)] = blk
     out.flush()
     del out
     np.save(EMB / "ids.new.npy", np.concatenate([Ia[keep], I_new[add]])[order].astype(np.int32))

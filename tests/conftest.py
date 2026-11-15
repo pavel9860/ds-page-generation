@@ -18,10 +18,21 @@ def small(name):
 def fake_manifest():
     """Pages of every script group (raster and restyled pages, as the manifest writes them after its checks)."""
     langs = ["en", "eu", "cyr", "zh", "el", "unknown"]
-    out = [dict(source_path=f"x{i}.png", page_index=0, kind="raster", language=langs[i % 6], category=None)
-           for i in range(60)]
-    out += [dict(source_path=f"b{i % 3}.pdf", page_index=i, kind="refont", language=langs[i % 5], category="books_pdf",
-                 body_pt=10.0 + i % 16) for i in range(60)]
+    out = [
+        dict(source_path=f"x{i}.png", page_index=0, kind="raster", language=langs[i % 6], category=None)
+        for i in range(60)
+    ]
+    out += [
+        dict(
+            source_path=f"b{i % 3}.pdf",
+            page_index=i,
+            kind="refont",
+            language=langs[i % 5],
+            category="books_pdf",
+            body_pt=10.0 + i % 16,
+        )
+        for i in range(60)
+    ]
     return out
 
 
@@ -38,6 +49,7 @@ def demo():
 @pytest.fixture(scope="session")
 def manifest(full_small):
     from dspages.layout.sources import load_manifest
+
     if not Path(full_small.paths.manifest).exists():
         pytest.skip("manifest not available")
     m = load_manifest(full_small.paths.manifest)
@@ -49,4 +61,5 @@ def manifest(full_small):
 @pytest.fixture(scope="session")
 def fonts(full_small):
     from dspages.layout.refont import font_set
+
     return font_set(full_small.paths.font_dirs)

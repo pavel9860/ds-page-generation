@@ -14,6 +14,7 @@ stay as they are), music is out of it.
 python tools/pagekind_lang.py scan|read|plan
 python tools/pagekind_lang.py cands --out DIR [--factor 2]
 """
+
 import argparse
 import json
 import shutil
@@ -28,11 +29,14 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import normalize
 
 sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting")
-import pagekind_border as B                                   # noqa: E402
-import pagekind_inventory as I                                # noqa: E402
-from dspages.hand import corpus                               # noqa: E402
-from dspages.hand.config import PATHS                         # noqa: E402
+from dspages import paths as _P
+
+sys.path.insert(0, f"{_P.CORPUS}")
+import pagekind_border as B  # noqa: E402
+import pagekind_inventory as I  # noqa: E402
+
+from dspages.hand import corpus  # noqa: E402
+from dspages.hand.config import PATHS  # noqa: E402
 
 EN_SHARE = 0.25
 MIN_DOCS = 100
@@ -40,8 +44,8 @@ WORK = I.V.CACHE / "langscan"
 BALANCE = I.V.CACHE / "pagekind_balance.json"
 DEFICIT = I.V.CACHE / "pagekind_deficit.json"
 SKIP = ("music",)
-NOT_DIGITAL = ("images", "recieps")             # hardly any digital-born page: no language plan, no candidates
-FOLDER_FILLED = ("scientific",)                 # filled from Layouts/scientific_paper by tools/pagekind_full.py
+NOT_DIGITAL = ("images", "recieps")  # hardly any digital-born page: no language plan, no candidates
+FOLDER_FILLED = ("scientific",)  # filled from Layouts/scientific_paper by tools/pagekind_full.py
 
 
 def corpus_langs():
@@ -53,6 +57,7 @@ def corpus_langs():
 
 def scan():
     from tools.langscan import Config, make_sheets
+
     items = [i for i in I.inventory() if i.lang is None and i.cls not in I.NO_LANG + SKIP]
     pages = WORK / "pages"
     shutil.rmtree(WORK, ignore_errors=True)
@@ -65,7 +70,9 @@ def scan():
             if f.suffix.lower() == ".pdf":
                 pg = pymupdf.open(f)[0]
                 z = 1000 / pg.rect.width
-                im = Image.frombytes("RGB", *(lambda p: ((p.w, p.h), p.samples))(pg.get_pixmap(matrix=pymupdf.Matrix(z, z))))
+                im = Image.frombytes(
+                    "RGB", *(lambda p: ((p.w, p.h), p.samples))(pg.get_pixmap(matrix=pymupdf.Matrix(z, z)))
+                )
             else:
                 im = Image.open(f).convert("RGB")
             im.thumbnail((1000, 1500))
@@ -81,6 +88,7 @@ def scan():
 
 def read():
     from tools.langscan import read_results
+
     names = json.loads((WORK / "names.json").read_text())
     dets, bad = read_results(WORK)
     out = json.load(open(I.LANG_FILE)) if I.LANG_FILE.exists() else {}
@@ -118,7 +126,7 @@ def plan():
         keep[c], deficit[c] = [], {}
         for l, want in t.items():
             have = by.get(l, [])
-            keep[c] += sorted(have)[:want]                  # a surplus language keeps its share (file order is random by hash)
+            keep[c] += sorted(have)[:want]  # a surplus language keeps its share (file order is random by hash)
             if len(have) < want:
                 deficit[c][l] = want - len(have)
         dropped = sum(len(v) for l, v in by.items() if l not in t)
@@ -137,7 +145,9 @@ def cands(out, factor):
     items = [i for i in I.inventory() if i.emb is not None]
     names = I.classes()
     y = np.array([names.index(i.cls) for i in items])
-    model = LogisticRegression(C=0.3, max_iter=5000, class_weight="balanced").fit(normalize(np.array([i.emb for i in items])), y)
+    model = LogisticRegression(C=0.3, max_iter=5000, class_weight="balanced").fit(
+        normalize(np.array([i.emb for i in items])), y
+    )
     deficit = json.load(open(DEFICIT))
     db = corpus.connect()
     lang = corpus.languages(db, min_conf=0.0)
@@ -147,15 +157,24 @@ def cands(out, factor):
     ids = np.load(I.V.UV / "emb_out" / "ids.npy")
     emb = np.load(I.V.UV / "emb_out" / "embeddings.npy", mmap_mode="r")
     want = {l for d in deficit.values() for l in d}
-    rows = [k for k, (d, p) in enumerate(ids) if man.get(int(d)) in paths and man.get(int(d)) not in used and lang.get(man.get(int(d))) in want]
-    P = np.vstack([model.predict_proba(normalize(np.asarray(emb[rows[a:a + 20000]], np.float32))) for a in range(0, len(rows), 20000)])
+    rows = [
+        k
+        for k, (d, p) in enumerate(ids)
+        if man.get(int(d)) in paths and man.get(int(d)) not in used and lang.get(man.get(int(d))) in want
+    ]
+    P = np.vstack(
+        [
+            model.predict_proba(normalize(np.asarray(emb[rows[a : a + 20000]], np.float32)))
+            for a in range(0, len(rows), 20000)
+        ]
+    )
     taken, picks = set(), []
     for c, langs in deficit.items():
         if c in NOT_DIGITAL + FOLDER_FILLED:
             continue
         ci = names.index(c)
         for l, miss in langs.items():
-            ix = [j for j in np.argsort(-P[:, ci]) if lang.get(man[int(ids[rows[j], 0])]) == l][:40 * miss * factor]
+            ix = [j for j in np.argsort(-P[:, ci]) if lang.get(man[int(ids[rows[j], 0])]) == l][: 40 * miss * factor]
             got = 0
             for j in ix:
                 d = man[int(ids[rows[j], 0])]
@@ -172,12 +191,32 @@ def cands(out, factor):
             no = int(ids[r, 1])
             try:
                 B.render(str(paths[d]), no, out / "img" / f"{k:04d}.jpg")
-            except Exception:                                   # file gone from the corpus
+            except Exception:  # file gone from the corpus
                 continue
-            f.write(json.dumps(dict(k=k, doc=d, lang=l, pdf=str(paths[d]), page=no, emb_row=int(r), p={c: round(p, 3)}, margin=None,
-                                    want=c)) + "\n")
+            f.write(
+                json.dumps(
+                    dict(
+                        k=k,
+                        doc=d,
+                        lang=l,
+                        pdf=str(paths[d]),
+                        page=no,
+                        emb_row=int(r),
+                        p={c: round(p, 3)},
+                        margin=None,
+                        want=c,
+                    )
+                )
+                + "\n"
+            )
             k += 1
-    print(len(picks), "candidates:", Counter(p[0] for p in picks), "| asked:", {c: sum(v.values()) for c, v in deficit.items()})
+    print(
+        len(picks),
+        "candidates:",
+        Counter(p[0] for p in picks),
+        "| asked:",
+        {c: sum(v.values()) for c, v in deficit.items()},
+    )
 
 
 if __name__ == "__main__":

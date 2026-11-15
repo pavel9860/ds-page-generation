@@ -1,8 +1,9 @@
 """Short written lines per language"""
+
 import json
 import re
 from bisect import bisect_left, bisect_right
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 import regex
@@ -20,7 +21,7 @@ def key(line):
 
 
 def stem(line):
-    return " ".join(key(line).split()[:C.stem_words])
+    return " ".join(key(line).split()[: C.stem_words])
 
 
 def _graphemes(text):
@@ -31,10 +32,10 @@ def _pieces(part, lang):
     """A clause as it is, or cut into equal pieces of at most `max_words` words (unspaced scripts: of that many words' worth of graphemes)."""
     if lang in C.unspaced and len(part.split()) < 3:
         g, k = _graphemes(part), C.max_words * C.unit.get(lang, C.unit_default)
-        return ["".join(g[i:i + k]).strip(C.edge) for i in range(0, len(g), k)]
+        return ["".join(g[i : i + k]).strip(C.edge) for i in range(0, len(g), k)]
     words = part.split()
     size = -(-len(words) // -(-len(words) // C.max_words))
-    return [" ".join(words[i:i + size]) for i in range(0, len(words), size)]
+    return [" ".join(words[i : i + size]) for i in range(0, len(words), size)]
 
 
 def phrases(text, lang):
@@ -89,7 +90,7 @@ class Bank:
         return [rng.choice(one) for _ in range(n)] if one else []
 
 
-@lru_cache(maxsize=None)
+@cache
 def load(lang, root=None):
     """The Bank of a language with its translated lines, None when it was not built."""
     f = Path(root or BANK) / f"{lang}.json"

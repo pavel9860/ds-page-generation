@@ -1,5 +1,6 @@
 """Forms of generation/handwriting/forms that can be used (>= 3 answers; the language is the form's label) per language against the slots of ds3k_plan.json; writes handwriting/forms/usable.json {fid: status} and short.json {lang: forms missing}. python scripts/forms/forms_status.py
 python scripts/forms/forms_status.py"""
+
 import json
 from collections import Counter
 

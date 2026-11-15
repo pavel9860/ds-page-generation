@@ -3,6 +3,7 @@
 python tools/sortfiles.py
 Keys: see KEYS (ctrl+h shows the table), space skips, ctrl+z undoes the last move, ctrl+shift+z redoes it, wheel scrolls pdf pages.
 """
+
 import shutil
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
@@ -63,7 +64,9 @@ class App:
         return sorted(p for p in folder.rglob("*") if p.suffix.lower() in EXTENSIONS)
 
     def open_dir(self):
-        folder = filedialog.askdirectory(initialdir=self.folder if self.folder.is_dir() else Path(Paths().layouts), parent=self.root)
+        folder = filedialog.askdirectory(
+            initialdir=self.folder if self.folder.is_dir() else Path(Paths().layouts), parent=self.root
+        )
         if folder:
             self.folder = Path(folder)
             self.files = self.listing(self.folder)
@@ -116,12 +119,14 @@ class App:
         c = self.canvas
         c.delete("all")
         if self.i >= len(self.files):
-            c.create_text(20, 20, anchor="nw", fill="white", font=("monospace", 16), text="No files left. ctrl+z to undo.")
+            c.create_text(
+                20, 20, anchor="nw", fill="white", font=("monospace", 16), text="No files left. ctrl+z to undo."
+            )
             self.status.config(text=f"done: {len(self.done)} moved")
             return
         path = self.files[self.i]
         w, h = max(c.winfo_width(), 200), max(c.winfo_height(), 200)
-        window = self.files[self.i:self.i + 1 + PREFETCH]
+        window = self.files[self.i : self.i + 1 + PREFETCH]
         fut = self.future(path, w, h)
         for p in window[1:]:
             self.future(p, w, h)
@@ -217,7 +222,14 @@ class App:
         win = tk.Toplevel(self.root)
         win.title("keys")
         rows = [(k, name, str(d)) for k, (name, d) in KEYS.items()]
-        rows += [("space", "skip", ""), ("ctrl+z", "undo last move", ""), ("ctrl+shift+z", "redo", ""), ("wheel", "scroll pdf", ""), ("ctrl+o", "open input dir", ""), ("ctrl+h", "this table", "")]
+        rows += [
+            ("space", "skip", ""),
+            ("ctrl+z", "undo last move", ""),
+            ("ctrl+shift+z", "redo", ""),
+            ("wheel", "scroll pdf", ""),
+            ("ctrl+o", "open input dir", ""),
+            ("ctrl+h", "this table", ""),
+        ]
         for r, row in enumerate(rows):
             for c, text in enumerate(row):
                 tk.Label(win, text=text, anchor="w", padx=8).grid(row=r, column=c, sticky="w")

@@ -1,10 +1,12 @@
 """Precision / recall of the field finder against the fillable (AcroForm) fields of PDF forms"""
+
 import json
 import sys
 from collections import Counter
 from dataclasses import replace
 
 import pymupdf
+
 from dspages.multilang.config import Config
 from dspages.multilang.paths import FILLING
 from dspages.pagegen import forms
@@ -23,7 +25,11 @@ def main():
     for fid, v in meta.items():
         try:
             pg = pymupdf.open(v["path"])[int(v["page"])]
-            ws = [w.rect for w in (pg.widgets() or []) if w.field_type_string in ("Text", "ComboBox") and not w.field_value]
+            ws = [
+                w.rect
+                for w in (pg.widgets() or [])
+                if w.field_type_string in ("Text", "ComboBox") and not w.field_value
+            ]
         except Exception:
             continue
         if len(ws) < 3:
@@ -39,7 +45,9 @@ def main():
         for s in sp:
             (ok if any(ov(w, s["box"]) > 0.5 for w in W) else bad)[s.get("src", "?")] += 1
     tot = sum(ok.values()) + sum(bad.values())
-    print(f"forms {lo}-{hi}: recall {100 * hit / max(hit + miss, 1):.0f}% ({hit} of {hit + miss}) | spots off a real field {100 * sum(bad.values()) / max(tot, 1):.0f}% ({sum(bad.values())} of {tot})")
+    print(
+        f"forms {lo}-{hi}: recall {100 * hit / max(hit + miss, 1):.0f}% ({hit} of {hit + miss}) | spots off a real field {100 * sum(bad.values()) / max(tot, 1):.0f}% ({sum(bad.values())} of {tot})"
+    )
     print("   by source: " + ", ".join(f"{k}: {bad[k]}/{ok[k] + bad[k]} off" for k in sorted(set(ok) | set(bad))))
 
 

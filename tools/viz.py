@@ -4,6 +4,7 @@ unwarped | UV map | height map | shaded surface; files of cut samples end in _cu
 python tools/viz.py RUN_DIR [--manifest MANIFEST] [--workers 6]
 Writes RUN_DIR_viz/samples/<i>.jpg and, with --manifest, RUN_DIR_viz/filtered_out/<reason>/<name>_p<page>.jpg.
 """
+
 import argparse
 import json
 from concurrent.futures import ProcessPoolExecutor
@@ -18,7 +19,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from dspages import io  # noqa: E402
 
-ARROWS = 14                                         # arrows per side of the UV grid
+ARROWS = 14  # arrows per side of the UV grid
 
 
 def back_map(warped, grid2d, page_hw):
@@ -27,8 +28,13 @@ def back_map(warped, grid2d, page_hw):
     ph, pw = page_hw
     g = cv2.resize(np.moveaxis(grid2d, 0, -1), (pw, ph), interpolation=cv2.INTER_LINEAR)
     h, w = warped.shape
-    return cv2.remap(warped.astype(np.float32), (g[..., 0] + 1) * 0.5 * (w - 1), (g[..., 1] + 1) * 0.5 * (h - 1),
-                     cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    return cv2.remap(
+        warped.astype(np.float32),
+        (g[..., 0] + 1) * 0.5 * (w - 1),
+        (g[..., 1] + 1) * 0.5 * (h - 1),
+        cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
 
 
 def shaded(map3d):
@@ -51,22 +57,40 @@ def sample_figure(path, out, meta):
     fig, ax = plt.subplots(2, 3, figsize=(15, 13))
     ax = ax.ravel()
     ax[0].imshow(flat, cmap="gray", vmin=0, vmax=255)
-    ax[0].set_title(f"flat {flat.shape[1]}x{flat.shape[0]}, part of the sheet u {meta['flat_part'][0]:.3f}-{meta['flat_part'][2]:.3f} "
-                    f"v {meta['flat_part'][1]:.3f}-{meta['flat_part'][3]:.3f}" if "flat_part" in meta else "flat", fontsize=9)
+    ax[0].set_title(
+        f"flat {flat.shape[1]}x{flat.shape[0]}, part of the sheet u {meta['flat_part'][0]:.3f}-{meta['flat_part'][2]:.3f} "
+        f"v {meta['flat_part'][1]:.3f}-{meta['flat_part'][3]:.3f}"
+        if "flat_part" in meta
+        else "flat",
+        fontsize=9,
+    )
     ax[1].imshow(warped, cmap="gray", vmin=0, vmax=255)
     h, w = g2.shape[1:]
-    ys, xs = np.mgrid[h // (2 * ARROWS):h:h // ARROWS, w // (2 * ARROWS):w:w // ARROWS]
+    ys, xs = np.mgrid[h // (2 * ARROWS) : h : h // ARROWS, w // (2 * ARROWS) : w : w // ARROWS]
     ph, pw = flat.shape
     sx, sy = (warped.shape[1] - 1) / 2, (warped.shape[0] - 1) / 2
     px, py = (g2[0, ys, xs] + 1) * sx, (g2[1, ys, xs] + 1) * sy
-    ax[1].quiver(px, py, xs * (pw - 1) / (w - 1) - px, ys * (ph - 1) / (h - 1) - py, color="#e4572e",
-                 angles="xy", scale_units="xy", scale=1, width=0.003)
+    ax[1].quiver(
+        px,
+        py,
+        xs * (pw - 1) / (w - 1) - px,
+        ys * (ph - 1) / (h - 1) - py,
+        color="#e4572e",
+        angles="xy",
+        scale_units="xy",
+        scale=1,
+        width=0.003,
+    )
     edge = np.concatenate([g2[:, 0, :], g2[:, :, -1], g2[:, -1, ::-1], g2[:, ::-1, 0]], 1)
     ax[1].plot((edge[0] + 1) * sx, (edge[1] + 1) * sy, color="#d00000" if cut else "#2e86de", lw=1.5)
     ax[1].set_xlim(0, warped.shape[1] - 1)
     ax[1].set_ylim(warped.shape[0] - 1, 0)
-    ax[1].set_title(f"warped {warped.shape[1]}x{warped.shape[0]}; outline: the flat's part" + (" (CUT by the frame)" if cut else ""),
-                    fontsize=9, color="#d00000" if cut else "black")
+    ax[1].set_title(
+        f"warped {warped.shape[1]}x{warped.shape[0]}; outline: the flat's part"
+        + (" (CUT by the frame)" if cut else ""),
+        fontsize=9,
+        color="#d00000" if cut else "black",
+    )
     back = back_map(warped, g2, flat.shape)
     ax[2].imshow(back, cmap="gray", vmin=0, vmax=255)
     ax[2].set_title("unwarped: warped mapped back through grid2d", fontsize=9)
@@ -81,9 +105,12 @@ def sample_figure(path, out, meta):
     for x in ax:
         x.axis("off")
     v, L = meta.get("view", {}), meta.get("layout", {})
-    fig.suptitle(f"{path.stem}  {'CUT' if cut else 'whole page'}  {L.get('kind', '')} {L.get('category', '')}  flat scale "
-                 f"{meta.get('flat_scale', '')}  tilt {v.get('tilt_deg', 0):.0f}  page in photo {meta.get('page_frac', 0):.2f}",
-                 fontsize=12, color="#d00000" if cut else "black")
+    fig.suptitle(
+        f"{path.stem}  {'CUT' if cut else 'whole page'}  {L.get('kind', '')} {L.get('category', '')}  flat scale "
+        f"{meta.get('flat_scale', '')}  tilt {v.get('tilt_deg', 0):.0f}  page in photo {meta.get('page_frac', 0):.2f}",
+        fontsize=12,
+        color="#d00000" if cut else "black",
+    )
     fig.tight_layout()
     fig.savefig(out, dpi=110)
     plt.close(fig)
@@ -91,6 +118,7 @@ def sample_figure(path, out, meta):
 
 def rejected_thumb(r, out):
     import pymupdf as fitz
+
     p = r["source_path"]
     if p.lower().endswith(".pdf"):
         with fitz.open(p) as d:
@@ -128,8 +156,14 @@ def main():
     if (run / "meta.jsonl").exists():
         with open(run / "meta.jsonl") as f:
             metas = {r["sample"]: r for r in map(json.loads, f)}
-    jobs = [("sample", (p, metas.get(p.stem, {})), viz / "samples" / f"{p.stem}{'_cut' if metas.get(p.stem, {}).get('view', {}).get('cut') else ''}.jpg")
-            for p in sorted((run / "samples").glob("*.npz"))]
+    jobs = [
+        (
+            "sample",
+            (p, metas.get(p.stem, {})),
+            viz / "samples" / f"{p.stem}{'_cut' if metas.get(p.stem, {}).get('view', {}).get('cut') else ''}.jpg",
+        )
+        for p in sorted((run / "samples").glob("*.npz"))
+    ]
     if a.manifest:
         with open(Path(a.manifest).with_suffix(".rejected.jsonl")) as f:
             for r in map(json.loads, f):

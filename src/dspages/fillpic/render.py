@@ -1,4 +1,5 @@
 """Pages of source files as grey canvas images."""
+
 import subprocess
 import tempfile
 from pathlib import Path
@@ -34,10 +35,28 @@ def render_other(path, number, cfg=CONFIG):
     k = cfg.kaggle
     if str(path).lower().endswith(".pdf"):
         with tempfile.TemporaryDirectory() as tmp:
-            subprocess.run(["pdftoppm", "-gray", "-f", str(number + 1), "-l", str(number + 1), "-scale-to-x", str(cfg.geometry.canvas_w), "-scale-to-y", str(cfg.geometry.canvas_h),
-                            str(path), f"{tmp}/o"], check=True, timeout=k.local_pdf_seconds, capture_output=True)
+            subprocess.run(
+                [
+                    "pdftoppm",
+                    "-gray",
+                    "-f",
+                    str(number + 1),
+                    "-l",
+                    str(number + 1),
+                    "-scale-to-x",
+                    str(cfg.geometry.canvas_w),
+                    "-scale-to-y",
+                    str(cfg.geometry.canvas_h),
+                    str(path),
+                    f"{tmp}/o",
+                ],
+                check=True,
+                timeout=k.local_pdf_seconds,
+                capture_output=True,
+            )
             return cv2.imread(str(sorted(Path(tmp).glob("o*"))[0]), cv2.IMREAD_GRAYSCALE)
     if number == 0:
         from PIL import Image
+
         return fit(np.asarray(Image.open(path).convert("L")), cfg)
     return None

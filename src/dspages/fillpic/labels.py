@@ -1,4 +1,5 @@
 """Training samples: a digital page rendered clean (labels) and degraded like a scan (features)."""
+
 import cv2
 import numpy as np
 import pymupdf
@@ -18,13 +19,22 @@ def degrade(g, rng, cfg=CONFIG):
     h, w = g.shape
     s = rng.uniform(*t.degrade_scale)
     if s < 0.97:
-        g = cv2.resize(cv2.resize(g, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA), (w, h), interpolation=cv2.INTER_LINEAR)
+        g = cv2.resize(
+            cv2.resize(g, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA),
+            (w, h),
+            interpolation=cv2.INTER_LINEAR,
+        )
     if rng.random() < t.degrade_blur_prob:
         g = cv2.GaussianBlur(g, (0, 0), rng.uniform(*t.degrade_blur_sigma))
     f = g.astype(np.float32) * rng.uniform(*t.degrade_gain) + rng.uniform(*t.degrade_offset)
     xx, yy = np.linspace(-1, 1, w, dtype=np.float32)[None, :], np.linspace(-1, 1, h, dtype=np.float32)[:, None]
     a = t.degrade_shade
-    f *= 1 + rng.uniform(-a, a) * xx + rng.uniform(-a, a) * yy + rng.uniform(-t.degrade_shade_xy, t.degrade_shade_xy) * xx * yy
+    f *= (
+        1
+        + rng.uniform(-a, a) * xx
+        + rng.uniform(-a, a) * yy
+        + rng.uniform(-t.degrade_shade_xy, t.degrade_shade_xy) * xx * yy
+    )
     f += rng.normal(0, rng.uniform(*t.degrade_noise), f.shape).astype(np.float32)
     if rng.random() < t.degrade_dust_prob:
         m = rng.random(f.shape) < rng.uniform(*t.degrade_dust)
@@ -38,7 +48,10 @@ def degrade(g, rng, cfg=CONFIG):
 def picture_rects(page, src, number, cfg=CONFIG):
     """(rects (x0, y0, x1, y1) of the pictures of the PDF page as shares of the page, whether one is page-sized)."""
     pw, ph = page.rect.width, page.rect.height
-    r = [(d["rect"].x0 / pw, d["rect"].y0 / ph, d["rect"].x1 / pw, d["rect"].y1 / ph) for d in refont.pictures(src, number, ph, pw)]
+    r = [
+        (d["rect"].x0 / pw, d["rect"].y0 / ph, d["rect"].x1 / pw, d["rect"].y1 / ph)
+        for d in refont.pictures(src, number, ph, pw)
+    ]
     return r, any((x1 - x0) * (y1 - y0) > cfg.geometry.page_sized_picture for x0, y0, x1, y1 in r)
 
 
@@ -66,13 +79,16 @@ def word_mask(src, page, number, shape):
     wm = np.zeros(shape, np.uint8)
     scale = np.array([shape[1] / page.rect.width, shape[0] / page.rect.height] * 2)
     for x0, y0, x1, y1 in np.array([w[:4] for w in src.words(number)], float).reshape(-1, 4) * scale:
-        wm[max(int(y0), 0):int(np.ceil(y1)), max(int(x0), 0):int(np.ceil(x1))] = 1
+        wm[max(int(y0), 0) : int(np.ceil(y1)), max(int(x0), 0) : int(np.ceil(x1))] = 1
     return wm
 
 
 def text_tiles(wm, win, shape, cfg=CONFIG):
     """(grid, grid) bool: tiles that hold words of the PDF. Text on a picture makes its tile a text tile, no picture tile."""
-    return tile_mean(cv2.resize(wm, (shape[1], shape[0]), interpolation=cv2.INTER_AREA), win, cfg.geometry.grid) > cfg.ink.eps
+    return (
+        tile_mean(cv2.resize(wm, (shape[1], shape[0]), interpolation=cv2.INTER_AREA), win, cfg.geometry.grid)
+        > cfg.ink.eps
+    )
 
 
 def sample(job, cfg=CONFIG):
@@ -92,12 +108,19 @@ def sample(job, cfg=CONFIG):
             ink1 = ink(scan, cfg)
             maps, paper, noise = page_maps(scan, ink1, cfg)
             out = dict(path=path, page=number, big=big, scal=np.array([paper, noise], np.float32))
-            for v, win in (("A", window(ink0.mask, rng.uniform(0, cfg.geometry.margin), cfg)), ("B", window(ink1.mask, cfg.geometry.infer_margin, cfg))):
+            for v, win in (
+                ("A", window(ink0.mask, rng.uniform(0, cfg.geometry.margin), cfg)),
+                ("B", window(ink1.mask, cfg.geometry.infer_margin, cfg)),
+            ):
                 if win is None:
                     return None
                 out[f"cells{v}"] = tile_cells(maps, win, scan.shape, cfg)
                 out[f"ink{v}"] = (tile_mean(ink0.mask, win, cfg.geometry.grid) > cfg.ink.eps).ravel()
-                out[f"pic{v}"] = (picture_tiles(rects, win, ink0.mask.shape, cfg) * ~text_tiles(wm, win, ink0.mask.shape, cfg)).ravel().astype(np.float32)
+                out[f"pic{v}"] = (
+                    (picture_tiles(rects, win, ink0.mask.shape, cfg) * ~text_tiles(wm, win, ink0.mask.shape, cfg))
+                    .ravel()
+                    .astype(np.float32)
+                )
             return out
     except BaseException:
         return None

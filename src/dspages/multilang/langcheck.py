@@ -1,4 +1,5 @@
 """Language of a text, checked from the text itself"""
+
 import re
 import unicodedata
 
@@ -14,20 +15,21 @@ def known_languages():
 
         import langid
         from langdetect import detector_factory
+
         langid.classify("warm up")
         ld = {p.split("-")[0] for p in os.listdir(detector_factory.PROFILES_DIRECTORY)}
         _KNOWN.append(ld & set(langid.langid.identifier.nb_classes))
     return _KNOWN[0]
 
 
-
-
 def check_text(text, lang):
     """(status, detected): ok (the text is in `lang`)"""
     import langid
-    from dspages.pagegen.source import scripts_of
     from hwsynth.scripts import text_script
     from langdetect import DetectorFactory, detect_langs
+
+    from dspages.pagegen.source import scripts_of
+
     DetectorFactory.seed = 0
     t = " ".join(text.split())
     if len(t.split()) < 20 and len(re.sub(r"\s", "", t)) < 120:
@@ -57,6 +59,7 @@ _NAME2SCRIPT = {"Cjk": "Han"}
 
 def script_of_char(c):
     import unicodedata
+
     try:
         n = unicodedata.name(c).split()[0].title()
     except ValueError:
@@ -64,11 +67,10 @@ def script_of_char(c):
     return _NAME2SCRIPT.get(n, "Meetei_Mayek" if n == "Meetei" else n)
 
 
-
-
 def repair(text):
     """The text with what can be repaired repaired, so it need not be rejected"""
     import ftfy
+
     text = ftfy.fix_text(text, uncurl_quotes=False, fix_character_width=False, normalization="NFC")
     if re.search(C.presentation, text):
         text = unicodedata.normalize("NFKC", text)
@@ -78,21 +80,32 @@ def repair(text):
 def lexicon_share(text, lang):
     """Share of the words of `text` found in the word-frequency list of its language (wordfreq)"""
     from wordfreq import available_languages, tokenize, zipf_frequency
+
     lang = C.lexicon_langs.get(lang, lang)
     if lang not in available_languages() or lang in ("zh", "ja", "ko"):
         return None
-    words = [w for w in tokenize(text, lang) if len(w) > 1 and any(c.isalpha() for c in w) and not any(c.isdigit() for c in w)]
+    words = [
+        w
+        for w in tokenize(text, lang)
+        if len(w) > 1 and any(c.isalpha() for c in w) and not any(c.isdigit() for c in w)
+    ]
     return sum(zipf_frequency(w, lang) > 0 for w in words) / len(words) if words else None
 
 
 def clean_ok(text, lang, max_foreign=0.10, lexicon=True):
     """False for a text with control or private-use characters"""
     from dspages.pagegen.source import scripts_of
-    if re.search(C.mojibake, text) or any(ch == "\ufffd" or 0xE000 <= ord(ch) <= 0xF8FF or (ord(ch) < 32 and ch not in "\n\t") for ch in text):
+
+    if re.search(C.mojibake, text) or any(
+        ch == "\ufffd" or 0xE000 <= ord(ch) <= 0xF8FF or (ord(ch) < 32 and ch not in "\n\t") for ch in text
+    ):
         return False
     words = text.split()
-    split = sum(unicodedata.category(w[0])[0] == "M" or (len(w) == 1 and w.isalpha() and (0x600 <= ord(w) < 0x700 or 0x900 <= ord(w) < 0xE00))
-                for w in words)
+    split = sum(
+        unicodedata.category(w[0])[0] == "M"
+        or (len(w) == 1 and w.isalpha() and (0x600 <= ord(w) < 0x700 or 0x900 <= ord(w) < 0xE00))
+        for w in words
+    )
     if split > C.max_split_words * len(words):
         return False
     share = lexicon_share(text, lang) if lexicon else None

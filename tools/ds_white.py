@@ -10,24 +10,24 @@ nearest real page of every point. A point without a real page within the radius 
   gaps     points without a real page within the radius, for radius candidates
 
 python tools/ds_white.py prep | push [--n 100000] | fetch | gaps"""
+
 import argparse
 import json
-
-import numpy as np
-import pandas as pd
-import torch
 
 import ds100k as D
 import ds_border as B
 import ds_grid as G
 import kaggle_fps as KF
+import numpy as np
+import pandas as pd
+import torch
 
 OUT = D.OUT / "white"
 AUX, KID = "pavel9860/ds100k-white-aux", "pavel9860/ds100k-white"
 NPC, SAMPLE = 261, 200_000
 KNN, RANK0 = 100, 10
 
-KERNEL = r'''
+KERNEL = r"""
 import glob, json, time, numpy as np, torch
 X = np.concatenate([np.load(f) for f in sorted(glob.glob("/kaggle/input/**/pool_*.npy", recursive=True))])
 mask = np.load(glob.glob("/kaggle/input/**/mask.npy", recursive=True)[0])
@@ -93,7 +93,7 @@ np.savez("/kaggle/working/white.npz", virtual=virt, a=real[loc], b=np.where(virt
          d=np.concatenate(nd), r=np.array(rad, np.float32), cover_real=cover[:nr], cover_virt=cover[nr:])
 json.dump(scales, open("/kaggle/working/scales.json", "w"))
 print("DONE", len(pick), "points,", int(virt.sum()), "virtual,", int(time.time() - t0), "s", flush=True)
-'''
+"""
 
 
 def cmd_prep(_):
@@ -105,12 +105,16 @@ def cmd_prep(_):
     ev, V = torch.linalg.eigh(torch.cov(X.T))
     ev, V = ev.flip(0), V.flip(1)
     A = V[:, :NPC] / ev[:NPC].sqrt()
-    print(f"{NPC} components: {float(ev[:NPC].sum() / ev.sum()):.3f} of the variance; component sd {float(ev[0].sqrt()):.4f} .. {float(ev[NPC - 1].sqrt()):.4f}")
+    print(
+        f"{NPC} components: {float(ev[:NPC].sum() / ev.sum()):.3f} of the variance; component sd {float(ev[0].sqrt()):.4f} .. {float(ev[NPC - 1].sqrt()):.4f}"
+    )
     d = OUT / "aux"
     d.mkdir(parents=True, exist_ok=True)
     np.savez(d / "white.npz", mu=mu.numpy().astype(np.float32), A=A.numpy().astype(np.float32))
     np.save(d / "mask.npy", m)
-    (d / "dataset-metadata.json").write_text(json.dumps({"title": AUX.split("/")[1], "id": AUX, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+    (d / "dataset-metadata.json").write_text(
+        json.dumps({"title": AUX.split("/")[1], "id": AUX, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]})
+    )
     print(KF.kaggle("datasets", "create", "-p", str(d))[-200:])
 
 
@@ -118,10 +122,26 @@ def cmd_push(a):
     d = OUT / "kernel"
     d.mkdir(parents=True, exist_ok=True)
     (d / "run.py").write_text(f"N, B, KNN, RANK0 = {a.n}, 100, {KNN}, {RANK0}\n" + KERNEL)
-    (d / "kernel-metadata.json").write_text(json.dumps({
-        "id": KID, "title": KID.split("/")[1], "code_file": "run.py", "language": "python", "kernel_type": "script", "is_private": True,
-        "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "dataset_sources": [KF.DS, AUX], "kernel_sources": [],
-        "competition_sources": [], "model_sources": [], "machine_shape": "NvidiaTeslaT4"}))
+    (d / "kernel-metadata.json").write_text(
+        json.dumps(
+            {
+                "id": KID,
+                "title": KID.split("/")[1],
+                "code_file": "run.py",
+                "language": "python",
+                "kernel_type": "script",
+                "is_private": True,
+                "enable_gpu": True,
+                "enable_tpu": False,
+                "enable_internet": False,
+                "dataset_sources": [KF.DS, AUX],
+                "kernel_sources": [],
+                "competition_sources": [],
+                "model_sources": [],
+                "machine_shape": "NvidiaTeslaT4",
+            }
+        )
+    )
     print(KF.kaggle("kernels", "push", "-p", str(d)))
 
 
@@ -137,15 +157,25 @@ def cmd_fetch(_):
     W = pd.DataFrame({k: z[k] for k in ("virtual", "a", "b", "nn", "d", "r")}).reset_index(names="order")
     W.to_parquet(OUT / "white.parquet")
     (OUT / "scales.json").write_text((out / "scales.json").read_text())
-    print(len(W), "points,", int(W.virtual.sum()), "virtual; covering radius", round(float(W.r.iloc[-1]), 3), "; scales", (out / "scales.json").read_text())
-    print(W.groupby("virtual").d.describe(percentiles=[.5, .8, .9, .95, .99]).round(3).to_string())
+    print(
+        len(W),
+        "points,",
+        int(W.virtual.sum()),
+        "virtual; covering radius",
+        round(float(W.r.iloc[-1]), 3),
+        "; scales",
+        (out / "scales.json").read_text(),
+    )
+    print(W.groupby("virtual").d.describe(percentiles=[0.5, 0.8, 0.9, 0.95, 0.99]).round(3).to_string())
 
 
 def cmd_gaps(_):
     W = pd.read_parquet(OUT / "white.parquet")
     s = json.loads((OUT / "scales.json").read_text())
     rc = float(W.r.iloc[-1])
-    for name, r in [(f"{k} median {v:.3f}", v) for k, v in s.items()] + [(f"covering radius x {f}", rc * f) for f in (0.5, 0.75, 1.0)]:
+    for name, r in [(f"{k} median {v:.3f}", v) for k, v in s.items()] + [
+        (f"covering radius x {f}", rc * f) for f in (0.5, 0.75, 1.0)
+    ]:
         print(f"radius {r:.3f} ({name}): pages to add {int((W.d > r).sum())}")
 
 

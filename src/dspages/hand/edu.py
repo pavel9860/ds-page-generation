@@ -4,6 +4,7 @@ language confident, passages checked for the script of the language. kind = lect
 
 python -m dspages.hand edu --out texts_edu.jsonl [--workers 6] [--per-lang 150]
 """
+
 import argparse
 import json
 import os
@@ -19,20 +20,48 @@ from .langs import EXPECT, script_ok
 from .structure import to_items
 from .util import flat_items, walk_text
 
-EDU = {"education", "textbook", "academic", "mathematics", "history", "physics_and_astronomy", "psychology", "social_sciences",
-       "social-sciences", "arts_and_humanities", "arts-and-humanities", "computer_science", "computer-science", "medicine",
-       "engineering", "earth_and_planetary_sciences", "agricultural_and_biological_sciences", "environment", "reference",
-       "economics_econometrics_and_finance", "culture", "healthcare", "technology", "manual", "agriculture", "law"}
+EDU = {
+    "education",
+    "textbook",
+    "academic",
+    "mathematics",
+    "history",
+    "physics_and_astronomy",
+    "psychology",
+    "social_sciences",
+    "social-sciences",
+    "arts_and_humanities",
+    "arts-and-humanities",
+    "computer_science",
+    "computer-science",
+    "medicine",
+    "engineering",
+    "earth_and_planetary_sciences",
+    "agricultural_and_biological_sciences",
+    "environment",
+    "reference",
+    "economics_econometrics_and_finance",
+    "culture",
+    "healthcare",
+    "technology",
+    "manual",
+    "agriculture",
+    "law",
+}
 
 
 def candidates(per_lang):
     db = corpus.connect()
     lang = corpus.languages(db)
     out = defaultdict(list)
-    for d, topic, pages, path in db.execute("select m.hash,m.topic,p.pages,p.new_path from old_meta m join plan p on p.doc=m.hash "
-                                              "where m.digital=1 and p.cls='text'"):
+    for d, topic, pages, path in db.execute(
+        "select m.hash,m.topic,p.pages,p.new_path from old_meta m join plan p on p.doc=m.hash "
+        "where m.digital=1 and p.cls='text'"
+    ):
         if topic in EDU and d in lang and (pages or 0) >= 4 and path.lower().endswith(".pdf"):
-            out[lang[d]].append(dict(doc=d, lang=lang[d], topic=topic, kind="lecture", path=f"{T.LAYOUTS}/{path}", pages=pages))
+            out[lang[d]].append(
+                dict(doc=d, lang=lang[d], topic=topic, kind="lecture", path=f"{T.LAYOUTS}/{path}", pages=pages)
+            )
     rng = random.Random(0)
     res = {}
     for lg, v in out.items():
@@ -40,7 +69,7 @@ def candidates(per_lang):
         by = defaultdict(list)
         for c in v:
             by[c["topic"]].append(c)
-        order = []                                         # topics in turn: the topics are equally represented
+        order = []  # topics in turn: the topics are equally represented
         while any(by.values()) and len(order) < per_lang:
             for k in list(by):
                 if by[k]:
@@ -64,10 +93,10 @@ def long_passage(job):
         for p in range(pg, min(pg + 6, n)):
             bl = T.blocks_of(pdf[p])
             if not items:
-                bl = bl[next((i for i, b in enumerate(bl) if b[0] in ("h", "p")), len(bl)):]
+                bl = bl[next((i for i, b in enumerate(bl) if b[0] in ("h", "p")), len(bl)) :]
             page_items = to_items(bl)
             if page_items and items:
-                page_items[0]["gap"] = 0                   # the next page goes on without a break
+                page_items[0]["gap"] = 0  # the next page goes on without a break
             items += page_items
             size += sum(len(b[1]) for b in bl)
             if size >= target:
@@ -99,7 +128,12 @@ def main(argv=None):
         cap = a.en if lg == "en" else a.per_lang
         jobs += [(c, rng.getrandbits(32)) for c in cs[:cap]]
     rng.shuffle(jobs)
-    print(len(jobs), "documents,", {k: len(v) for k, v in sorted(cand.items(), key=lambda kv: -len(kv[1]))[:20]}, flush=True)
+    print(
+        len(jobs),
+        "documents,",
+        {k: len(v) for k, v in sorted(cand.items(), key=lambda kv: -len(kv[1]))[:20]},
+        flush=True,
+    )
     n = 0
     with Pool(a.workers, maxtasksperchild=100) as pool, open(a.out, "w") as f:
         for i, r in enumerate(pool.imap_unordered(long_passage, jobs, chunksize=4)):

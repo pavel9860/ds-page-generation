@@ -5,8 +5,10 @@ import pytest
 from dspages.config import Paths
 from dspages.layout import refont, template
 
-WORDS = ("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon "
-         "phi chi psi omega").split()
+WORDS = (
+    "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon "
+    "phi chi psi omega"
+).split()
 
 
 def text(n, seed):
@@ -18,13 +20,21 @@ def page(doc, left_words, right_words, head=True):
     """Two text columns with a heading across both right below them, then two more columns."""
     p = doc.new_page(width=595, height=842)
     if head:
-        p.insert_textbox(pymupdf.Rect(50, 60, 545, 100), "A heading across both columns", fontsize=18, fontname="helv", align=1)
+        p.insert_textbox(
+            pymupdf.Rect(50, 60, 545, 100), "A heading across both columns", fontsize=18, fontname="helv", align=1
+        )
     ends = []
     for x0, n, seed in ((50, left_words // 2, 1), (310, right_words // 2, 2)):
         box = pymupdf.Rect(x0, 110, x0 + 235, 330)
         ends.append(box.y1 - p.insert_textbox(box, text(n, seed), fontsize=11, fontname="helv", align=3))
     y = max(ends) + 12
-    p.insert_textbox(pymupdf.Rect(50, y, 545, y + 40), "A second heading that spans both columns", fontsize=16, fontname="helv", align=1)
+    p.insert_textbox(
+        pymupdf.Rect(50, y, 545, y + 40),
+        "A second heading that spans both columns",
+        fontsize=16,
+        fontname="helv",
+        align=1,
+    )
     p.insert_textbox(pymupdf.Rect(50, y + 50, 285, 800), text(left_words, 3), fontsize=11, fontname="helv", align=3)
     p.insert_textbox(pymupdf.Rect(310, y + 50, 545, 800), text(right_words, 4), fontsize=11, fontname="helv", align=3)
     return doc
@@ -37,7 +47,7 @@ def lay_out(doc, seed, fonts):
 
 
 def blank_runs(img, x0, x1):
-    inked = (np.asarray(img)[:, int(x0):int(x1)] < 200).any(axis=1)
+    inked = (np.asarray(img)[:, int(x0) : int(x1)] < 200).any(axis=1)
     ys = np.flatnonzero(inked)
     if not len(ys):
         return 0, 0
@@ -68,7 +78,9 @@ def test_no_gap_in_columns_when_next_page_has_text(fonts, seed):
         longest, last = blank_runs(img, c0, c1)
         assert longest <= 4 * line, f"column {c0:.0f}-{c1:.0f} has a {longest}px empty stretch (line {line:.0f}px)"
         bottom = max(r["y1"] for r in lay["rects"] if not r["pinned"])
-        assert last == 0 or last >= bottom - 3 * line, f"column {c0:.0f}-{c1:.0f} ends at {last}px, the text at {bottom:.0f}px"
+        assert last == 0 or last >= bottom - 3 * line, (
+            f"column {c0:.0f}-{c1:.0f} ends at {last}px, the text at {bottom:.0f}px"
+        )
 
 
 def test_columns_are_found_and_text_stays_in_them(fonts):
@@ -78,7 +90,11 @@ def test_columns_are_found_and_text_stays_in_them(fonts):
     assert len(lay["cols"]) == 2
     for r in lay["rects"]:
         if not r["pinned"]:
-            assert any(c0 - 2 <= r["x0"] and r["x1"] <= c1 + 2 for c0, c1 in lay["cols"]) or r["align"] == "center" or r["x1"] - r["x0"] > lay["cols"][0][1] - lay["cols"][0][0]
+            assert (
+                any(c0 - 2 <= r["x0"] and r["x1"] <= c1 + 2 for c0, c1 in lay["cols"])
+                or r["align"] == "center"
+                or r["x1"] - r["x0"] > lay["cols"][0][1] - lay["cols"][0][0]
+            )
 
 
 def columns_with_a_short_first_line(doc, header=False):
@@ -120,7 +136,7 @@ def test_sheet_keeps_its_margin_and_is_reproducible(fonts, tmp_path):
     assert a.shape == (724, 512) and (a == b).all()
     ink = a < 128
     assert not ink[:, :50].any() and not ink[:, -50:].any() and not ink[:72].any() and not ink[-72:].any() and ink.any()
-    assert info["body_px"] >= info["body_src_pt"] * (512 - 2 * 51) / 595          # the source size, scaled with the page
+    assert info["body_px"] >= info["body_src_pt"] * (512 - 2 * 51) / 595  # the source size, scaled with the page
 
 
 def test_tiles_of_one_picture_are_joined_and_scattered_dots_are_not():
@@ -155,7 +171,9 @@ def test_a_list_marker_joins_its_text_and_numbered_items_are_paragraphs():
         p.insert_text((80, 100 + 30 * k), text(12, k), fontsize=11, fontname="helv")
         p.insert_text((50, 114 + 30 * k), text(12, k + 5) + ".", fontsize=11, fontname="helv")
     blocks = refont.page_blocks(refont.Source(doc), 0, True)
-    assert [refont._text(b["lines"][0])[:2] for b in blocks] == ["1.", "2.", "3."] and all(len(b["lines"]) == 2 for b in blocks)
+    assert [refont._text(b["lines"][0])[:2] for b in blocks] == ["1.", "2.", "3."] and all(
+        len(b["lines"]) == 2 for b in blocks
+    )
 
 
 def test_a_label_with_a_field_on_its_line_is_not_flowing_text():
@@ -189,10 +207,14 @@ def test_a_quarter_turned_page_has_the_turned_shape_and_its_text_fits(fonts):
     body = [r for r in lay["rects"] if not r["pinned"] and r["y1"] - r["y0"] >= 4]
     assert all(r["x0"] >= -1 and r["x1"] <= w + 1 and r["y1"] <= h + 1 for r in lay["rects"])
     for i, a in enumerate(body):
-        for b in body[i + 1:]:
+        for b in body[i + 1 :]:
             overlap = (min(a["x1"], b["x1"]) - max(a["x0"], b["x0"])) * (min(a["y1"], b["y1"]) - max(a["y0"], b["y0"]))
-            assert not (min(a["x1"], b["x1"]) > max(a["x0"], b["x0"]) and min(a["y1"], b["y1"]) > max(a["y0"], b["y0"]) and overlap > 0.2 * min(
-                (a["x1"] - a["x0"]) * (a["y1"] - a["y0"]), (b["x1"] - b["x0"]) * (b["y1"] - b["y0"])))
+            assert not (
+                min(a["x1"], b["x1"]) > max(a["x0"], b["x0"])
+                and min(a["y1"], b["y1"]) > max(a["y0"], b["y0"])
+                and overlap
+                > 0.2 * min((a["x1"] - a["x0"]) * (a["y1"] - a["y0"]), (b["x1"] - b["x0"]) * (b["y1"] - b["y0"]))
+            )
 
 
 def test_turned_page_stretches_tables_and_keeps_the_shape_of_pictures(fonts):
@@ -207,7 +229,7 @@ def test_turned_page_stretches_tables_and_keeps_the_shape_of_pictures(fonts):
     p.draw_line((50, 450), (50, 510))
     p.draw_line((545, 450), (545, 510))
     lay = template.layout(refont.Source(doc), 0, np.random.default_rng(1), fonts, 1190, 1.0, True)
-    (x, t, pic), = lay["pics"]
+    ((x, t, pic),) = lay["pics"]
     assert abs(pic["rect"].width / pic["rect"].height - 2.0) < 0.02
     horizontal = [d["rect"].width for d, fixed, dy in lay["elems"] if d["rect"].height < 1]
     assert horizontal and all(abs(w - 495 * 842 / 595) < 1 for w in horizontal)

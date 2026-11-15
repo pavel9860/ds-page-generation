@@ -1,4 +1,5 @@
 """Font discovery by real cmap coverage."""
+
 import glob
 import os
 import pickle
@@ -7,6 +8,7 @@ from pathlib import Path
 
 from fontTools.ttLib import TTFont
 
+from .config import _MIN_SCRIPT_CMAP_SIZE  # noqa: F401
 
 # Font family-name blocklists are a losing game -- font collections ship
 # dozens of single-script fonts (e.g. NotoSansElbasan, an extinct
@@ -15,13 +17,35 @@ from fontTools.ttLib import TTFont
 # verified against their real cmap (not a rendered-bitmap heuristic,
 # which a font can satisfy with generic placeholder glyphs).
 _TRUSTED_FAMILY_TOKENS = (
-    "dejavusans", "dejavuserif", "liberationsans", "liberationserif", "liberationmono",
-    "notosans-", "notoserif-", "notomono", "freeserif", "freesans", "freemono",
-    "roboto", "opensans", "lato-", "ptsans", "ptserif", "sourcesans", "sourceserif",
-    "arial", "times", "verdana", "tahoma", "calibri", "cambria", "georgia", "consolas", "ubuntu",
+    "dejavusans",
+    "dejavuserif",
+    "liberationsans",
+    "liberationserif",
+    "liberationmono",
+    "notosans-",
+    "notoserif-",
+    "notomono",
+    "freeserif",
+    "freesans",
+    "freemono",
+    "roboto",
+    "opensans",
+    "lato-",
+    "ptsans",
+    "ptserif",
+    "sourcesans",
+    "sourceserif",
+    "arial",
+    "times",
+    "verdana",
+    "tahoma",
+    "calibri",
+    "cambria",
+    "georgia",
+    "consolas",
+    "ubuntu",
 )
 _REQUIRED_CODEPOINTS = tuple(ord(c) for c in "AaZz09АаЯяЁёΑαωω")
-_MIN_SCRIPT_CMAP_SIZE = 40
 
 
 _FILE = Path("~/.cache/dspages/fonts.pkl").expanduser()
@@ -93,8 +117,13 @@ def find_fonts(font_dirs: tuple) -> tuple:
     """.ttf/.ttc/.otf files of known families, verified via their real cmap: Latin + Cyrillic + Greek for the
     general body-text families, any real glyph coverage for Noto's script-specific families."""
     dirs = [os.path.expanduser(d) for d in font_dirs]
-    candidates = sorted(p for d in dirs if os.path.isdir(d) for ext in ("ttf", "ttc", "otf")
-                        for p in glob.glob(f"{d}/**/*.{ext}", recursive=True))
+    candidates = sorted(
+        p
+        for d in dirs
+        if os.path.isdir(d)
+        for ext in ("ttf", "ttc", "otf")
+        for p in glob.glob(f"{d}/**/*.{ext}", recursive=True)
+    )
     found = tuple(p for p in candidates if _is_general_font(p) or _is_script_font(p))
     save_font_info()
     if not found:

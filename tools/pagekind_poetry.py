@@ -6,6 +6,7 @@ tools/pagekind_border.py (DIR/candidates.jsonl, DIR/img/NNNN.jpg) and DIR/embedd
 python tools/pagekind_poetry.py --out DIR [--pages 2] [--max 1000] [--docs FILE]
 then: tools/pagekind_agents.py batches / collect, tools/pagekind_border.py label
 """
+
 import argparse
 import json
 import random
@@ -16,18 +17,22 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting")
-import pagekind_border as B                                   # noqa: E402
-from dspages.hand import corpus                               # noqa: E402
-from dspages.hand.config import PATHS                         # noqa: E402
+from dspages import paths as _P
+
+sys.path.insert(0, f"{_P.CORPUS}")
+import pagekind_border as B  # noqa: E402
+
+from dspages.hand import corpus  # noqa: E402
 
 
 def books(docs=None):
     db = corpus.connect()
     lang = corpus.languages(db, min_conf=0.0)
-    q = ("select p.doc,p.new_path,p.pages from old_meta m join plan p on p.doc=m.hash "
-         "where (m.topic like '%poe%' or m.topic='verse') and p.cls='text' and lower(p.new_path) like '%.pdf'")
-    if docs:                                             # books given by document hash (where verse was found)
+    q = (
+        "select p.doc,p.new_path,p.pages from old_meta m join plan p on p.doc=m.hash "
+        "where (m.topic like '%poe%' or m.topic='verse') and p.cls='text' and lower(p.new_path) like '%.pdf'"
+    )
+    if docs:  # books given by document hash (where verse was found)
         q = f"select doc,new_path,pages from plan where doc in ({','.join('?' * len(docs))})"
         return [(d, corpus.resolve(p), n or 1, lang.get(d, "?")) for d, p, n in db.execute(q, list(docs))]
     return [(d, corpus.resolve(p), n or 1, lang.get(d, "?")) for d, p, n in db.execute(q)]
@@ -39,7 +44,9 @@ def main():
     ap.add_argument("--pages", type=int, default=2)
     ap.add_argument("--max", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--docs", help="file with document hashes, one per line: sample these books (labelled ones included)")
+    ap.add_argument(
+        "--docs", help="file with document hashes, one per line: sample these books (labelled ones included)"
+    )
     a = ap.parse_args()
     out = Path(a.out)
     (out / "img").mkdir(parents=True, exist_ok=True)
@@ -55,8 +62,9 @@ def main():
         for no in rng.sample(range(lo, hi), min(a.pages, hi - lo)):
             rows.append(dict(doc=d, lang=lg, pdf=str(p), page=no))
     rng.shuffle(rows)
-    rows = rows[:a.max]
+    rows = rows[: a.max]
     from pagetype.embedder import Embedder
+
     emb, X, keep = Embedder(), [], []
     for r in rows:
         k = len(keep)

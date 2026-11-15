@@ -12,6 +12,7 @@ those folders and to add data to the small classes.
 python tools/pagekind_full.py data [--per-folder 300]
 python tools/pagekind_full.py eval [--low 0.2]
 """
+
 import argparse
 import json
 import random
@@ -29,20 +30,40 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler, normalize
 
 sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting")
-import pagekind_eval as V                                     # noqa: E402
-from dspages.hand import corpus                               # noqa: E402
-from dspages.hand import pagekind as PK                       # noqa: E402
-from dspages.hand.config import PATHS                         # noqa: E402
+from dspages import paths as _P
+
+sys.path.insert(0, f"{_P.CORPUS}")
+import pagekind_eval as V  # noqa: E402
+
+from dspages.hand import corpus  # noqa: E402
+from dspages.hand import pagekind as PK  # noqa: E402
 
 ROOT = V.UV / "pagetype_labelled"
 DATA = V.CACHE / "pagekind_full.npz"
-FOLDERS = {"certificates": "certificates", "flyers_clean": "flyers", "maps": "maps", "sheet_music": "music", "tables_clean": "tables",
-           "blueprints": "blueprints", "receipts": "recieps", "scientific_paper": "scientific"}
+FOLDERS = {
+    "certificates": "certificates",
+    "flyers_clean": "flyers",
+    "maps": "maps",
+    "sheet_music": "music",
+    "tables_clean": "tables",
+    "blueprints": "blueprints",
+    "receipts": "recieps",
+    "scientific_paper": "scientific",
+}
 MATH = set("=+−±×÷∑∫∂√∞≈≠≤≥∈∉∀∃∇∆πθλμσαβγδεφωΩΣΠ^_")
-LAYER = ("text", "encoding lost", "vector / painted text")     # plan.cls with a PDF text / vector layer: formatting features exist
+LAYER = (
+    "text",
+    "encoding lost",
+    "vector / painted text",
+)  # plan.cls with a PDF text / vector layer: formatting features exist
 NF = len(PK.NAMES)
-SCAN_ONLY = ("cache", "pages_photo", "handwritten", "images", "recieps")   # classes without digital-born pages: not page kinds here
+SCAN_ONLY = (
+    "cache",
+    "pages_photo",
+    "handwritten",
+    "images",
+    "recieps",
+)  # classes without digital-born pages: not page kinds here
 
 
 def classes():
@@ -75,7 +96,7 @@ def science(pdf, no):
         figure = len(paths) >= 40 and box.get_area() / area >= 0.12
         f = dict(zip(PK.NAMES, PK.features(page)))
         big = max((pymupdf.Rect(i["bbox"]).get_area() for i in page.get_image_info()), default=0) / area
-        if big >= 0.6:                                  # a scanned page: one picture over the page
+        if big >= 0.6:  # a scanned page: one picture over the page
             return False
         return (math >= 30 and math >= 0.03 * letters) or pics >= 0.12 or figure or f["grid"] >= 0.5
     except Exception:
@@ -86,11 +107,14 @@ def data(per_folder, seed=0):
     rng = random.Random(seed)
     cls = {d: c for d, c in corpus.connect().execute("select doc,cls from plan")}
     paths = corpus.pdf_paths(corpus.connect())
-    pe = V.page_embeddings()
-    src = {r["image"]: r for r in map(json.loads, open(V.SRC)) if r["ok"]}
-    rows = []                                                   # (label, doc, source, id, embedding, pdf, page)
+    V.page_embeddings()
+    {r["image"]: r for r in map(json.loads, open(V.SRC)) if r["ok"]}
+    rows = []  # (label, doc, source, id, embedding, pdf, page)
     import pagekind_inventory as I
-    balance = json.load(open(V.CACHE / "pagekind_balance.json"))      # tools/pagekind_lang.py plan: language-balanced labelled pages
+
+    balance = json.load(
+        open(V.CACHE / "pagekind_balance.json")
+    )  # tools/pagekind_lang.py plan: language-balanced labelled pages
     keep = {i for ids in balance.values() for i in ids}
     for it in I.inventory():
         if it.emb is not None and it.id in keep:
@@ -108,7 +132,13 @@ def data(per_folder, seed=0):
         if p == 1 and int(d) in man:
             row1[corpus.doc_id(man[int(d)])] = k
     for folder, c in FOLDERS.items():
-        docs = [(d, p) for d, p in paths.items() if str(p).split("/Layouts/")[-1].split("/Refine_DS/")[-1].startswith(folder + "/") and d in row0 and d not in have]
+        docs = [
+            (d, p)
+            for d, p in paths.items()
+            if str(p).split("/Layouts/")[-1].split("/Refine_DS/")[-1].startswith(folder + "/")
+            and d in row0
+            and d not in have
+        ]
         rng.shuffle(docs)
         n = 0
         for d, p in docs:
@@ -116,13 +146,24 @@ def data(per_folder, seed=0):
                 break
             usable = cls.get(d) in LAYER and p.exists()
             cand = [(0, row0[d])]
-            if c == "scientific":                       # every embedded page (0, 1) on its own: a row when it shows formulas / plots / tables
+            if (
+                c == "scientific"
+            ):  # every embedded page (0, 1) on its own: a row when it shows formulas / plots / tables
                 cand = [(q, r[d]) for q, r in ((0, row0), (1, row1)) if d in r and usable and science(p, q)]
             if not cand:
                 continue
             for no, k in cand:
-                rows.append((c, d, "folder", f"{folder}/{p.name}#{no}", np.asarray(emb[k], np.float32), str(p) if usable else None,
-                             no if usable else -1))
+                rows.append(
+                    (
+                        c,
+                        d,
+                        "folder",
+                        f"{folder}/{p.name}#{no}",
+                        np.asarray(emb[k], np.float32),
+                        str(p) if usable else None,
+                        no if usable else -1,
+                    )
+                )
             n += 1
     jobs = [(r[5], r[6]) for r in rows if r[5]]
     with ProcessPoolExecutor(6) as ex:
@@ -133,9 +174,17 @@ def data(per_folder, seed=0):
             f = next(feats)
             if f is not None:
                 X[i] = f
-    np.savez(DATA, label=np.array([r[0] for r in rows]), doc=np.array([r[1] for r in rows]), source=np.array([r[2] for r in rows]),
-             id=np.array([r[3] for r in rows]), E=np.array([r[4] for r in rows], np.float32), X=X,
-             pdf=np.array([r[5] or "" for r in rows]), page=np.array([r[6] for r in rows]))
+    np.savez(
+        DATA,
+        label=np.array([r[0] for r in rows]),
+        doc=np.array([r[1] for r in rows]),
+        source=np.array([r[2] for r in rows]),
+        id=np.array([r[3] for r in rows]),
+        E=np.array([r[4] for r in rows], np.float32),
+        X=X,
+        pdf=np.array([r[5] or "" for r in rows]),
+        page=np.array([r[6] for r in rows]),
+    )
     print(Counter((r[2], r[0]) for r in rows))
     print(f"{len(rows)} pages, formatting features for {int((~np.isnan(X).any(1)).sum())}")
 
@@ -146,7 +195,9 @@ def lang_weights(y, docs):
     pages without a language label count as their own group)."""
     db = corpus.connect()
     lang = corpus.languages(db, min_conf=0.0)
-    cor = Counter(lang.get(d, "?") for d, _, c, _ in db.execute("select doc,new_path,cls,pages from plan") if c == "text")
+    cor = Counter(
+        lang.get(d, "?") for d, _, c, _ in db.execute("select doc,new_path,cls,pages from plan") if c == "text"
+    )
     tot = sum(cor.values())
     lg = np.array([lang.get(d, "?") or "?" for d in docs])
     w = np.ones(len(y))
@@ -155,7 +206,7 @@ def lang_weights(y, docs):
         inside = Counter(lg[m])
         for l, n in inside.items():
             w[m & (lg == l)] = (cor.get(l, 0) / tot or 1.0 / tot) / (n / m.sum())
-        w[m] *= m.sum() / w[m].sum()                     # class total unchanged
+        w[m] *= m.sum() / w[m].sum()  # class total unchanged
     w *= len(y) / (len(np.unique(y)) * np.bincount(y)[y])  # balanced classes
     return w / w.mean(), lg
 
@@ -167,7 +218,15 @@ class Weighted:
     def fit(self, Z, y, idx):
         m = self.make()
         try:
-            m.fit(Z, y, **({"logisticregression__sample_weight": self.w[idx]} if hasattr(m, "steps") else {"sample_weight": self.w[idx]}))
+            m.fit(
+                Z,
+                y,
+                **(
+                    {"logisticregression__sample_weight": self.w[idx]}
+                    if hasattr(m, "steps")
+                    else {"sample_weight": self.w[idx]}
+                ),
+            )
         except TypeError:
             m.fit(Z, y)
         self.m = m
@@ -188,7 +247,9 @@ def oof(make, Z, y, g, mask=None, seed=0, w=None):
         if w is None:
             P[np.ix_(te, present)] = make().fit(Z[tr], np.searchsorted(present, y[tr])).predict_proba(Z[te])
         else:
-            P[np.ix_(te, present)] = Weighted(make, w).fit(Z[tr], np.searchsorted(present, y[tr]), tr).predict_proba(Z[te])
+            P[np.ix_(te, present)] = (
+                Weighted(make, w).fit(Z[tr], np.searchsorted(present, y[tr]), tr).predict_proba(Z[te])
+            )
     return P
 
 
@@ -207,13 +268,22 @@ def report(name, P, y, names, mask, w=None, lg=None):
             by[GROUPS.get(l, "other languages")].append(ok)
         line += " | " + ", ".join(f"{k} {np.mean(v):.3f} ({len(v)})" for k, v in sorted(by.items()))
     print(line)
-    print(classification_report(y[m], pr, labels=range(len(names)), target_names=names, digits=3, zero_division=0,
-                                ))
+    print(
+        classification_report(
+            y[m],
+            pr,
+            labels=range(len(names)),
+            target_names=names,
+            digits=3,
+            zero_division=0,
+        )
+    )
     return pr
 
 
 def sheets(items, out, per=10):
     from pagetype import recheck as RC
+
     out.mkdir(parents=True, exist_ok=True)
     by = defaultdict(list)
     for it in items:
@@ -221,7 +291,7 @@ def sheets(items, out, per=10):
     for c, its in by.items():
         for s in range(0, len(its), per):
             paths = []
-            for it in its[s:s + per]:
+            for it in its[s : s + per]:
                 if it["source"] == "labelled" and not it["id"].lower().endswith(".pdf"):
                     paths.append(ROOT / it["id"])
                 else:
@@ -246,14 +316,18 @@ def evaluate(low):
     has_f = ~np.isnan(X).any(1)
     print("pages per class (labelled / folder / with formatting):")
     for i, c in enumerate(names):
-        print(f"  {c:14s} {int(((y == i) & lab).sum()):5d} {int(((y == i) & ~lab).sum()):5d} {int(((y == i) & has_f).sum()):5d}")
+        print(
+            f"  {c:14s} {int(((y == i) & lab).sum()):5d} {int(((y == i) & ~lab).sum()):5d} {int(((y == i) & has_f).sum()):5d}"
+        )
     lr = lambda: make_pipeline(StandardScaler(), LogisticRegression(C=0.05, max_iter=5000))
     _, lg = lang_weights(y, g)
-    w = len(y) / (len(np.unique(y)) * np.bincount(y)[y])          # balanced classes; languages are balanced in the data itself
-    print("English share per class (raw):", {c: round(float((lg[y == i] == "en").mean()), 2) for i, c in enumerate(names)})
+    w = len(y) / (len(np.unique(y)) * np.bincount(y)[y])  # balanced classes; languages are balanced in the data itself
+    print(
+        "English share per class (raw):", {c: round(float((lg[y == i] == "en").mean()), 2) for i, c in enumerate(names)}
+    )
     Pe = oof(lr, E, y, g, w=w)
     Pf = oof(lambda: V.xgb(), X, y, g, mask=has_f, w=w)
-    Pf_full = np.where(np.isnan(Pf), 1.0, Pf)                    # no PDF layer: the embedding alone decides
+    Pf_full = np.where(np.isnan(Pf), 1.0, Pf)  # no PDF layer: the embedding alone decides
     Pp = np.log(Pe + 1e-4) + np.log(Pf_full + 1e-4)
     Pp = np.exp(Pp - Pp.max(1, keepdims=True))
     Pp /= Pp.sum(1, keepdims=True)
@@ -264,8 +338,20 @@ def evaluate(low):
     print(confusion_matrix(y[lab], pr, labels=range(len(names))))
     report("embedding x formatting, folder samples (folder = label)", Pp, y, names, ~lab, w, lg)
     own = Pp[np.arange(len(y)), y]
-    items = [dict(id=str(z["id"][i]), pdf=str(z["pdf"][i]), page=int(z["page"][i]), label=str(z["label"][i]), source=str(src[i]), p_own=round(float(own[i]), 3),
-                  predicted=names[int(Pp[i].argmax())], p_pred=round(float(Pp[i].max()), 3)) for i in np.argsort(own) if own[i] < low]
+    items = [
+        dict(
+            id=str(z["id"][i]),
+            pdf=str(z["pdf"][i]),
+            page=int(z["page"][i]),
+            label=str(z["label"][i]),
+            source=str(src[i]),
+            p_own=round(float(own[i]), 3),
+            predicted=names[int(Pp[i].argmax())],
+            p_pred=round(float(Pp[i].max()), 3),
+        )
+        for i in np.argsort(own)
+        if own[i] < low
+    ]
     print(f"\npages whose own label has probability < {low}: per class (labelled / folder)")
     cnt = Counter((it["label"], it["source"]) for it in items)
     for c in names:

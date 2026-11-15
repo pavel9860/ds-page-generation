@@ -1,12 +1,15 @@
 """Line bank and field values"""
+
 import random
 
 from dspages.multilang import linebank as LB
 from dspages.multilang.config import LINEBANK as C
 from dspages.multilang.dettext import Values
 
-TEXT = ("The committee met on Monday, and it approved the budget for the next year. Applications must be sent in writing; late forms "
-        "are not accepted by the office under any circumstances whatsoever, as the rules say. Contact the secretary.")
+TEXT = (
+    "The committee met on Monday, and it approved the budget for the next year. Applications must be sent in writing; late forms "
+    "are not accepted by the office under any circumstances whatsoever, as the rules say. Contact the secretary."
+)
 
 
 def test_phrases_are_whole_and_short():
@@ -60,25 +63,36 @@ def test_email_ascii_and_date_formats():
     assert v.email(p).isascii()
     assert len({v.date() for _ in range(40)}) > 30
 
+
 def test_page_note_from_a_full_bank():
     import numpy as np
+
     from dspages.multilang.config import Config
     from dspages.multilang.notes import Annotator
+
     img = np.full((800, 600, 3), 255, np.uint8)
     prints = [(50, 100 + 40 * i, 550, 125 + 40 * i) for i in range(12)]
-    words = [(60 + 70 * j, 100 + 40 * i, 120 + 70 * j, 125 + 40 * i, f"word{i}{j}") for i in range(12) for j in range(6)]
+    words = [
+        (60 + 70 * j, 100 + 40 * i, 120 + 70 * j, 125 + 40 * i, f"word{i}{j}") for i in range(12) for j in range(6)
+    ]
     a = Annotator(img, prints, words, "en", "Latin", Config(), random.Random(0))
-    a.lines = [f"note about {chr(97 + i % 26)}{chr(97 + i // 26 % 26)}{chr(97 + i // 676)} here" for i in range(C.min_lines + 10)]
+    a.lines = [
+        f"note about {chr(97 + i % 26)}{chr(97 + i // 26 % 26)}{chr(97 + i // 676)} here"
+        for i in range(C.min_lines + 10)
+    ]
     for b in prints[:3]:
         a.note(b)
     assert a.used and all(not any(c.isdigit() for c in text) for text in a.used)
 
 
 def test_lines_of_marked_scripts_are_cut_at_their_own_marks():
-    samples = {"dz": "ལས་འགུལ་འདི་ཨའི་ཌི་ཨི་ནང་ལུ་ནང་འདྲེན་འབད་ནི་ལུ། འདི་ནི་དཔེ་ཅིག་ཨིན། ཁྱོད་ཀྱིས་ཡིག་ཆ་འདི་ལྟ་ནི་ཨིན།",
-               "my": "ပရောဂျက်ကို တင်သွင်းရန်၊ အောက်ပါအတိုင်း အဆင့်များကို လုပ်ဆောင်ပါ။ ဤအရာသည် ဥပမာတစ်ခုဖြစ်သည်။",
-               "ti": "ነቲ ፕሮጀክት ናብ ንምእታው እዞም ዝስዕቡ ስጉምትታት ንፍጽም፤ እዚ ኣብነት እዩ። ሰነድ ኣንብብ።",
-               "hi": "यह एक उदाहरण है। कृपया निम्नलिखित चरणों का पालन करें, और दस्तावेज़ पढ़ें।", "ur": "یہ ایک مثال ہے۔ براہ کرم دستاویز پڑھیں۔"}
+    samples = {
+        "dz": "ལས་འགུལ་འདི་ཨའི་ཌི་ཨི་ནང་ལུ་ནང་འདྲེན་འབད་ནི་ལུ། འདི་ནི་དཔེ་ཅིག་ཨིན། ཁྱོད་ཀྱིས་ཡིག་ཆ་འདི་ལྟ་ནི་ཨིན།",
+        "my": "ပရောဂျက်ကို တင်သွင်းရန်၊ အောက်ပါအတိုင်း အဆင့်များကို လုပ်ဆောင်ပါ။ ဤအရာသည် ဥပမာတစ်ခုဖြစ်သည်။",
+        "ti": "ነቲ ፕሮጀክት ናብ ንምእታው እዞም ዝስዕቡ ስጉምትታት ንፍጽም፤ እዚ ኣብነት እዩ። ሰነድ ኣንብብ።",
+        "hi": "यह एक उदाहरण है। कृपया निम्नलिखित चरणों का पालन करें, और दस्तावेज़ पढ़ें।",
+        "ur": "یہ ایک مثال ہے۔ براہ کرم دستاویز پڑھیں۔",
+    }
     for lang, text in samples.items():
         ph = LB.phrases(text, lang)
         assert len(ph) >= 2 and all(ph), lang

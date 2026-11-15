@@ -10,6 +10,7 @@ agent) saw in the same spans, find the table.
 The method: IBM model 1 between codes and characters gives candidates; coordinate descent keeps, per code, the text under which the decode of every span (legacy_tables.sequence
 puts reph and prefix vowel signs in order) is nearest by edit distance to the text read; EM decipherment (Knight et al. 2006, Ravi & Knight 2008, with the glyph-substitution layer
 of Garrette et al. 2016) adds codes the pictures leave open, from a good start (Berg-Kirkpatrick & Klein 2013: EM alone ends in local optima)."""
+
 import collections
 import functools
 import json
@@ -18,9 +19,10 @@ import os
 import re
 import unicodedata
 
-from . import legacy as L, legacy_tables as T
+from . import legacy as L
+from . import legacy_tables as T
+from .config import MIN_LINES  # noqa: F401
 
-MIN_LINES = 3                       # a code needs this many spans to be written
 MODEL1_ROUNDS, MODEL1_MIN_P = 8, 0.08
 CANDIDATES, NGRAM_WINDOW = 4, 3
 PRIOR_START, EM_ITERATIONS, POSTERIOR = 0.9, 4, 0.9
@@ -67,7 +69,7 @@ def clean(pairs):
         c, e = re.sub(r"\s", "", c), unicodedata.normalize("NFD", re.sub(r"\s", "", e))
         runs = {len(m.group()) for m in re.finditer(r"(.)\1*", c)}
         if len(runs) == 1 and min(runs) >= 2:
-            c = c[::runs.pop()]
+            c = c[:: runs.pop()]
         if 3 <= len(c) <= 90 and e and 0.4 <= len(e) / len(c) <= 2.5:
             out.append((c, e))
     return out
@@ -82,7 +84,9 @@ def script_of(texts, default):
 
 def is_unicode_font(pairs, share=0.9, minimum=4):
     """True when the text read is the typed codes themselves (median share of the codes found in the text): a font of real Unicode, Latin or CJK, that needs no table."""
-    seen = sorted(sum(ch in e for ch in c if not ch.isspace()) / max(sum(not ch.isspace() for ch in c), 1) for c, e in pairs)
+    seen = sorted(
+        sum(ch in e for ch in c if not ch.isspace()) / max(sum(not ch.isspace() for ch in c), 1) for c, e in pairs
+    )
     return len(seen) >= minimum and seen[len(seen) // 2] >= share
 
 
@@ -130,17 +134,23 @@ def ngrams(pairs, tab, script, top=8):
             w = len(tab.get(ch, ch))
             mid, pre = (pre + w / 2) / tot * m, pre + w
             if script == "Arabic":
-                mid = m - mid                                         # the glyphs run left to right, the text is read right to left
+                mid = m - mid  # the glyphs run left to right, the text is read right to left
             for a in range(max(int(mid - NGRAM_WINDOW), 0), min(int(mid + NGRAM_WINDOW + 1), m)):
                 for k in (1, 2, 3):
-                    if len(e[a:a + k]) == k:
-                        cnt[ch][e[a:a + k]] += 1
+                    if len(e[a : a + k]) == k:
+                        cnt[ch][e[a : a + k]] += 1
         for a in range(m):
             for k in (1, 2, 3):
                 if a + k <= m:
-                    base[e[a:a + k]] += 1
+                    base[e[a : a + k]] += 1
     n = len(pairs)
-    return {ch: [g for g, _ in sorted(((g, v / (1 + base[g] / n)) for g, v in cc.items() if v >= 3), key=lambda t: -t[1])[:top]] for ch, cc in cnt.items()}
+    return {
+        ch: [
+            g
+            for g, _ in sorted(((g, v / (1 + base[g] / n)) for g, v in cc.items() if v >= 3), key=lambda t: -t[1])[:top]
+        ]
+        for ch, cc in cnt.items()
+    }
 
 
 def fit(pairs, script, passes=2):
@@ -170,8 +180,15 @@ def table(pairs, script):
     """{code: text} of the codes two fits, on the even and on the odd spans, agree on (the precision gate), written in the script, seen on >= MIN_LINES spans."""
     a, b = fit(pairs[0::2], script), fit(pairs[1::2], script)
     lines = collections.Counter(ch for c, _ in pairs for ch in set(c))
-    return {ch: nfc(a[ch]) for ch in a if ch in b and a[ch] == b[ch] and a[ch] != ch and lines[ch] >= MIN_LINES
-            and any(in_script(x, script) for x in a[ch])}
+    return {
+        ch: nfc(a[ch])
+        for ch in a
+        if ch in b
+        and a[ch] == b[ch]
+        and a[ch] != ch
+        and lines[ch] >= MIN_LINES
+        and any(in_script(x, script) for x in a[ch])
+    }
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------- published tables
@@ -195,7 +212,7 @@ def _safe(f, text):
         return None
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def output_scripts(key, f):
     """The scripts a decoder writes (its text for the Latin and Latin-1 letters)."""
     c = collections.Counter(script_name(ch) for ch in (_safe(f, PROBE) or "") if ch.isalpha())
@@ -228,12 +245,15 @@ def has_high_codes(lines, share=0.05):
     """True when the typed lines hold bytes of a legacy encoding: characters of Latin-1 above ASCII or private use, >= share of the characters. A legacy CJK font (Big5, GBK, Shift-JIS,
     EUC-KR) cannot do without them; a font of ASCII, punctuation or real CJK text has none and needs no table."""
     chars = [c for line in lines for c in line if not c.isspace()]
-    return bool(chars) and sum(0x80 <= ord(c) <= 0xFF or 0xE000 <= ord(c) <= 0xF8FF for c in chars) >= share * len(chars)
+    return bool(chars) and sum(0x80 <= ord(c) <= 0xFF or 0xE000 <= ord(c) <= 0xF8FF for c in chars) >= share * len(
+        chars
+    )
 
 
 def is_english(lines, share=0.5):
     """True when most words of the typed lines are English words (wordfreq): a Latin font of real text among documents of another language."""
     from wordfreq import zipf_frequency
+
     words = [w for c in lines for w in c.split() if len(w) > 2 and w.isascii() and w.isalpha()]
     return len(words) >= 20 and sum(zipf_frequency(w, "en") >= 3 for w in words) >= share * len(words)
 
@@ -257,6 +277,7 @@ def reads_as_language(tab, lines, script, lm):
 # ------------------------------------------------------------------------------------------------------------------------------------------------- language model
 class CharLM:
     """Character trigram, interpolated (Witten-Bell), trained on the real paragraphs of the language (legacy.PARAS)."""
+
     def __init__(self, lang, cap=2_000_000):
         text = ""
         f = os.path.join(L.PARAS, f"{lang}.json")
@@ -265,24 +286,29 @@ class CharLM:
                 text += "\n".join(t for t in v if isinstance(t, str)) + "\n"
                 if len(text) > cap:
                     break
-        self.c, self.ctx = [collections.Counter() for _ in range(3)], [collections.Counter() for _ in range(3)]       # n-gram and context counts, n = 1..3
+        self.c, self.ctx = (
+            [collections.Counter() for _ in range(3)],
+            [collections.Counter() for _ in range(3)],
+        )  # n-gram and context counts, n = 1..3
         self.kinds = [collections.defaultdict(set) for _ in range(3)]
         for line in text.split("\n"):
             line = "^^" + nfc(line) + "$"
             for i in range(2, len(line)):
                 for n in (1, 2, 3):
-                    g = line[i - n + 1:i + 1]
+                    g = line[i - n + 1 : i + 1]
                     self.c[n - 1][g] += 1
                     self.ctx[n - 1][g[:-1]] += 1
                     self.kinds[n - 1][g[:-1]].add(g[-1])
         self.V, self.memo = max(len(self.c[0]), 1), {}
         lines = [t for t in text.split("\n") if len(t) > 20][:300]
-        self.real = sum(self.mean(t) for t in lines) / max(len(lines), 1)            # what real text of the language scores per character
+        self.real = sum(self.mean(t) for t in lines) / max(
+            len(lines), 1
+        )  # what real text of the language scores per character
 
     def p(self, ctx, ch):
         pr = 1.0 / (self.V + 1)
         for n in (1, 2, 3):
-            h = ctx[len(ctx) - (n - 1):] if n > 1 else ""
+            h = ctx[len(ctx) - (n - 1) :] if n > 1 else ""
             tot = self.ctx[n - 1][h]
             if tot:
                 lam = tot / (tot + len(self.kinds[n - 1][h]))
@@ -350,12 +376,29 @@ def decipher(tab, pairs, lines, script, lm):
     P(text | code) from the start the pictures gave. A code the table lacks is added when its posterior is >= POSTERIOR on the even and on the odd lines alike and it is also the
     first candidate of model 1 (two independent evidences; 98-100 % right on 3 fonts with known tables)."""
     cand, ng = model1(pairs), ngrams(pairs, tab, script)
-    opts = {ch: list(dict.fromkeys(x for x in ([tab[ch]] if ch in tab else []) + cand.get(ch, []) + ng.get(ch, [])[:6] + [ch] if x)) for ch in set(cand) | set(ng) | set(tab)}
+    opts = {
+        ch: list(
+            dict.fromkeys(
+                x for x in ([tab[ch]] if ch in tab else []) + cand.get(ch, []) + ng.get(ch, [])[:6] + [ch] if x
+            )
+        )
+        for ch in set(cand) | set(ng) | set(tab)
+    }
     opts[" "] = [" "]
     lines = [c for c in lines if len(c) >= 3][:300]
     best = []
     for part in (0, 1):
-        prior = {ch: {o: ((PRIOR_START if o == tab[ch] else (1 - PRIOR_START) / max(len(os_) - 1, 1)) if ch in tab else 1.0 / len(os_)) for o in os_} for ch, os_ in opts.items()}
+        prior = {
+            ch: {
+                o: (
+                    (PRIOR_START if o == tab[ch] else (1 - PRIOR_START) / max(len(os_) - 1, 1))
+                    if ch in tab
+                    else 1.0 / len(os_)
+                )
+                for o in os_
+            }
+            for ch, os_ in opts.items()
+        }
         prior = em(lines[part::2], opts, prior, lm)
         best.append({ch: max(pr.items(), key=lambda kv: kv[1]) for ch, pr in prior.items()})
     out = dict(tab)
@@ -372,6 +415,7 @@ def invalid(text, script):
     """(clusters that break the script's syllable rules, clusters) of a decoded text (Unicode Indic syllable structure: a dependent sign needs a letter before it,
     one vowel sign per syllable, nothing but a letter or ZWJ / ZWNJ after a virama, one nasal sign); 0 for a script without dependent signs."""
     import regex
+
     vir = T.virama(script)
     bad = 0
     clusters = regex.findall(r"\X", nfc(text))
@@ -382,6 +426,12 @@ def invalid(text, script):
         base = c[0]
         vowels = [ch for ch in marks if "VOWEL SIGN" in unicodedata.name(ch, "")]
         nasal = [ch for ch in marks if unicodedata.name(ch, "").endswith(("ANUSVARA", "CANDRABINDU"))]
-        bad += (unicodedata.category(base) in ("Mn", "Mc") or base.isspace() or len(vowels) > 1 or len(nasal) > 1
-                or bool(vir) and any(a == vir and unicodedata.category(b) in ("Mn", "Mc") for a, b in zip(c, c[1:])))
+        bad += (
+            unicodedata.category(base) in ("Mn", "Mc")
+            or base.isspace()
+            or len(vowels) > 1
+            or len(nasal) > 1
+            or bool(vir)
+            and any(a == vir and unicodedata.category(b) in ("Mn", "Mc") for a, b in zip(c, c[1:]))
+        )
     return bad, len(clusters)

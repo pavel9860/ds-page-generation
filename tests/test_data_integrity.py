@@ -3,6 +3,7 @@ fill / pic (scan_pct: the detector on the shards, the only fill / pic source) an
 not on this machine. Disk checks use fixed random samples.
 
   pytest tests/test_data_integrity.py -n 0"""
+
 import json
 import sqlite3
 from pathlib import Path
@@ -21,7 +22,9 @@ INFO = LAYOUTS / "archive" / "info"
 DB = LAYOUTS / "manifest.sqlite"
 DIM, SAMPLE = 1536, 500
 
-pytestmark = pytest.mark.skipif(not (DB.exists() and (EMB / "ids.npy").exists()), reason="corpus data not on this machine")
+pytestmark = pytest.mark.skipif(
+    not (DB.exists() and (EMB / "ids.npy").exists()), reason="corpus data not on this machine"
+)
 
 
 def keys(doc, page):
@@ -48,7 +51,9 @@ def ids():
 @pytest.fixture(scope="module")
 def pages(ids, man):
     """One row per embedding row: row, doc, page, path."""
-    return pd.DataFrame({"row": np.arange(len(ids)), "doc": ids[:, 0], "page": ids[:, 1]}).merge(man, on="doc", how="left")
+    return pd.DataFrame({"row": np.arange(len(ids)), "doc": ids[:, 0], "page": ids[:, 1]}).merge(
+        man, on="doc", how="left"
+    )
 
 
 def sample(df, n=SAMPLE):
@@ -124,7 +129,9 @@ def test_embedding_manifest_matches_corpus_manifest(man, db, ids):
     m["h"] = m.path.str.extract(r"(?<![0-9a-f])([0-9a-f]{12})(?![0-9a-f])")[0]
     m = m[m.h.isin(plan)]
     off = m[m.path != m.h.map(plan)]
-    assert off.empty, f"{len(off)} documents filed under another file than the manifest's, e.g. {off.path.iloc[0]} vs {plan[off.h.iloc[0]]}"
+    assert off.empty, (
+        f"{len(off)} documents filed under another file than the manifest's, e.g. {off.path.iloc[0]} vs {plan[off.h.iloc[0]]}"
+    )
 
 
 # ---- fill / pic ----
@@ -146,7 +153,9 @@ def test_scan_pct_table_matches_parquet(db):
 
 
 def test_scan_pct_not_older_than_the_embedding():
-    assert (INFO / "scan_pct.parquet").stat().st_mtime >= (EMB / "ids.npy").stat().st_mtime, "ids.npy changed after scan_pct was merged"
+    assert (INFO / "scan_pct.parquet").stat().st_mtime >= (EMB / "ids.npy").stat().st_mtime, (
+        "ids.npy changed after scan_pct was merged"
+    )
 
 
 # ---- text / handwriting boxes ----
@@ -171,12 +180,12 @@ def test_hw_det_matches_its_shards(hw):
         k = keys(z["ids"][:, 0], z["ids"][:, 1])
         pos = dict(zip(k.tolist(), range(len(k))))
         o, c = z["offsets"], z["cls"]
-        for d, p, t, h in zip(g.src_doc, g.page, g.text, g.hw):                 # src_doc: the page's id in the shard
+        for d, p, t, h in zip(g.src_doc, g.page, g.text, g.hw):  # src_doc: the page's id in the shard
             i = pos.get(int(d) * 100000 + int(p))
             if i is None:
                 bad.append((shard, d, p, "not in shard"))
                 continue
-            b = c[o[i]:o[i + 1]]
+            b = c[o[i] : o[i + 1]]
             if (int((b == 0).sum()), int((b == 1).sum())) != (h, t):
                 bad.append((shard, d, p, "counts"))
     assert not bad, f"{len(bad)} sampled rows disagree with their shard, e.g. {bad[:3]}"

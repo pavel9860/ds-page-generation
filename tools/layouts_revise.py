@@ -12,6 +12,7 @@ plus archive/rejected. Data: Layouts/archive/info/layouts_revise (WORK).
                                          # -> WORK/page_rows.parquet (the trace of every row); old files kept as *.before_revise
 
 6 workers."""
+
 import argparse
 import hashlib
 import os
@@ -73,7 +74,12 @@ def cmd_scan(_):
     stat = {r: os.stat(LAYOUTS / r) for r in paths}
     keep = []
     if have is not None:
-        ok = have[[r in stat and stat[r].st_size == s and stat[r].st_mtime == m for r, s, m in zip(have.path, have.size, have.mtime)]]
+        ok = have[
+            [
+                r in stat and stat[r].st_size == s and stat[r].st_mtime == m
+                for r, s, m in zip(have.path, have.size, have.mtime)
+            ]
+        ]
         keep, done = [ok], set(ok.path)
         paths = [r for r in paths if r not in done]
     rows = []
@@ -110,22 +116,38 @@ def diff(S):
     plan["url"] = plan.doc.isin(urls.hash)
     new = S[~S.path.isin(plan.now.dropna())]
     print("manifest documents in scope", len(plan), "|", plan.state.value_counts().to_dict())
-    print("content changed (name hash != content hash)", int(plan.changed.sum()), "| of those with fewer pages than the manifest",
-          int((plan.changed & (plan.pages_now < plan.pages)).sum()))
+    print(
+        "content changed (name hash != content hash)",
+        int(plan.changed.sum()),
+        "| of those with fewer pages than the manifest",
+        int((plan.changed & (plan.pages_now < plan.pages)).sum()),
+    )
     print("files on disk not in the manifest", len(new), "| without a 12-hex name", int(new.name.isna().sum()))
-    print("one name hash, several files", int((by_name.str.len() > 1).sum()), "| one content, several files", int(S.content.duplicated(keep=False).sum()))
+    print(
+        "one name hash, several files",
+        int((by_name.str.len() > 1).sum()),
+        "| one content, several files",
+        int(S.content.duplicated(keep=False).sum()),
+    )
     print("documents with a download link", int(plan.url.sum()))
     plan.to_parquet(WORK / "diff.parquet")
     new.to_parquet(WORK / "new_files.parquet")
 
 
-DUPS = "archive/similar/dups"                        # where copies go (moves.jsonl stages dup_same_bytes / dup_page_subset, with the kept file)
-RANK = ("archive/rejected", "untyped_tmp")           # a copy here goes before one in a typed folder
+DUPS = (
+    "archive/similar/dups"  # where copies go (moves.jsonl stages dup_same_bytes / dup_page_subset, with the kept file)
+)
+RANK = ("archive/rejected", "untyped_tmp")  # a copy here goes before one in a typed folder
 
 
 def rank(path, manifest_paths):
     """Sort key of the copy to keep: the manifest's own file, a typed folder, untyped_tmp, archive/rejected; then the shorter path."""
-    return (path not in manifest_paths, next((i + 1 for i, r in enumerate(reversed(RANK)) if path.startswith(r)), 0), len(path), path)
+    return (
+        path not in manifest_paths,
+        next((i + 1 for i, r in enumerate(reversed(RANK)) if path.startswith(r)), 0),
+        len(path),
+        path,
+    )
 
 
 def page_prints(rel):
@@ -147,12 +169,14 @@ def cmd_dups(a):
     with sqlite3.connect(f"file:{LAYOUTS / 'manifest.sqlite'}?mode=ro", uri=True) as db:
         mpaths = {r[0] for r in db.execute("select new_path from plan")}
     moves = []
-    for _, g in S[S.content.duplicated(keep=False)].groupby("content"):          # 1) same bytes
+    for _, g in S[S.content.duplicated(keep=False)].groupby("content"):  # 1) same bytes
         keep, *rest = sorted(g.path, key=lambda p: rank(p, mpaths))
         moves += [(p, keep, "dup_same_bytes") for p in rest]
     gone = {m[0] for m in moves}
     G = S[S.name.notna() & ~S.path.isin(gone)]
-    G = G[G.name.duplicated(keep=False) & G.path.str.lower().str.endswith(".pdf")]     # 2) one name hash, other bytes: page subsets
+    G = G[
+        G.name.duplicated(keep=False) & G.path.str.lower().str.endswith(".pdf")
+    ]  # 2) one name hash, other bytes: page subsets
     with ProcessPoolExecutor(WORKERS) as ex:
         fp = dict(zip(G.path, ex.map(page_prints, G.path, chunksize=4)))
     for _, g in G.groupby("name"):
@@ -173,6 +197,7 @@ def cmd_dups(a):
 
 def apply_moves(D):
     import json
+
     done = 0
     with open(LAYOUTS / "archive" / "info" / "moves.jsonl", "a") as log:
         for src, kept, stage in zip(D.src, D.kept, D.stage):
@@ -186,7 +211,20 @@ def apply_moves(D):
     print(done, "files moved to", DUPS)
 
 
-DOC_TABLES = ("docs", "plan", "feats", "fonts", "fonts_done", "lang_res", "lang_text", "ft_probs", "ft_more", "site_res", "lang_img", "lang_strip")
+DOC_TABLES = (
+    "docs",
+    "plan",
+    "feats",
+    "fonts",
+    "fonts_done",
+    "lang_res",
+    "lang_text",
+    "ft_probs",
+    "ft_more",
+    "site_res",
+    "lang_img",
+    "lang_strip",
+)
 
 
 def cmd_manifest(_):
@@ -195,6 +233,7 @@ def cmd_manifest(_):
     (same name hash, other path) -> its path; the download links of untyped_sources.jsonl added to src_urls.
     Every change -> WORK/manifest_changes.parquet (table, doc, old, new, action)."""
     import json
+
     in_scope = lambda p: p.startswith(EXTRA) or p.split("/")[0] not in SKIP
     present = {p for p in files()}
     by_name = {}
@@ -232,7 +271,9 @@ def cmd_manifest(_):
             con.executemany(f"delete from {t} where doc=?", [(d,) for d in gone])
         for doc, paths in con.execute("select doc, paths from docs").fetchall():
             new = [q for q in (mv.get(p, p) for p in json.loads(paths or "[]")) if q in present or not in_scope(q)]
-            new = list(dict.fromkeys(new)) or [r[0] for r in con.execute("select new_path from plan where doc=?", (doc,))]
+            new = list(dict.fromkeys(new)) or [
+                r[0] for r in con.execute("select new_path from plan where doc=?", (doc,))
+            ]
             if new != json.loads(paths or "[]"):
                 con.execute("update docs set paths=?, n_files=? where doc=?", (json.dumps(new), len(new), doc))
         have = {r[0] for r in con.execute("select hash from src_urls")}
@@ -256,7 +297,9 @@ def cmd_pages(_):
     or were moved away as copies dropped; a file that moved keeps its rows under its new path. emb_out (embeddings.npy, ids.npy,
     manifest.jsonl; the old ones kept as *.before_revise), scan_pct (parquet + table), hw_det. Trace -> WORK/page_rows.parquet."""
     import json
+
     from dspages.hand.config import PATHS as P
+
     emb = Path(P.uvtm) / "Labels" / "embedding" / "emb_out"
     info = LAYOUTS / "archive" / "info"
     present = set(files())
@@ -273,13 +316,15 @@ def cmd_pages(_):
         if p in present or not in_scope(p):
             return p
         if p in dup_src:
-            return None                                          # a copy: its pages are in the kept file, under other page numbers
+            return None  # a copy: its pages are in the kept file, under other page numbers
         m = HEX.match(p.rsplit("/", 1)[-1])
         return by_name.get(m.group(1)) if m else None
 
     man["now"] = man.path.map(now)
     ids = np.load(emb / "ids.npy")
-    R = pd.DataFrame({"row": np.arange(len(ids)), "doc": ids[:, 0], "page": ids[:, 1]}).merge(man[["doc", "now"]], on="doc", how="left")
+    R = pd.DataFrame({"row": np.arange(len(ids)), "doc": ids[:, 0], "page": ids[:, 1]}).merge(
+        man[["doc", "now"]], on="doc", how="left"
+    )
     R["new_doc"] = R.groupby("now").doc.transform("min")
     R["keep"] = R.now.notna() & ~R.duplicated(["now", "page"])
     R["why"] = np.where(R.now.isna(), "file gone or a copy", np.where(R.keep, "kept", "repeat of a (file, page)"))
@@ -290,7 +335,7 @@ def cmd_pages(_):
     out = np.lib.format.open_memmap(emb / "embeddings.new.npy", mode="w+", dtype=E.dtype, shape=(len(K), E.shape[1]))
     rows = K.row.to_numpy()
     for a in range(0, len(rows), 50_000):
-        out[a:a + 50_000] = E[rows[a:a + 50_000]]
+        out[a : a + 50_000] = E[rows[a : a + 50_000]]
     out.flush()
     del out
     for f in ("embeddings.npy", "ids.npy", "manifest.jsonl"):
@@ -298,23 +343,40 @@ def cmd_pages(_):
     os.replace(emb / "embeddings.new.npy", emb / "embeddings.npy")
     np.save(emb / "ids.npy", K[["new_doc", "page"]].to_numpy(np.int32))
     m = man[man.doc.isin(set(K.new_doc))].assign(path=lambda d: d.now)[["doc", "path"]].sort_values("doc")
-    (emb / "manifest.jsonl").write_text("".join(json.dumps({"id": int(d), "path": p}) + "\n" for d, p in zip(m.doc, m.path)))
+    (emb / "manifest.jsonl").write_text(
+        "".join(json.dumps({"id": int(d), "path": p}) + "\n" for d, p in zip(m.doc, m.path))
+    )
     remap = K[["doc", "page", "new_doc"]]
 
     s = pd.read_parquet(info / "scan_pct.parquet").merge(remap, on=["doc", "page"])
-    s = s.assign(doc=s.new_doc, hash=s.new_doc.map(dict(zip(m.doc, m.path.map(lambda p: (HEX.match(p.rsplit("/", 1)[-1]) or [None, None])[1])))))
+    s = s.assign(
+        doc=s.new_doc,
+        hash=s.new_doc.map(
+            dict(zip(m.doc, m.path.map(lambda p: (HEX.match(p.rsplit("/", 1)[-1]) or [None, None])[1])))
+        ),
+    )
     s = s.drop(columns="new_doc")
     os.replace(info / "scan_pct.parquet", info / "scan_pct.parquet.before_revise")
     s.to_parquet(info / "scan_pct.parquet")
     with sqlite3.connect(LAYOUTS / "manifest.sqlite", timeout=600) as db:
-        h = pd.read_sql("select doc, page, hash, text, hw, shard, src_doc from hw_det", db).merge(remap, on=["doc", "page"])
+        h = pd.read_sql("select doc, page, hash, text, hw, shard, src_doc from hw_det", db).merge(
+            remap, on=["doc", "page"]
+        )
         h = h.assign(doc=h.new_doc, hash=h.new_doc.map(dict(zip(s.doc, s.hash)))).drop(columns="new_doc")
         db.execute("delete from hw_det")
-        db.executemany("insert into hw_det values (?,?,?,?,?,?,?)", h[["doc", "page", "hash", "text", "hw", "shard", "src_doc"]].astype(object).itertuples(False, None))
+        db.executemany(
+            "insert into hw_det values (?,?,?,?,?,?,?)",
+            h[["doc", "page", "hash", "text", "hw", "shard", "src_doc"]].astype(object).itertuples(False, None),
+        )
         E2 = s[s.hash.notna()].drop_duplicates(["hash", "page"])
         db.execute("delete from scan_pct")
-        db.executemany("insert into scan_pct values (?,?,?,?,?,?,?,?)", E2[["hash", "page", "fill", "pic", "wx", "wy", "ww", "wh"]].astype(object).itertuples(False, None))
-    print(f"embedding rows {len(R)} -> {len(K)}; documents {man.doc.nunique()} -> {len(m)}; scan_pct {len(s)}; hw_det {len(h)}")
+        db.executemany(
+            "insert into scan_pct values (?,?,?,?,?,?,?,?)",
+            E2[["hash", "page", "fill", "pic", "wx", "wy", "ww", "wh"]].astype(object).itertuples(False, None),
+        )
+    print(
+        f"embedding rows {len(R)} -> {len(K)}; documents {man.doc.nunique()} -> {len(m)}; scan_pct {len(s)}; hw_det {len(h)}"
+    )
 
 
 if __name__ == "__main__":

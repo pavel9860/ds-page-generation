@@ -1,5 +1,6 @@
 import numpy as np
 import pymupdf
+
 from dspages.multilang import bank, pages
 from dspages.multilang.config import Config
 
@@ -39,6 +40,7 @@ def test_chunk_write_is_whole(tmp_path):
 
 def test_config_sha_tracks_values():
     from dataclasses import replace
+
     assert CFG.sha() == Config().sha() != replace(CFG, seed=1).sha()
 
 
@@ -51,6 +53,7 @@ def test_render_bg_finds_checkboxes():
     doc.save("/tmp/hwdet_test_checks.pdf")
     import random
     from dataclasses import replace
+
     bg = pages.render_bg("/tmp/hwdet_test_checks.pdf", random.Random(0), replace(CFG, ticks=True))
     assert len(bg.checks) == 1
     assert pages.render_bg("/tmp/hwdet_test_checks.pdf", random.Random(0), CFG).checks == []
@@ -58,6 +61,7 @@ def test_render_bg_finds_checkboxes():
 
 def test_degrade_keeps_shape_and_type():
     import random
+
     img = np.full((120, 90, 3), 230, np.uint8)
     for seed in range(6):
         out = pages.degrade(img, random.Random(seed), CFG, 1.0)
@@ -67,7 +71,9 @@ def test_degrade_keeps_shape_and_type():
 def test_items_are_never_enlarged():
     import random
 
-    items = [dict(ink=np.zeros((h * n, 40), np.uint8), boxes=[(0, 0, 1, 1)] * n) for h, n in ((12, 1), (30, 1), (44, 2))]
+    items = [
+        dict(ink=np.zeros((h * n, 40), np.uint8), boxes=[(0, 0, 1, 1)] * n) for h, n in ((12, 1), (30, 1), (44, 2))
+    ]
     rng = random.Random(0)
     for target in (8, 20, 30, 60):
         for _ in range(50):

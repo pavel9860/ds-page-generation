@@ -12,6 +12,7 @@ The rows of the page are of four kinds: figures, rows of fixed text, rows of fra
 as the source is wide, so the frames and the gaps give the room that figures and fixed rows keep; only when they cannot
 (a page of tables) do the fixed rows shrink with their text.
 """
+
 import bisect
 
 import numpy as np
@@ -39,10 +40,17 @@ def _touching(rects, t):
     if not rects:
         return []
     r = np.array([tuple(c) for c in rects], float)
-    near = ((r[:, None, 0] <= r[None, :, 2] + t) & (r[None, :, 0] <= r[:, None, 2] + t)
-            & (r[:, None, 1] <= r[None, :, 3] + t) & (r[None, :, 1] <= r[:, None, 3] + t))
+    near = (
+        (r[:, None, 0] <= r[None, :, 2] + t)
+        & (r[None, :, 0] <= r[:, None, 2] + t)
+        & (r[:, None, 1] <= r[None, :, 3] + t)
+        & (r[None, :, 1] <= r[:, None, 3] + t)
+    )
     _, label = connected_components(csr_matrix(near), directed=False)
-    return [pymupdf.Rect(*np.r_[r[label == k][:, :2].min(0), r[label == k][:, 2:].max(0)].tolist()) for k in range(label.max() + 1)]
+    return [
+        pymupdf.Rect(*np.r_[r[label == k][:, :2].min(0), r[label == k][:, 2:].max(0)].tolist())
+        for k in range(label.max() + 1)
+    ]
 
 
 def _inside(box, rect, margin=0.0):
@@ -72,7 +80,9 @@ class Turn:
             return not filled and sum((c & b).get_area() for b in texts) >= C.container_cover * c.get_area()
 
         curves = [d["rect"] for d, _ in elems if d["rect"].get_area() < C.background_share * page and _curved(d)]
-        curves = [c for c in _touching(curves, t) if not any((c & b).get_area() > 0 for b in body) and not holds_text(c)]
+        curves = [
+            c for c in _touching(curves, t) if not any((c & b).get_area() > 0 for b in body) and not holds_text(c)
+        ]
         boxes = _touching(curves + [pymupdf.Rect(p["rect"]) for p in pics], t)
         for d, _ in sorted(elems, key=lambda e: e[0]["rect"].get_area()):
             rect = d["rect"]
@@ -98,9 +108,19 @@ class Turn:
                     rect = d["rect"]
                     if home[i] is not None or rect.get_area() >= C.background_share * page:
                         continue
-                    ox, oy = min(rect.x1, reach.x1) - max(rect.x0, reach.x0), min(rect.y1, reach.y1) - max(rect.y0, reach.y0)
+                    ox, oy = (
+                        min(rect.x1, reach.x1) - max(rect.x0, reach.x0),
+                        min(rect.y1, reach.y1) - max(rect.y0, reach.y0),
+                    )
                     along = ox / max(rect.width, 1e-3) if rect.width >= rect.height else oy / max(rect.height, 1e-3)
-                    if ox >= 0 and oy >= 0 and (rect in reach or (along >= C.figure_share and rect.get_area() < C.cell_share * box.get_area())):
+                    if (
+                        ox >= 0
+                        and oy >= 0
+                        and (
+                            rect in reach
+                            or (along >= C.figure_share and rect.get_area() < C.cell_share * box.get_area())
+                        )
+                    ):
                         home[i] = k
                         boxes[k] |= rect
         return boxes, home
@@ -119,8 +139,11 @@ class Turn:
         for band in bands:
             width = max(b.width for b in band["boxes"])
             band["scale"] = min(1.0, self.h / max(width, 1e-3))
-        edges = sorted({0.0, self.h} | {min(max(v, 0.0), self.h) for r in list(fixed) + list(frames) for v in (r.y0, r.y1)}
-                       | {v for band in bands for v in (band["a"], band["z"])})
+        edges = sorted(
+            {0.0, self.h}
+            | {min(max(v, 0.0), self.h) for r in list(fixed) + list(frames) for v in (r.y0, r.y1)}
+            | {v for band in bands for v in (band["a"], band["z"])}
+        )
         rows = []
         for a, z in zip(edges, edges[1:]):
             mid = (a + z) / 2
@@ -137,7 +160,9 @@ class Turn:
         size = {kind: sum(z - a for a, z, k, _ in rows if k == kind) for kind in ("fixed", "frame", "gap")}
         figure = sum(bands[band]["scale"] * (z - a) for a, z, k, band in rows if k == "figure")
         free, avail = size["frame"] + size["gap"], self.w
-        fit = C.frame_give / self.sx  # the scale of a frame that keeps (nearly) its text: the lines are as much wider as they are fewer
+        fit = (
+            C.frame_give / self.sx
+        )  # the scale of a frame that keeps (nearly) its text: the lines are as much wider as they are fewer
         r, soft = 1.0, (avail - figure - size["fixed"]) / free if free > 1e-6 else fit
         if soft < fit:
             soft = fit
@@ -147,13 +172,15 @@ class Turn:
                 soft = max((avail - figure - r * size["fixed"]) / free, C.turn_gap_min) if free > 1e-6 else fit
         soft = min(soft, C.turn_gap_max)
         over = (r * size["fixed"] + soft * free + figure) - avail
-        if over > 1e-6 and figure > 1e-6:      # the minimum scales of the rest still leave the page too tall: the figures shrink, evenly
+        if (
+            over > 1e-6 and figure > 1e-6
+        ):  # the minimum scales of the rest still leave the page too tall: the figures shrink, evenly
             f = max((avail - r * size["fixed"] - soft * free) / figure, C.figure_floor)
             for band in bands:
                 band["scale"] *= f
             figure *= f
             over = (r * size["fixed"] + soft * free + figure) - avail
-        if over > 1e-6:        # still too tall: give back evenly what the floors kept (never beyond the page)
+        if over > 1e-6:  # still too tall: give back evenly what the floors kept (never beyond the page)
             f = (avail - figure) / (r * size["fixed"] + soft * free)
             r, soft = r * f, soft * f
         out, new = [], 0.0
@@ -187,7 +214,11 @@ class Turn:
             """x and y maps of an element: a figure and what lies in it keep their scale and sit in the stretched footprint of
             their box (left stays left, right stays right); everything else is stretched with the page."""
             c = ((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2)
-            box = home if home is not None else next((b for b in self.plan["boxes"] if b.x0 <= c[0] <= b.x1 and b.y0 <= c[1] <= b.y1), None)
+            box = (
+                home
+                if home is not None
+                else next((b for b in self.plan["boxes"] if b.x0 <= c[0] <= b.x1 and b.y0 <= c[1] <= b.y1), None)
+            )
             if box is None:
                 return (lambda x: x * self.sx), self.y_of
             band = self.band_at(c[1])
@@ -218,12 +249,19 @@ class Turn:
             c = b["bbox"]
             m = mapper(c)
             cs = b.get("colspan")
-            span = cs or next(((a, z) for a, z in cols if a - 2 <= c.x0 and c.x1 <= z + 2), (min(a for a, _ in cols), max(z for _, z in cols)))
+            span = cs or next(
+                ((a, z) for a, z in cols if a - 2 <= c.x0 and c.x1 <= z + 2),
+                (min(a for a, _ in cols), max(z for _, z in cols)),
+            )
             if len(b["lines"]) == 1 and not b.get("image"):
                 c0, c1 = span
                 b["src_align"] = single_align(c.x0, c.x1, c0, c1, b["rtl"])
-            b["flush"] = (len(b["lines"]) == 1 and len(_text(b["lines"][0]).split()) >= C.flush_words
-                          and c.width >= C.full_line * (span[1] - span[0]) and b["align"] == "left")
+            b["flush"] = (
+                len(b["lines"]) == 1
+                and len(_text(b["lines"][0]).split()) >= C.flush_words
+                and c.width >= C.full_line * (span[1] - span[0])
+                and b["align"] == "left"
+            )
             b["bbox"] = rect(c, m)
             if cs:
                 b["colspan"] = (m[0](cs[0]), m[0](cs[1]))
@@ -231,5 +269,7 @@ class Turn:
                 l["bbox"] = rect(l["bbox"], m)
                 for sp in l["spans"]:
                     sp["bbox"] = rect(sp["bbox"], m)
-        placed = [dict(p, rect=rect(p["rect"], mapper(p["rect"])), bbox=rect(p["rect"], mapper(p["rect"]))) for p in pics]
+        placed = [
+            dict(p, rect=rect(p["rect"], mapper(p["rect"])), bbox=rect(p["rect"], mapper(p["rect"]))) for p in pics
+        ]
         return blocks, [(drawing(d), fixed) for d, fixed in elems], placed, self.plan["r"]

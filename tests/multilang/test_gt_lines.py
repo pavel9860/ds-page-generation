@@ -1,4 +1,5 @@
 """Translation of bank lines without a browser: planning, batching, cutting, raw kept."""
+
 import importlib
 import importlib.util
 import json
@@ -23,7 +24,9 @@ def plain_lines(monkeypatch):
     fresh = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fresh)
     f = fresh.lines
-    monkeypatch.setattr(gtranslate, "lines", types.FunctionType(f.__code__, vars(gtranslate), f.__name__, f.__defaults__, f.__closure__))
+    monkeypatch.setattr(
+        gtranslate, "lines", types.FunctionType(f.__code__, vars(gtranslate), f.__name__, f.__defaults__, f.__closure__)
+    )
 
 
 def test_cutting_loses_no_word_and_makes_short_lines():
@@ -41,7 +44,11 @@ def test_unspaced_text_is_cut_into_graphemes_without_loss():
 def test_translate_all_keeps_every_paragraph_in_order_and_marks_failures():
     jobs = [("aa", "fr", PAR), ("aa", "fr", PAR + " Another one."), ("bb", "de", PAR)]
     out = gt.translate_all(lambda l, sl, p: p.upper() if sl == "fr" else None, jobs, workers=3)
-    assert [r["src"] for r in out["aa"]] == [PAR, PAR + " Another one."] and out["bb"][0]["tr"] is None and out["aa"][0]["from"] == "fr"
+    assert (
+        [r["src"] for r in out["aa"]] == [PAR, PAR + " Another one."]
+        and out["bb"][0]["tr"] is None
+        and out["aa"][0]["from"] == "fr"
+    )
 
 
 def test_a_429_is_waited_out_then_the_text_comes(monkeypatch):
@@ -62,7 +69,11 @@ def test_a_429_is_waited_out_then_the_text_comes(monkeypatch):
 
 
 def test_lines_are_unique_and_none_translation_gives_none():
-    raw = [{"from": "fr", "src": "a", "tr": PAR}, {"from": "fr", "src": "b", "tr": PAR}, {"from": "de", "src": "c", "tr": None}]
+    raw = [
+        {"from": "fr", "src": "a", "tr": PAR},
+        {"from": "fr", "src": "b", "tr": PAR},
+        {"from": "de", "src": "c", "tr": None},
+    ]
     lines = gt.lines_of(raw, "en")
     assert len(lines) == len({gt.LB.key(x) for x in lines}) and "Ask the clerk if unsure" in lines
 
@@ -82,7 +93,9 @@ def test_missing_counts_translated_lines_and_translated_paragraphs_are_not_plann
     (tmp_path / "bank").mkdir()
     (tmp_path / "tr").mkdir()
     (tmp_path / "bank" / "aa.json").write_text('{"w": ["x"]}')
-    (tmp_path / "tr" / "aa.json").write_text(json.dumps({"raw": [{"from": "en", "src": "p1", "tr": "t"}], "w": ["a", "b"]}))
+    (tmp_path / "tr" / "aa.json").write_text(
+        json.dumps({"raw": [{"from": "en", "src": "p1", "tr": "t"}], "w": ["a", "b"]})
+    )
     assert gt.missing("aa") == gt.C.min_lines - 3
     monkeypatch.setattr(gt, "PARAS", tmp_path)
     (tmp_path / "en.json").write_text('{"p": ["p1", "p2"]}')

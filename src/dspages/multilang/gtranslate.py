@@ -1,4 +1,5 @@
 """Google Translate over HTTP (translate.googleapis.com, one request per text)"""
+
 import time
 
 import requests

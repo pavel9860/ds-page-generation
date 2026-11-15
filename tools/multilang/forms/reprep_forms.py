@@ -1,5 +1,6 @@
 """Prepares again the forms of langds/forms3k with the corrected field finder (pale rules, no box over printed text, labels of empty table cells from the column header): old forms_work -> forms_work_old, new forms_work with meta.json, img/ and in_NNNN.json (PER_FILE forms each) for the agents.
 python reprep_forms3k.py"""
+
 import json
 import shutil
 from concurrent.futures import ProcessPoolExecutor
@@ -13,6 +14,7 @@ PER_FILE = 4
 
 def prep(m):
     from dspages.multilang import filledforms as F
+
     return m, F.prep_one((m["path"], int(m["page"]), m["lang"], str(NEW), 0))
 
 
@@ -34,7 +36,7 @@ def main():
             items.append(item)
     (NEW / "meta.json").write_text(json.dumps(meta))
     for n in range(0, len(items), PER_FILE):
-        (NEW / f"in_{n // PER_FILE:04d}.json").write_text(json.dumps(items[n:n + PER_FILE], ensure_ascii=False))
+        (NEW / f"in_{n // PER_FILE:04d}.json").write_text(json.dumps(items[n : n + PER_FILE], ensure_ascii=False))
     print(len(old), "old forms,", len(meta), "prepared,", -(-len(items) // PER_FILE), "batches")
 
 

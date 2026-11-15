@@ -3,6 +3,7 @@ PyMuPDF find_tables, small tables only (2-7 columns, 3-14 rows, short cells), mo
 
 python -m dspages.hand tables --out texts_tables.jsonl [--workers 6] [--per-lang 80]
 """
+
 import argparse
 import json
 import os
@@ -53,7 +54,7 @@ def read(job):
                     continue
                 ncol = max(len(r) for r in rows)
                 rows = [r + [""] * (ncol - len(r)) for r in rows]
-                keep = [j for j in range(ncol) if sum(bool(r[j]) for r in rows) >= 0.5 * len(rows)]   # no empty columns
+                keep = [j for j in range(ncol) if sum(bool(r[j]) for r in rows) >= 0.5 * len(rows)]  # no empty columns
                 rows = [[r[j] for j in keep] for r in rows]
                 if not (2 <= len(keep) <= 7):
                     continue
@@ -63,8 +64,16 @@ def read(job):
                 text = " ".join(cells)
                 if len(re.findall(r"\w", text)) < 20 or (c["lang"] in EXPECT and not script_ok(text, c["lang"], 0.6)):
                     continue
-                res.append(dict(c, items=[dict(k="table", rows=rows)], text=text, page=pg, pages=n,
-                                path=os.path.relpath(c["path"], T.LAYOUTS)))
+                res.append(
+                    dict(
+                        c,
+                        items=[dict(k="table", rows=rows)],
+                        text=text,
+                        page=pg,
+                        pages=n,
+                        path=os.path.relpath(c["path"], T.LAYOUTS),
+                    )
+                )
                 break
     except Exception as e:
         print("table source failed:", c["path"], repr(e)[:120], flush=True)

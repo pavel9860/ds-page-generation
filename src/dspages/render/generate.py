@@ -13,21 +13,17 @@ grid2d (2, mesh h, mesh w) float32: x, y of each page node in the photo, in [-1,
 grid3d (3, mesh h, mesh w) float32: X, Y, Z [mm] of each page node on the curved surface, table z = 0
 mask   (h, w) bool: photo pixels on the flat's part of the page
 """
+
 import cv2
 import numpy as np
 
 from ..config import Preset
+from ..geometry.surface import page_points
 from ..layout.generate import draw_layout
 from . import photo
 from .camera import make_camera, project, vertex_normals
-from ..geometry.surface import page_points
+from .config import BG_STEP, FLAT_ROUNDS, MIP_LEVELS, MIP_STEP, SHADOW_STEP  # noqa: F401
 from .raster import grid_faces, rasterize
-
-BG_STEP = 4
-SHADOW_STEP = 2                 # shadow maps from every 2nd node: the 384 px maps cannot resolve the full grid
-MIP_LEVELS = (0.0, 0.5, 1.0, 2.0)   # px, page blurs blended by how much a photo pixel shrinks the page
-FLAT_ROUNDS = 6                 # _flat_part rounds at most
-MIP_STEP = 4                    # the shrink is measured on every 4th pixel (it changes slowly)
 
 
 def _nodes(n, step):
@@ -46,8 +42,11 @@ def _page_in_photo(lin, mx, my, mask):
     sigma = np.where(inner, 0.5 * np.sqrt(np.maximum(s2 - 1, 0)), 0.0)
     if sigma.max() <= 0:
         return cv2.remap(lin, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-    pos = cv2.resize(np.interp(sigma, MIP_LEVELS, np.arange(len(MIP_LEVELS))).astype(np.float32), mx.shape[::-1],
-                     interpolation=cv2.INTER_LINEAR)
+    pos = cv2.resize(
+        np.interp(sigma, MIP_LEVELS, np.arange(len(MIP_LEVELS))).astype(np.float32),
+        mx.shape[::-1],
+        interpolation=cv2.INTER_LINEAR,
+    )
     out = np.zeros(mx.shape, np.float32)
     for k, s in enumerate(MIP_LEVELS):
         if pos.min() < k + 1 and pos.max() > k - 1:
@@ -66,7 +65,7 @@ def _in_view(inside, span, content):
     i0, j0 = np.floor(span[:2] * n[:2]).astype(int)
     i1, j1 = np.ceil(span[2:] * n[2:]).astype(int)
     c0, c1 = np.floor(content[:2] * n[:2]).astype(int), np.ceil(content[2:] * n[2:]).astype(int)
-    rows, cols = inside[j0:j1 + 1], inside[:, i0:i1 + 1]
+    rows, cols = inside[j0 : j1 + 1], inside[:, i0 : i1 + 1]
     idx_u, idx_v = np.arange(nu), np.arange(nv)[:, None]
     first_u, last_u = np.where(rows, idx_u, nu).min(1), np.where(rows, idx_u, -1).max(1)
     first_v, last_v = np.where(cols, idx_v, nv).min(0), np.where(cols, idx_v, -1).max(0)
@@ -109,7 +108,7 @@ def _fit_aspect(tight, loose, content):
     """The page part tight (u0, v0, u1, v1) brought to the sheet's aspect (equal shares of both sides): the longer
     span shrunk to the shorter (_resize_span), the shorter grown to what the content leaves of the longer."""
     a = tight.copy()
-    k = int(a[2] - a[0] < a[3] - a[1])                       # the longer axis: 0 u, 1 v
+    k = int(a[2] - a[0] < a[3] - a[1])  # the longer axis: 0 u, 1 v
     o = 1 - k
     a[k], a[k + 2] = _resize_span(a[k], a[k + 2], content[k], content[k + 2], loose[k], loose[k + 2], a[o + 2] - a[o])
     a[o], a[o + 2] = _resize_span(a[o], a[o + 2], content[o], content[o + 2], loose[o], loose[o + 2], a[k + 2] - a[k])
@@ -120,8 +119,8 @@ def make_sample(rng, layout, surf, P: Preset):
     """layout: layout.generate.make_layout's desc, drawn here once at the flat's scale; surf: geometry.make_surface
     output. -> dict of arrays and meta."""
     c = P.render
-    ns = rng.uniform(*P.layout.noise_scale)          # factor of this photo's noise feature sizes
-    px = tuple(P.layout.page_px)                             # photo and flat (w, h)
+    ns = rng.uniform(*P.layout.noise_scale)  # factor of this photo's noise feature sizes
+    px = tuple(P.layout.page_px)  # photo and flat (w, h)
     content = np.array(layout["ink"])
     X, Y, Z = surf["X"], surf["Y"], surf["Z"]
     nv, nu = X.shape
@@ -147,7 +146,7 @@ def make_sample(rng, layout, surf, P: Preset):
     ph, pw = page.shape
     x0 = int(np.clip(round(crop[0] * pw), 0, pw - px[0]))
     y0 = int(np.clip(round(crop[1] * ph), 0, ph - px[1]))
-    flat = page[y0:y0 + px[1], x0:x0 + px[0]]
+    flat = page[y0 : y0 + px[1], x0 : x0 + px[0]]
     crop = np.array([x0 / (pw - 1), y0 / (ph - 1), (x0 + px[0] - 1) / (pw - 1), (y0 + px[1] - 1) / (ph - 1)])
     lin = photo.SRGB_TO_LINEAR[page]
     mx = (np.nan_to_num(uv[..., 0]) * (pw - 1)).astype(np.float32)
@@ -156,7 +155,12 @@ def make_sample(rng, layout, surf, P: Preset):
     if c.background == "texture" and rng.random() >= c.black_prob:
         ys, xs = np.nonzero(~mask)
         bg = np.zeros(mask.shape, np.float32)
-        bg[ys, xs] = photo.table_texture(rng, photo.table_points(cam, px, xs=xs + 0.5, ys=ys + 0.5), photo.table_pixel(cam, px), ns) ** 2.2
+        bg[ys, xs] = (
+            photo.table_texture(
+                rng, photo.table_points(cam, px, xs=xs + 0.5, ys=ys + 0.5), photo.table_pixel(cam, px), ns
+            )
+            ** 2.2
+        )
         if shading:
             q = photo.table_points(cam, px, BG_STEP)
             ok = np.isfinite(q[..., 0])
@@ -167,9 +171,16 @@ def make_sample(rng, layout, surf, P: Preset):
     else:
         img[~mask] = 0.0
     warped, effects = photo.camera_effects(rng, img.astype(np.float32), zmap, mask, c)
-    meta = dict(view=view, light=None if light is None else dict(sharp=light["sharp"], ambient=light["ambient"]),
-                effects=effects, paper_effects=paper_fx, page_frac=float(mask.mean()),
-                border_on_page=float(np.r_[mask[0], mask[-1], mask[:, 0], mask[:, -1]].mean()), flat_part=crop.tolist(), flat_scale=scale)
+    meta = dict(
+        view=view,
+        light=None if light is None else dict(sharp=light["sharp"], ambient=light["ambient"]),
+        effects=effects,
+        paper_effects=paper_fx,
+        page_frac=float(mask.mean()),
+        border_on_page=float(np.r_[mask[0], mask[-1], mask[:, 0], mask[:, -1]].mean()),
+        flat_part=crop.tolist(),
+        flat_scale=scale,
+    )
     grid3d, cpix = _flat_nodes(surf, crop, cam)
     grid2d = ((cpix - 0.5) / (np.array(px) - 1) * 2 - 1).T.reshape(2, nv, nu).astype(np.float32)
     u, v = np.nan_to_num(uv[..., 0], nan=-1), np.nan_to_num(uv[..., 1], nan=-1)
@@ -182,7 +193,9 @@ def _flat_nodes(surf, crop, cam):
     """The surface at the page grid's nodes spread over the flat's page part crop (looked up once in the working grid)
     and those nodes in the photo."""
     nv, nu = surf["X"].shape
-    gu, gv = np.meshgrid(np.linspace(crop[0], crop[2], nu) * surf["u"][-1], np.linspace(crop[1], crop[3], nv) * surf["v"][-1])
+    gu, gv = np.meshgrid(
+        np.linspace(crop[0], crop[2], nu) * surf["u"][-1], np.linspace(crop[1], crop[3], nv) * surf["v"][-1]
+    )
     grid3d = np.stack(page_points(surf, gu, gv))
     cpix, _ = project(grid3d.reshape(3, -1).T.astype(np.float64), cam)
     return grid3d.astype(np.float32), cpix
@@ -191,8 +204,16 @@ def _flat_nodes(surf, crop, cam):
 def _portrait(o):
     """A landscape sample (an open book) turned a quarter counterclockwise: images, mask and maps, grid2d's photo
     coordinates (x' = y, y' = -x) and grid3d's X, Y (X' = -Y, Y' = X, from 0) turned with them."""
+
     def r(a, axes=(0, 1)):
         return np.ascontiguousarray(np.rot90(a, 1, axes))
+
     g, (X, Y, Z) = r(o["grid2d"], (1, 2)), r(o["grid3d"], (1, 2))
-    return dict(o, flat=r(o["flat"]), warped=r(o["warped"]), mask=r(o["mask"]),
-                grid2d=np.stack([g[1], -g[0]]), grid3d=np.stack([Y.max() - Y, X - X.min(), Z]))
+    return dict(
+        o,
+        flat=r(o["flat"]),
+        warped=r(o["warped"]),
+        mask=r(o["mask"]),
+        grid2d=np.stack([g[1], -g[0]]),
+        grid3d=np.stack([Y.max() - Y, X - X.min(), Z]),
+    )

@@ -1,6 +1,7 @@
 import random
 
-from dspages.layout import legacy_fit as F, legacy_tables as T
+from dspages.layout import legacy_fit as F
+from dspages.layout import legacy_tables as T
 
 CIPHER = {"a": "ક", "b": "ખ", "c": "ગ", "d": "ઘ", "e": "ચ", "f": "છ", "g": "જ", "h": "ઝ", "i": "ટ", "j": "ઠ"}
 
@@ -19,8 +20,8 @@ def test_lev():
 
 
 def test_clean_drops_spaces_collapses_faked_bold_and_drops_croppings():
-    assert F.clean([("aa bb cc", "ક ખ ગ")]) == [("abc", "ક" "ખ" "ગ")]
-    assert F.clean([("abcdef", "ક")]) == []                               # a cropped picture does not fit its codes
+    assert F.clean([("aa bb cc", "ક ખ ગ")]) == [("abc", "કખગ")]
+    assert F.clean([("abcdef", "ક")]) == []  # a cropped picture does not fit its codes
 
 
 def test_fit_recovers_a_substitution_cipher_and_the_gate_keeps_it_exact():
@@ -51,5 +52,8 @@ def test_sequence_moves_prefix_vowel_and_reph():
 
 
 def test_double_byte_legacy_fonts_decode_and_plain_text_is_not_one():
-    assert T._multibyte("big5", "\xa4\xa4\xa4\xe5 abc") == "中文 abc" and T._multibyte("euc_kr", "\xc7\xd1\xb1\xdb") == "한글"
+    assert (
+        T._multibyte("big5", "\xa4\xa4\xa4\xe5 abc") == "中文 abc"
+        and T._multibyte("euc_kr", "\xc7\xd1\xb1\xdb") == "한글"
+    )
     assert F.has_high_codes(["\xa4\xa4\xa4\xe5 \xa4\xa4"]) and not F.has_high_codes(["()=()log", "2025/11/28"])

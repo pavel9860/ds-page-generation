@@ -12,6 +12,7 @@ Feasibility:
   end b     each support line turns by <= min(skew_deg, atan(skew_rise / (n h (1 + height_jitter)))): the strip
             blend across the page then keeps membrane strain <= 0.1 %
 """
+
 import numpy as np
 from scipy.special import ndtr, ndtri
 
@@ -86,15 +87,16 @@ def sample_scene(rng, c: SceneCfg, length, combo=None):
     base = []
     if book:
         sp = rng.uniform(*c.book_plane) * length
-        base = [(float(sp), length, float(rng.uniform(c.book_h[0], min(c.book_h[1], c.book_reach * sp * np.sin(clamp)))))]
+        base = [
+            (float(sp), length, float(rng.uniform(c.book_h[0], min(c.book_h[1], c.book_reach * sp * np.sin(clamp)))))
+        ]
     lo, hi = _support_bounds(c, length, clamp)
     s = lo + _spread(rng, n_sup, hi - lo, c.support_min_gap)
     supports = list(zip(s.tolist(), _heights(rng, c, s, clamp)))
     budget = _fold_budget(c, supports, clamp)
     folds = []
     if has_folds and budget >= c.fold_angle_deg[0]:
-        folds = [f for f in _folds(rng, c, length, budget)
-                 if all(abs(f[0] - p) >= c.fold_min_gap for p, _ in supports)]
+        folds = [f for f in _folds(rng, c, length, budget) if all(abs(f[0] - p) >= c.fold_min_gap for p, _ in supports)]
     return dict(clamp=clamp, supports=supports, folds=folds, crumple=crumple, base=base, halves=None)
 
 
@@ -107,23 +109,54 @@ def _side_b(rng, c: SceneCfg, sa, length, width):
         halves = []
         for hf in sa["halves"]:
             clamp = float(np.clip(hf["clamp"] + rng.uniform(-d, d), lo, hi))
-            halves.append(dict(clamp=clamp, base=[(s0, s1, float(min(H * (1 + c.height_jitter * rng.uniform(-1, 1)),
-                                                                       c.book_reach * s0 * np.sin(clamp))))
-                                                  for s0, s1, H in hf["base"]]))
+            halves.append(
+                dict(
+                    clamp=clamp,
+                    base=[
+                        (
+                            s0,
+                            s1,
+                            float(
+                                min(H * (1 + c.height_jitter * rng.uniform(-1, 1)), c.book_reach * s0 * np.sin(clamp))
+                            ),
+                        )
+                        for s0, s1, H in hf["base"]
+                    ],
+                )
+            )
         return sa, dict(sa, halves=halves)
     lo_clamp, hi_clamp = c.book_deg if sa["base"] else c.clamp_deg
     if sa["folds"]:
         hi_clamp = min(hi_clamp, _fold_budget(c, sa["supports"], 0.0) - c.fold_angle_deg[0])
-    clamp = None if sa["clamp"] is None else float(np.clip(
-        sa["clamp"] * (1 + c.side_b_jitter * rng.uniform(-1, 1)), np.radians(lo_clamp), np.radians(hi_clamp)))
-    base = [(s0, s1, float(min(H * (1 + c.height_jitter * rng.uniform(-1, 1)),
-                               c.book_reach * s0 * np.sin(clamp) if clamp is not None else np.inf)))
-            for s0, s1, H in sa["base"]]
+    clamp = (
+        None
+        if sa["clamp"] is None
+        else float(
+            np.clip(
+                sa["clamp"] * (1 + c.side_b_jitter * rng.uniform(-1, 1)), np.radians(lo_clamp), np.radians(hi_clamp)
+            )
+        )
+    )
+    base = [
+        (
+            s0,
+            s1,
+            float(
+                min(
+                    H * (1 + c.height_jitter * rng.uniform(-1, 1)),
+                    c.book_reach * s0 * np.sin(clamp) if clamp is not None else np.inf,
+                )
+            ),
+        )
+        for s0, s1, H in sa["base"]
+    ]
     lo, hi = _support_bounds(c, length, clamp)
     n = len(sa["supports"])
     pa = [p for p, _ in sa["supports"]]
-    shift = [width * min(np.tan(np.radians(c.skew_deg)), c.skew_rise / (n * (1 + c.height_jitter) * h))
-             for _, h in sa["supports"]]
+    shift = [
+        width * min(np.tan(np.radians(c.skew_deg)), c.skew_rise / (n * (1 + c.height_jitter) * h))
+        for _, h in sa["supports"]
+    ]
     upper = []
     for p, d in zip(pa[::-1], shift[::-1]):
         upper.append(min(hi, p + d, upper[-1] - c.support_min_gap if upper else hi))
@@ -132,16 +165,30 @@ def _side_b(rng, c: SceneCfg, sa, length, width):
         s.append(float(rng.uniform(max(lo, p - d, s[-1] + c.support_min_gap if s else lo), u)))
     wanted = [((1 - c.height_jitter) * h, (1 + c.height_jitter) * h) for _, h in sa["supports"]]
     supports = list(zip(s, _heights(rng, c, s, clamp, wanted)))
-    sa = dict(sa, folds=[f for f in sa["folds"] if all(
-        f[0] <= min(a, b) - c.fold_min_gap or f[0] >= max(a, b) + c.fold_min_gap for a, b in zip(pa, s))])
+    sa = dict(
+        sa,
+        folds=[
+            f
+            for f in sa["folds"]
+            if all(f[0] <= min(a, b) - c.fold_min_gap or f[0] >= max(a, b) + c.fold_min_gap for a, b in zip(pa, s))
+        ],
+    )
     budget = max(np.radians(_fold_budget(c, supports, clamp)), 0.0)
     lo_a, hi_a = np.radians(c.fold_angle_deg)
     jit = c.fold_side_b_angle_jitter
-    folds = [(p, float(np.sign(t) * np.clip(abs(t) * (1 + jit * rng.uniform(-1, 1)), lo_a, hi_a)), k)
-             for p, t, k in sa["folds"]]
+    folds = [
+        (p, float(np.sign(t) * np.clip(abs(t) * (1 + jit * rng.uniform(-1, 1)), lo_a, hi_a)), k)
+        for p, t, k in sa["folds"]
+    ]
     f = min(1.0, budget / max(sum(abs(t) for _, t, _ in folds), 1e-12))
-    return sa, dict(clamp=clamp, supports=supports, folds=[(p, t * f, k) for p, t, k in folds],
-                    crumple=sa["crumple"], base=base, halves=None)
+    return sa, dict(
+        clamp=clamp,
+        supports=supports,
+        folds=[(p, t * f, k) for p, t, k in folds],
+        crumple=sa["crumple"],
+        base=base,
+        halves=None,
+    )
 
 
 def sample_ends(rng, c: SceneCfg, length, width, two, combo=None):
@@ -156,17 +203,35 @@ def lerp_scene(a, b, t):
 
     def planes(pa, pb):
         return [(s0, s1, lerp(h0, h1)) for (s0, s1, h0), (_, _, h1) in zip(pa, pb)]
-    return dict(clamp=None if a["clamp"] is None else lerp(a["clamp"], b["clamp"]),
-                supports=[(lerp(s0, s1), lerp(h0, h1)) for (s0, h0), (s1, h1) in zip(a["supports"], b["supports"])],
-                folds=[(s0, lerp(t0, t1), k0) for (s0, t0, k0), (_, t1, _) in zip(a["folds"], b["folds"])],
-                crumple=a["crumple"], base=planes(a["base"], b["base"]),
-                halves=a["halves"] and [dict(clamp=lerp(ha["clamp"], hb["clamp"]), base=planes(ha["base"], hb["base"]))
-                                        for ha, hb in zip(a["halves"], b["halves"])])
+
+    return dict(
+        clamp=None if a["clamp"] is None else lerp(a["clamp"], b["clamp"]),
+        supports=[(lerp(s0, s1), lerp(h0, h1)) for (s0, h0), (s1, h1) in zip(a["supports"], b["supports"])],
+        folds=[(s0, lerp(t0, t1), k0) for (s0, t0, k0), (_, t1, _) in zip(a["folds"], b["folds"])],
+        crumple=a["crumple"],
+        base=planes(a["base"], b["base"]),
+        halves=a["halves"]
+        and [
+            dict(clamp=lerp(ha["clamp"], hb["clamp"]), base=planes(ha["base"], hb["base"]))
+            for ha, hb in zip(a["halves"], b["halves"])
+        ],
+    )
 
 
 def scene_label(sc):
-    return "+".join(filter(None, ["crumple" if sc["crumple"] else "",
-                                  "book" if sc["base"] else "", "open" if sc["halves"] else "",
-                                  "clamp" if sc["clamp"] is not None and not sc["base"] else "",
-                                  f"{len(sc['supports'])}sup" if sc["supports"] else "",
-                                  f"{len(sc['folds'])}fold" if sc["folds"] else ""])) or "flat_table"
+    return (
+        "+".join(
+            filter(
+                None,
+                [
+                    "crumple" if sc["crumple"] else "",
+                    "book" if sc["base"] else "",
+                    "open" if sc["halves"] else "",
+                    "clamp" if sc["clamp"] is not None and not sc["base"] else "",
+                    f"{len(sc['supports'])}sup" if sc["supports"] else "",
+                    f"{len(sc['folds'])}fold" if sc["folds"] else "",
+                ],
+            )
+        )
+        or "flat_table"
+    )

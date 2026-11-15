@@ -3,6 +3,7 @@
 
   python tools/emb_check.py select [--n 3000]   # random rows of ids.npy -> info/emb_check/select.parquet (doc, page, path)
   python tools/emb_check.py compare             # (after the kernel's output is in info/emb_check/out) cosine per page, the worst ones, per-document summary"""
+
 import argparse
 import json
 from pathlib import Path
@@ -10,9 +11,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from dspages.hand.config import PATHS
 from dspages.ingest.embstore import keys
 from dspages.ingest.paths import EMB
-from dspages.hand.config import PATHS
 
 LAYOUTS = Path(PATHS.layouts)
 WORK = LAYOUTS / "archive" / "info" / "emb_check"
@@ -41,7 +42,7 @@ def cmd_compare(a):
     R.to_parquet(WORK / "compare.parquet")
     S = pd.read_parquet(WORK / "select.parquet")
     print(len(R), "of", len(S), "sampled pages compared (the rest did not render)")
-    print("cosine quantiles:", R.cos.quantile([0, .001, .01, .05, .5]).round(4).to_dict())
+    print("cosine quantiles:", R.cos.quantile([0, 0.001, 0.01, 0.05, 0.5]).round(4).to_dict())
     for t in (0.99, 0.97, 0.95, 0.9):
         print(f"below {t}:", int((R.cos < t).sum()))
     bad = R[R.cos < 0.97].merge(S[["doc", "path"]].drop_duplicates(), on="doc").sort_values("cos")

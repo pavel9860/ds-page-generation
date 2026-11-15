@@ -1,17 +1,31 @@
 """Handwritten page layouts."""
+
 import re
 
 import cv2
 import numpy as np
 
 from .canvas import Canvas, Hand
+from .config import MARGIN  # noqa: F401
 
-MARGIN = (0.09, 0.07)
-LETTERS = {"Latin": "abcdefghijklmnop", "Cyrillic": "абвгдежзиклмнопр", "Greek": "αβγδεζηθικλμνξο",
-           "Hebrew": "אבגדהוזחטיכלמנ", "Arabic": "أبتثجحخدذرزسشصض"}
-STYLES = {"Latin": ("1.", "1)", "a)", "-", "•"), "Cyrillic": ("1.", "1)", "а)", "-"), "Greek": ("1.", "α)", "-", "•"),
-          "Hebrew": ("1.", "א.", "-"), "Arabic": ("1-", "-", "1)", "أ)"), "Han": ("1.", "・", "-", "一、"),
-          "Hangul": ("1.", "가.", "-", "•"), "Hiragana": ("1.", "・", "-"), "Katakana": ("1.", "・", "-")}
+LETTERS = {
+    "Latin": "abcdefghijklmnop",
+    "Cyrillic": "абвгдежзиклмнопр",
+    "Greek": "αβγδεζηθικλμνξο",
+    "Hebrew": "אבגדהוזחטיכלמנ",
+    "Arabic": "أبتثجحخدذرزسشصض",
+}
+STYLES = {
+    "Latin": ("1.", "1)", "a)", "-", "•"),
+    "Cyrillic": ("1.", "1)", "а)", "-"),
+    "Greek": ("1.", "α)", "-", "•"),
+    "Hebrew": ("1.", "א.", "-"),
+    "Arabic": ("1-", "-", "1)", "أ)"),
+    "Han": ("1.", "・", "-", "一、"),
+    "Hangul": ("1.", "가.", "-", "•"),
+    "Hiragana": ("1.", "・", "-"),
+    "Katakana": ("1.", "・", "-"),
+}
 
 
 def bullet(script, style, n):
@@ -122,8 +136,16 @@ def paragraph(hand, text, x0, x1, y, indent=0.0, align=None, step=1.0):
     for i, piece in enumerate(pieces):
         if y + pitch > c.y_max:
             break
-        s = row(hand, piece, x0, x1, y, "start", justify=(align == "justify" and i < len(pieces) - 1),
-                indent=indent if i == 0 else 0.0)
+        s = row(
+            hand,
+            piece,
+            x0,
+            x1,
+            y,
+            "start",
+            justify=(align == "justify" and i < len(pieces) - 1),
+            indent=indent if i == 0 else 0.0,
+        )
         y += max(pitch * hand.rng.uniform(0.95, 1.07), 0.9 * s.alpha.shape[0] if s is not None else 0.0)
     return y
 
@@ -228,8 +250,14 @@ def math(hand, pool, target, rng):
             line = rng.choice(f)
         else:
             a, b, k = rng.choice("xyabn"), rng.choice("xyabn"), rng.randint(2, 9)
-            line = rng.choice([f"{a} + {k} = {rng.randint(10, 99)}", f"{a}^2 + {b}^2 = {k}^2",
-                               f"({a} + {b})({a} - {b}) = {a}^2 - {b}^2", f"{a} / {b} = {rng.randint(2, 9)} / {rng.randint(2, 9)}"])
+            line = rng.choice(
+                [
+                    f"{a} + {k} = {rng.randint(10, 99)}",
+                    f"{a}^2 + {b}^2 = {k}^2",
+                    f"({a} + {b})({a} - {b}) = {a}^2 - {b}^2",
+                    f"{a} / {b} = {rng.randint(2, 9)} / {rng.randint(2, 9)}",
+                ]
+            )
         if i % 4 == 0 and shorts(pool):
             y = paragraph(hand, rng.choice(shorts(pool)), x0, x1, y, align="start")
         y = paragraph(hand, f"{i + 1})  {line}", x0 + 2 * hand.row_mm * hand.px_mm, x1, y, align="start", step=1.25)
@@ -251,7 +279,11 @@ def table(hand, pool, target, rng):
         for k in range(cols):
             if c.words >= target * 1.4:
                 return
-            text = str(rng.randint(1, 999)) if k == cols - 1 and r else " ".join(rng.sample(words, min(len(words), rng.randint(1, 3))))
+            text = (
+                str(rng.randint(1, 999))
+                if k == cols - 1 and r
+                else " ".join(rng.sample(words, min(len(words), rng.randint(1, 3))))
+            )
             cell(hand, text, x0 + k * cw + 4, y + r * ch + 0.15 * ch, cw - 8)
 
 
@@ -274,7 +306,14 @@ def recipe(hand, pool, target, rng):
         s = hand.strip(q)
         if s:
             c.put(s, x1 - s.alpha.shape[1] if hand.rtl else x0, y, hand.rgb)
-        y = paragraph(hand, " ".join(t.split()[:5]) if " " in t else t[:14], x0 + 4 * hand.row_mm * hand.px_mm, x1, y, align="start")
+        y = paragraph(
+            hand,
+            " ".join(t.split()[:5]) if " " in t else t[:14],
+            x0 + 4 * hand.row_mm * hand.px_mm,
+            x1,
+            y,
+            align="start",
+        )
     y += _pitch(hand)
     for n, p in enumerate(paras(pool), 1):
         if not _more(hand, target) or y > c.y_max - _pitch(hand):
@@ -291,14 +330,29 @@ def checklist(hand, pool, target, rng):
         if not _more(hand, target) or y > c.y_max - _pitch(hand):
             break
         bx = x1 - box if hand.rtl else x0
-        for a, b in (((bx, y), (bx + box, y)), ((bx + box, y), (bx + box, y + box)), ((bx + box, y + box), (bx, y + box)),
-                     ((bx, y + box), (bx, y))):
+        for a, b in (
+            ((bx, y), (bx + box, y)),
+            ((bx + box, y), (bx + box, y + box)),
+            ((bx + box, y + box), (bx, y + box)),
+            ((bx, y + box), (bx, y)),
+        ):
             c.stroke(a[0], a[1], b[0], b[1], hand.rgb, hand.pen, hand.density)
         if rng.random() < 0.5:
-            c.stroke(bx + 0.1 * box, y + 0.5 * box, bx + 0.4 * box, y + 0.9 * box, hand.rgb, hand.pen * 1.3, hand.density)
-            c.stroke(bx + 0.4 * box, y + 0.9 * box, bx + 1.2 * box, y - 0.3 * box, hand.rgb, hand.pen * 1.3, hand.density)
-        y = paragraph(hand, " ".join(t.split()[:9]), x0 + (0 if hand.rtl else 1.8 * box), x1 - (1.8 * box if hand.rtl else 0), y,
-                      align="start", step=1.1)
+            c.stroke(
+                bx + 0.1 * box, y + 0.5 * box, bx + 0.4 * box, y + 0.9 * box, hand.rgb, hand.pen * 1.3, hand.density
+            )
+            c.stroke(
+                bx + 0.4 * box, y + 0.9 * box, bx + 1.2 * box, y - 0.3 * box, hand.rgb, hand.pen * 1.3, hand.density
+            )
+        y = paragraph(
+            hand,
+            " ".join(t.split()[:9]),
+            x0 + (0 if hand.rtl else 1.8 * box),
+            x1 - (1.8 * box if hand.rtl else 0),
+            y,
+            align="start",
+            step=1.1,
+        )
 
 
 def cornell(hand, pool, target, rng):
@@ -346,8 +400,14 @@ def minutes(hand, pool, target, rng):
         s = hand.strip(f"{t // 60:02d}:{t % 60:02d}")
         if s:
             c.put(s, x1 - s.alpha.shape[1] if hand.rtl else x0, y, hand.rgb)
-        y = paragraph(hand, it, x0 + (0 if hand.rtl else 3.2 * hand.row_mm * hand.px_mm), x1 - (3.2 * hand.row_mm * hand.px_mm if hand.rtl else 0),
-                      y, align="start")
+        y = paragraph(
+            hand,
+            it,
+            x0 + (0 if hand.rtl else 3.2 * hand.row_mm * hand.px_mm),
+            x1 - (3.2 * hand.row_mm * hand.px_mm if hand.rtl else 0),
+            y,
+            align="start",
+        )
         t += rng.choice([15, 30, 45, 60])
 
 
@@ -402,8 +462,8 @@ def application(hand, pool, target, rng):
     sh = shorts(pool)
     half = x0 + 0.46 * (x1 - x0)
     a, b = (x1 - 0.46 * (x1 - x0), x1), (x0, half)
-    left = (a if hand.rtl else b)
-    right = (b if hand.rtl else a)
+    left = a if hand.rtl else b
+    right = b if hand.rtl else a
     ya = yb = y
     for t in sh[:3]:
         ya = paragraph(hand, t, left[0], left[1], ya, align="start")
@@ -445,7 +505,9 @@ def outline(hand, pool, target, rng):
         m = hand.strip(mark)
         if m:
             c.put(m, x1 - ind - m.alpha.shape[1] if hand.rtl else x0 + ind, y, hand.rgb)
-        y = paragraph(hand, t, x0 + (0 if hand.rtl else ind + step), x1 - (ind + step if hand.rtl else 0), y, align="start")
+        y = paragraph(
+            hand, t, x0 + (0 if hand.rtl else ind + step), x1 - (ind + step if hand.rtl else 0), y, align="start"
+        )
 
 
 def quote(hand, pool, target, rng):
@@ -473,17 +535,31 @@ def contacts(hand, pool, target, rng):
         if not _more(hand, target) or y > c.y_max - _pitch(hand):
             break
         name = hand.strip(hand.wrap(t, 0.55 * (x1 - x0))[0])
-        num = hand.strip(f"+{rng.randint(1, 99)} {rng.randint(100, 999)} {rng.randint(100, 999)} {rng.randint(10, 99)} {rng.randint(10, 99)}")
+        num = hand.strip(
+            f"+{rng.randint(1, 99)} {rng.randint(100, 999)} {rng.randint(100, 999)} {rng.randint(10, 99)} {rng.randint(10, 99)}"
+        )
         if not name or not num:
             continue
         nx = x1 - name.alpha.shape[1] if hand.rtl else x0
         ex = x0 if hand.rtl else x1 - num.alpha.shape[1]
         c.put(name, nx, y, hand.rgb)
         c.put(num, ex, y, hand.rgb)
-        lo, hi = sorted((nx + name.alpha.shape[1] if not hand.rtl else ex + num.alpha.shape[1] + 6,
-                         ex - 6 if not hand.rtl else nx - 6))
+        lo, hi = sorted(
+            (
+                nx + name.alpha.shape[1] if not hand.rtl else ex + num.alpha.shape[1] + 6,
+                ex - 6 if not hand.rtl else nx - 6,
+            )
+        )
         for x in np.arange(lo + 4, hi, 7):
-            c.stroke(x, y + name.alpha.shape[0] * 0.8, x + 1.5, y + name.alpha.shape[0] * 0.8, hand.rgb, hand.pen, hand.density)
+            c.stroke(
+                x,
+                y + name.alpha.shape[0] * 0.8,
+                x + 1.5,
+                y + name.alpha.shape[0] * 0.8,
+                hand.rgb,
+                hand.pen,
+                hand.density,
+            )
         y += _pitch(hand) * 1.1
 
 
@@ -507,10 +583,38 @@ def corrections(hand, pool, target, rng):
                 c.stroke(x0 + a, yy, x0 + a + span, yy + rng.uniform(-2, 2), hand.rgb, hand.pen, hand.density)
                 ins = hand.strip(piece.split()[0] if " " in piece else piece[:3])
                 if ins:
-                    c.put(ins.with_alpha(cv2.resize(ins.alpha, None, fx=0.7, fy=0.7), counted=False), x0 + a, y - 0.4 * h, hand.rgb)
+                    c.put(
+                        ins.with_alpha(cv2.resize(ins.alpha, None, fx=0.7, fy=0.7), counted=False),
+                        x0 + a,
+                        y - 0.4 * h,
+                        hand.rgb,
+                    )
             y += pitch_now
         y += 0.4 * _pitch(hand)
 
 
-LAYOUTS = {f.__name__: f for f in (plain, blocks, notes, letter, math, table, diary, recipe, checklist, cornell, twocol,
-                                  minutes, poem, qa, schedule, application, outline, quote, contacts, corrections)}
+LAYOUTS = {
+    f.__name__: f
+    for f in (
+        plain,
+        blocks,
+        notes,
+        letter,
+        math,
+        table,
+        diary,
+        recipe,
+        checklist,
+        cornell,
+        twocol,
+        minutes,
+        poem,
+        qa,
+        schedule,
+        application,
+        outline,
+        quote,
+        contacts,
+        corrections,
+    )
+}

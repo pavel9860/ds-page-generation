@@ -1,25 +1,30 @@
 """python -m dspages.ingest <step> [RUN]
 
-  exclude SNAPSHOT_GOT_CSV DIR...   images of the snapshot that are in none of the DIRs (dropped by hand) are never ingested
-  register [DIR...]                 new documents (acquired pdf, Lens images, images of loose DIRs) -> ids above the largest
-  select                            pages per document (budget, most different first); text-layer language of the pdfs
-  shards RUN                        768 x 1024 JPEG shards WORK/npz/RUN
-  push RUN [LIMIT] | wait RUN | fetch RUN   Kaggle: dataset, GPU kernel (embedding, hw / text boxes, fill / pic), outputs
-  merge RUN                         outputs -> emb_out, hw_det, scan_pct; then the embedding language of the rest; lang_res / src_urls
-  drop-candidates DIR               corpus pages of the candidate jpgs deleted by hand from DIR (queue.csv) -> out of emb_out, hw_det, scan_pct
-  place                             merged documents -> handwritten/, filled_forms/ or untyped_tmp/ (named <hash>_<lang>.<ext>), plan + manifest follow
-  check-lang                        held-out accuracy of the embedding language vote
-  status"""
+exclude SNAPSHOT_GOT_CSV DIR...   images of the snapshot that are in none of the DIRs (dropped by hand) are never ingested
+register [DIR...]                 new documents (acquired pdf, Lens images, images of loose DIRs) -> ids above the largest
+select                            pages per document (budget, most different first); text-layer language of the pdfs
+shards RUN                        768 x 1024 JPEG shards WORK/npz/RUN
+push RUN [LIMIT] | wait RUN | fetch RUN   Kaggle: dataset, GPU kernel (embedding, hw / text boxes, fill / pic), outputs
+merge RUN                         outputs -> emb_out, hw_det, scan_pct; then the embedding language of the rest; lang_res / src_urls
+drop-candidates DIR               corpus pages of the candidate jpgs deleted by hand from DIR (queue.csv) -> out of emb_out, hw_det, scan_pct
+place                             merged documents -> handwritten/, filled_forms/ or untyped_tmp/ (named <hash>_<lang>.<ext>), plan + manifest follow
+check-lang                        held-out accuracy of the embedding language vote
+status"""
+
 import sys
 
-from . import drop, place, kaggle, lang, merge, pages, registry
+from . import drop, kaggle, lang, merge, pages, place, registry
 from .registry import db
 
 
 def status():
     c = db()
-    for q in ("select kind, state, count(*), sum(picked) from docs group by 1, 2", "select lang_src, count(*) from docs group by 1",
-              "select count(*), count(shard) from pages", "select count(*) from excluded"):
+    for q in (
+        "select kind, state, count(*), sum(picked) from docs group by 1, 2",
+        "select lang_src, count(*) from docs group by 1",
+        "select count(*), count(shard) from pages",
+        "select count(*) from excluded",
+    ):
         print(q.split("from")[1].strip().split(" group")[0], c.execute(q).fetchall())
 
 

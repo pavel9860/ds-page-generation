@@ -9,6 +9,7 @@ matched to its PDF page with a usable layer; scans and pictures without a PDF ar
 
 inventory() -> [Item]
 """
+
 import csv
 import json
 import re
@@ -19,24 +20,25 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-import pagekind_eval as V                                     # noqa: E402
-from dspages.hand import corpus                               # noqa: E402
+import pagekind_eval as V  # noqa: E402
+
+from dspages.hand import corpus  # noqa: E402
 
 ROOT = V.UV / "pagetype_labelled"
-SCAN_ONLY = ("cache", "pages_photo", "handwritten")            # classes of scans only: not digital page kinds
-NO_LANG = ("maps", "blueprints", "music")                       # language is not a target of these classes
+SCAN_ONLY = ("cache", "pages_photo", "handwritten")  # classes of scans only: not digital page kinds
+NO_LANG = ("maps", "blueprints", "music")  # language is not a target of these classes
 LANG_FILE = V.CACHE / "pagekind_lang.json"
-LAYER = ("text", "encoding lost", "vector / painted text")     # plan.cls with a PDF layer: formatting features exist
+LAYER = ("text", "encoding lost", "vector / painted text")  # plan.cls with a PDF layer: formatting features exist
 CODE = re.compile(r"_([a-z]{2,3})$")
 
 
 @dataclass
 class Item:
     cls: str
-    id: str                    # <class>/<file name>
+    id: str  # <class>/<file name>
     doc: str
     emb: np.ndarray | None
-    pdf: str | None            # PDF with a usable layer, else None
+    pdf: str | None  # PDF with a usable layer, else None
     page: int
     lang: str | None
 
@@ -72,16 +74,25 @@ def inventory():
                 r = src.get(str(f))
                 d = corpus.doc_id(r["pdf"]) if r else f.stem
                 pdf = r["pdf"] if r and cls.get(d) in LAYER else None
-                item = Item(c, f"{c}/{f.name}", d, pe.get(f.stem), pdf, r["page"] if pdf else -1, lang.get(d) if r else None)
+                item = Item(
+                    c, f"{c}/{f.name}", d, pe.get(f.stem), pdf, r["page"] if pdf else -1, lang.get(d) if r else None
+                )
             elif f.suffix.lower() == ".pdf":
                 d = corpus.doc_id(f.name)
                 k = row0.get(d)
                 m = CODE.search(f.stem)
-                item = Item(c, f"{c}/{f.name}", d, np.asarray(emb[k], np.float32) if k is not None else None,
-                            str(f) if cls.get(d, "text") in LAYER else None, 0, lang.get(d) or (m.group(1) if m else None))
+                item = Item(
+                    c,
+                    f"{c}/{f.name}",
+                    d,
+                    np.asarray(emb[k], np.float32) if k is not None else None,
+                    str(f) if cls.get(d, "text") in LAYER else None,
+                    0,
+                    lang.get(d) or (m.group(1) if m else None),
+                )
             else:
                 continue
-            if item.pdf is None:                         # digital-born pages only: a jpg without its PDF page, a scan, is not one
+            if item.pdf is None:  # digital-born pages only: a jpg without its PDF page, a scan, is not one
                 continue
             item.lang = item.lang or named.get(f.name) or read.get(item.id)
             if item.lang in ("none", ""):

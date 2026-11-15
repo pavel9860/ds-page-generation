@@ -14,15 +14,15 @@ rules on Z (PCA-128 of the 1536-d SigLIP 2 vectors), their spread numbers, and 1
   plot     -> <out>/positions.png: the picks of every option over the pool density, on PCA 1-2 and on t-SNE (SAMPLE pool pages + the picks)
 
 python tools/ds1k_options.py select [--n 1000] | render [--out DIR] [--fmt npz|jpg] | plot [--out DIR]"""
+
 import argparse
 import os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
+import ds100k as D
 import numpy as np
 import pandas as pd
-
-import ds100k as D
 
 OUT = D.OUT / "opt1k"
 K, REF, Q = 10, 50_000, 0.98
@@ -36,13 +36,14 @@ SAMPLE = 20_000
 def knn_dist(Z, R, k, block=2_000):
     """Distance of every row of Z to its k-th nearest row of R (a row of Z that is in R skips itself: k + 1 taken, the first dropped when 0)."""
     import torch
+
     torch.set_num_threads(WORKERS)
     Rt = torch.from_numpy(R)
-    rn = (Rt ** 2).sum(1)
+    rn = (Rt**2).sum(1)
     out = []
     for a in range(0, len(Z), block):
-        z = torch.from_numpy(Z[a:a + block])
-        d = ((z ** 2).sum(1, keepdim=True) - 2 * z @ Rt.T + rn).clamp_(min=0)
+        z = torch.from_numpy(Z[a : a + block])
+        d = ((z**2).sum(1, keepdim=True) - 2 * z @ Rt.T + rn).clamp_(min=0)
         v = d.topk(k + 1, dim=1, largest=False).values
         out.append(torch.where(v[:, 0] < 1e-10, v[:, k], v[:, k - 1]).sqrt().numpy())
     return np.concatenate(out)
@@ -50,6 +51,7 @@ def knn_dist(Z, R, k, block=2_000):
 
 def kmeans(X, k, seed=0):
     from sklearn.cluster import MiniBatchKMeans
+
     km = MiniBatchKMeans(k, random_state=seed, batch_size=max(8192, 3 * k), n_init=1, max_iter=50).fit(X)
     return km.cluster_centers_.astype(np.float32), km.labels_
 
@@ -60,10 +62,10 @@ def hkm(Z, n, rng):
     for k in LEVELS:
         X, lab = kmeans(X, k)
         labs.append(lab)
-    leaf = labs[0]                                                      # page -> level-0 cluster
+    leaf = labs[0]  # page -> level-0 cluster
     paths = [leaf]
     for lab in labs[1:]:
-        paths.append(lab[paths[-1]])                                    # page -> cluster at each level
+        paths.append(lab[paths[-1]])  # page -> cluster at each level
     pick = []
 
     def take(mask, level, m):
@@ -89,11 +91,25 @@ def metrics(name, idx, Z, P, edge):
     _, cov = D.nearest(Z, Z[idx])
     nn = knn_dist(Z[idx], Z[idx], 1)
     fs = S.folder.value_counts(normalize=True)
-    return dict(option=name, pages=len(S), docs=S.doc.nunique(), langs=S.lang.nunique(),
-                cover_mean=cov.mean(), cover_p50=np.median(cov), cover_p99=np.quantile(cov, 0.99), cover_max=cov.max(),
-                set_nn_mean=nn.mean(), set_nn_min=nn.min(), edge_share=edge[idx].mean(),
-                en_share=(S.lang == "en").mean(), hw_share=(S.hw > 0).mean(), fill_mean=S.fill.mean(), pic_mean=S.pic.mean(),
-                text_mean=S.text.mean(), top_folders=", ".join(f"{k} {v:.2f}" for k, v in fs.head(4).items()))
+    return dict(
+        option=name,
+        pages=len(S),
+        docs=S.doc.nunique(),
+        langs=S.lang.nunique(),
+        cover_mean=cov.mean(),
+        cover_p50=np.median(cov),
+        cover_p99=np.quantile(cov, 0.99),
+        cover_max=cov.max(),
+        set_nn_mean=nn.mean(),
+        set_nn_min=nn.min(),
+        edge_share=edge[idx].mean(),
+        en_share=(S.lang == "en").mean(),
+        hw_share=(S.hw > 0).mean(),
+        fill_mean=S.fill.mean(),
+        pic_mean=S.pic.mean(),
+        text_mean=S.text.mean(),
+        top_folders=", ".join(f"{k} {v:.2f}" for k, v in fs.head(4).items()),
+    )
 
 
 def cmd_select(a):
@@ -104,9 +120,11 @@ def cmd_select(a):
     edge = kd > np.quantile(kd, Q)
     inner = np.flatnonzero(~edge)
     print(f"pool {len(Z)}, edge pages (k{K} distance > q{Q}) {int(edge.sum())}", flush=True)
-    sel = {"random": rng.choice(len(Z), a.n, replace=False),
-           "fps": D.fps_plain(Z, a.n),
-           "fps_in": inner[D.fps_plain(Z[inner], a.n)]}
+    sel = {
+        "random": rng.choice(len(Z), a.n, replace=False),
+        "fps": D.fps_plain(Z, a.n),
+        "fps_in": inner[D.fps_plain(Z[inner], a.n)],
+    }
     C, _ = kmeans(Z, a.n)
     sel["kmeans"] = D.nearest(C, Z)[0]
     sel["hkm"] = hkm(Z, a.n, np.random.default_rng(0))
@@ -127,13 +145,16 @@ def cmd_select(a):
 def page_job(job):
     import cv2
     import diverse_ds as DD
+
     path, page, out = job
     try:
         im = DD.load_page(path, page, H)
         if im is None:
             return out, None
         landscape = im.shape[1] > im.shape[0]
-        im = cv2.resize(im, (W, H), interpolation=cv2.INTER_AREA if im.shape[0] * im.shape[1] > W * H else cv2.INTER_CUBIC)
+        im = cv2.resize(
+            im, (W, H), interpolation=cv2.INTER_AREA if im.shape[0] * im.shape[1] > W * H else cv2.INTER_CUBIC
+        )
         if out.endswith(".jpg"):
             cv2.imwrite(out, im, [cv2.IMWRITE_JPEG_QUALITY, 92])
         else:
@@ -149,7 +170,11 @@ def cmd_render(a):
     pages.mkdir(parents=True, exist_ok=True)
     S = {o: pd.read_parquet(OUT / f"{o}.parquet") for o in OPTIONS}
     U = pd.concat(S.values()).drop_duplicates(["doc", "page"])
-    jobs = [(r.path, int(r.page), str(pages / f"{r.doc}_{r.page}{ext}")) for r in U.itertuples() if not (pages / f"{r.doc}_{r.page}{ext}").exists()]
+    jobs = [
+        (r.path, int(r.page), str(pages / f"{r.doc}_{r.page}{ext}"))
+        for r in U.itertuples()
+        if not (pages / f"{r.doc}_{r.page}{ext}").exists()
+    ]
     print(len(U), "pages,", len(jobs), "to render", flush=True)
     bad, land = [], 0
     with ProcessPoolExecutor(WORKERS) as ex:
@@ -175,9 +200,11 @@ def cmd_render(a):
 
 def cmd_plot(a):
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from sklearn.manifold import TSNE
+
     Z = np.load(D.OUT / "Z.npy", mmap_mode="r")
     S = {o: pd.read_parquet(OUT / f"{o}.parquet").pool_i.to_numpy() for o in OPTIONS}
     picks = np.unique(np.concatenate(list(S.values())))
@@ -193,7 +220,7 @@ def cmd_plot(a):
         a0.hexbin(Zp[:, 0], Zp[:, 1], gridsize=80, bins="log", cmap="Greys")
         a0.scatter(Z[np.sort(p), 0], Z[np.sort(p), 1], s=4, c="tab:red")
         a0.set_title(f"{o}: PCA 1-2")
-        a1.hexbin(T[:len(bg), 0], T[:len(bg), 1], gridsize=80, bins="log", cmap="Greys")
+        a1.hexbin(T[: len(bg), 0], T[: len(bg), 1], gridsize=80, bins="log", cmap="Greys")
         tp = np.array([tpos[i] for i in p])
         a1.scatter(tp[:, 0], tp[:, 1], s=4, c="tab:red")
         a1.set_title(f"{o}: t-SNE ({len(bg)} pool pages + picks)")

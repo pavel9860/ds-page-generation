@@ -1,4 +1,5 @@
 """A batch of forms for the agents with the printed label of every box (from the page text) and the language name"""
+
 import json
 import sys
 from dataclasses import replace

@@ -1,4 +1,5 @@
 """Kaggle side: the detector as a dataset, one CPU script kernel per group of shard datasets, and the results merged into the manifest."""
+
 import json
 import shutil
 import sqlite3
@@ -10,15 +11,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ..kaggle_api import api  # noqa: F401  (used by callers as <module>.api)
 from .config import CONFIG
 from .paths import EMB, MANIFEST_DB, MODEL, PARQUET, PCT, WORK, doc_hash
-from ..kaggle_api import api  # noqa: F401  (used by callers as <module>.api)
 
 SHIPPED = ("__init__.py", "config.py", "maps.py", "tiles.py", "features.py", "detector.py", "shards.py")
 DETECTOR_DIR = WORK / "kaggle_detector"
 KERNEL = Path(__file__).with_name("kernel.py")
-
-
 
 
 def export(cfg=CONFIG):
@@ -30,7 +29,15 @@ def export(cfg=CONFIG):
         shutil.copy(MODEL / f, DETECTOR_DIR / f)
     for f in SHIPPED:
         shutil.copy(Path(__file__).with_name(f), DETECTOR_DIR / f)
-    (DETECTOR_DIR / "dataset-metadata.json").write_text(json.dumps({"title": k.detector_dataset, "id": f"{k.user}/{k.detector_dataset}", "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+    (DETECTOR_DIR / "dataset-metadata.json").write_text(
+        json.dumps(
+            {
+                "title": k.detector_dataset,
+                "id": f"{k.user}/{k.detector_dataset}",
+                "licenses": [{"name": "CC-BY-NC-SA-4.0"}],
+            }
+        )
+    )
     print(sorted(p.name for p in DETECTOR_DIR.iterdir()), "in", DETECTOR_DIR)
 
 
@@ -53,9 +60,26 @@ def push(kernel, datasets, limit=0, only="", internet=False, cfg=CONFIG):
         script = f'import os\nos.environ["LIMIT"] = "{limit}"\nos.environ["ONLY"] = "{only}"\n' + script
     (folder / KERNEL.name).write_text(script)
     sources = [f"{c.user}/{c.shard_dataset.format(d)}" for d in datasets] + [f"{c.user}/{c.detector_dataset}"]
-    (folder / "kernel-metadata.json").write_text(json.dumps({
-        "id": f"{c.user}/{kernel}", "title": kernel, "code_file": KERNEL.name, "language": "python", "kernel_type": "script", "is_private": True, "enable_gpu": False,
-        "enable_tpu": False, "enable_internet": internet, "keywords": [], "dataset_sources": sources, "kernel_sources": [], "competition_sources": [], "model_sources": []}))
+    (folder / "kernel-metadata.json").write_text(
+        json.dumps(
+            {
+                "id": f"{c.user}/{kernel}",
+                "title": kernel,
+                "code_file": KERNEL.name,
+                "language": "python",
+                "kernel_type": "script",
+                "is_private": True,
+                "enable_gpu": False,
+                "enable_tpu": False,
+                "enable_internet": internet,
+                "keywords": [],
+                "dataset_sources": sources,
+                "kernel_sources": [],
+                "competition_sources": [],
+                "model_sources": [],
+            }
+        )
+    )
     print(k.kernels_push(str(folder)), flush=True)
 
 
@@ -79,14 +103,18 @@ def fetch(kernels, cfg=CONFIG):
         out = PCT / "out" / n
         shutil.rmtree(out, ignore_errors=True)
         out.mkdir(parents=True)
-        subprocess.run([sys.executable, "-m", "kaggle", "kernels", "output", f"{cfg.kaggle.user}/{n}", "-p", str(out)], check=False, timeout=3600)
+        subprocess.run(
+            [sys.executable, "-m", "kaggle", "kernels", "output", f"{cfg.kaggle.user}/{n}", "-p", str(out)],
+            check=False,
+            timeout=3600,
+        )
         print(n, len(list(out.glob("scan_pct_*.npz"))), "shard files", flush=True)
 
 
 def rerun(prefix, n, cfg=CONFIG):
     """n kernels <prefix>1.. over the shards of the shard datasets that no PCT/out/* has."""
     k, c = api(), cfg.kaggle
-    have = {f.stem[len("scan_pct_"):] for d in (PCT / "out").iterdir() for f in d.glob("scan_pct_*.npz")}
+    have = {f.stem[len("scan_pct_") :] for d in (PCT / "out").iterdir() for f in d.glob("scan_pct_*.npz")}
     missing = {}
     for d in c.shard_datasets:
         try:
@@ -113,8 +141,20 @@ def merge(cfg=CONFIG):
     parts = []
     for name in sorted(best):
         z = np.load(best[name])
-        parts.append(pd.DataFrame({"doc": z["ids"][:, 0], "page": z["ids"][:, 1], "fill": z["fill"], "pic": z["pic"],
-                                   "wx": z["win"][:, 0], "wy": z["win"][:, 1], "ww": z["win"][:, 2], "wh": z["win"][:, 3]}))
+        parts.append(
+            pd.DataFrame(
+                {
+                    "doc": z["ids"][:, 0],
+                    "page": z["ids"][:, 1],
+                    "fill": z["fill"],
+                    "pic": z["pic"],
+                    "wx": z["win"][:, 0],
+                    "wy": z["win"][:, 1],
+                    "ww": z["win"][:, 2],
+                    "wh": z["win"][:, 3],
+                }
+            )
+        )
     D = pd.concat(parts, ignore_index=True)
     D = D.iloc[np.argsort(D.fill.notna().to_numpy(), kind="stable")].drop_duplicates(["doc", "page"], keep="last")
     ids = np.load(EMB / "ids.npy").astype(np.int64)
@@ -127,8 +167,23 @@ def merge(cfg=CONFIG):
     D.to_parquet(PARQUET)
     E = D[D.hash.notna()].drop_duplicates(["hash", "page"])
     with sqlite3.connect(MANIFEST_DB, timeout=600) as db:
-        db.execute("create table if not exists scan_pct (hash text, page integer, fill real, pic real, wx real, wy real, ww real, wh real)")
+        db.execute(
+            "create table if not exists scan_pct (hash text, page integer, fill real, pic real, wx real, wy real, ww real, wh real)"
+        )
         db.execute("delete from scan_pct")
-        db.executemany("insert into scan_pct values (?,?,?,?,?,?,?,?)", E[["hash", "page", "fill", "pic", "wx", "wy", "ww", "wh"]].itertuples(index=False, name=None))
+        db.executemany(
+            "insert into scan_pct values (?,?,?,?,?,?,?,?)",
+            E[["hash", "page", "fill", "pic", "wx", "wy", "ww", "wh"]].itertuples(index=False, name=None),
+        )
         db.execute("create index if not exists scan_pct_hash on scan_pct (hash, page)")
-    print(len(D), "pages of", len(ids), f"in {PARQUET.name},", len(E), "in manifest.sqlite scan_pct;", int(D.fill.isna().sum()), "without a value\n", D[["fill", "pic"]].describe().round(3).to_string())
+    print(
+        len(D),
+        "pages of",
+        len(ids),
+        f"in {PARQUET.name},",
+        len(E),
+        "in manifest.sqlite scan_pct;",
+        int(D.fill.isna().sum()),
+        "without a value\n",
+        D[["fill", "pic"]].describe().round(3).to_string(),
+    )

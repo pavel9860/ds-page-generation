@@ -1,4 +1,5 @@
 """Page-level language dataset: candidate pages of the layout PDFs per language and type (text, tables, forms)."""
+
 import json
 import random
 import re
@@ -11,14 +12,9 @@ from hwsynth.scripts import text_script
 
 from .bucketing import KIND
 from .buckets import bucket_of
-from .config import Config
+from .config import BATCH, BINS, BODY_PT, BUCKET_NEED, FLOOR, NEED, OVERSAMPLE, Config  # noqa: F401
 
 TEXT_CATEGORIES = {"books_pdf", "scientific_paper", "other_docs", "exams", "bureaucracy"}
-NEED = {"text": 12, "tables": 4, "forms": 4}
-FLOOR = {"text": 3, "tables": 2, "forms": 2}
-BUCKET_NEED = {"text": 24, "tables": 8, "forms": 8}
-OVERSAMPLE = 4
-BODY_PT = (10.0, 16.0)
 CJK = {"zh", "ja", "ko", "th", "lo", "km", "my", "bo", "dz"}
 
 
@@ -49,10 +45,10 @@ def snippet(page, cjk):
     if cjk:
         t = re.sub(r"\s+", "", text)
         k = min(250, max(100, len(t) // 10))
-        return t[len(t) // 2 - k // 2:][:k] if len(t) >= 100 else None
+        return t[len(t) // 2 - k // 2 :][:k] if len(t) >= 100 else None
     w = text.split()
     k = min(100, max(30, len(w) // 10))
-    return " ".join(w[len(w) // 2 - k // 2:][:k]) if len(w) >= 30 else None
+    return " ".join(w[len(w) // 2 - k // 2 :][:k]) if len(w) >= 30 else None
 
 
 def pages_of(job):
@@ -66,8 +62,17 @@ def pages_of(job):
                 t = detect_type(doc[i])
                 s = t and snippet(doc[i], cjk)
                 if s and len(out) < 3:
-                    out.append(dict(lang=rec["language"], type=t, was_type=page_type(rec["category"]), path=rec["path"],
-                                    page=i, body_pt=rec["body_pt"], snippet=s))
+                    out.append(
+                        dict(
+                            lang=rec["language"],
+                            type=t,
+                            was_type=page_type(rec["category"]),
+                            path=rec["path"],
+                            page=i,
+                            body_pt=rec["body_pt"],
+                            snippet=s,
+                        )
+                    )
     except Exception:
         pass
     return out
@@ -78,7 +83,12 @@ def inventory(cfg: Config, manifest):
     recs = {}
     for line in open(manifest, encoding="utf-8"):
         r = json.loads(line)
-        if r.get("digital") and r.get("body_pt") and Path(r["path"]).exists() and BODY_PT[0] <= r["body_pt"] <= BODY_PT[1]:
+        if (
+            r.get("digital")
+            and r.get("body_pt")
+            and Path(r["path"]).exists()
+            and BODY_PT[0] <= r["body_pt"] <= BODY_PT[1]
+        ):
             recs[r["path"]] = r
     known = {Path(p).name for p in recs}
     for d in cfg.bg_folders:
@@ -98,7 +108,7 @@ def candidates(cfg: Config, keys, manifest, out):
     jobs = []
     for (lang, t), recs in by.items():
         random.Random(f"{lang}{t}").shuffle(recs)
-        jobs += [(r, lang in CJK) for r in recs[:NEED[t] * OVERSAMPLE]]
+        jobs += [(r, lang in CJK) for r in recs[: NEED[t] * OVERSAMPLE]]
     with ProcessPoolExecutor(cfg.workers) as ex, open(out, "w") as f:
         for pages in ex.map(pages_of, jobs, chunksize=16):
             for p in pages:
@@ -107,8 +117,6 @@ def candidates(cfg: Config, keys, manifest, out):
 
 
 ALIAS = {"kz": "kk", "tj": "tg", "fil": "tl", "nb": "no", "sh": "sr"}
-BINS = (10, 11, 12, 13, 14, 16.01)
-BATCH = 25
 
 
 def select(path, per_type=NEED, spare=1.5):
@@ -212,6 +220,10 @@ def rendered(pages, work, langs):
     out = []
     for lang in langs:
         for t, k in FLOOR.items():
-            files = [f for f in sorted(Path(work, "png").glob(f"{lang}_*.png")) if KIND[int(f.stem.rsplit("_", 1)[1])] == t]
-            out += [dict(lang=lang, type=t, path=str(f), page=0, render=True) for f in files[:max(0, k - have[(lang, t)])]]
+            files = [
+                f for f in sorted(Path(work, "png").glob(f"{lang}_*.png")) if KIND[int(f.stem.rsplit("_", 1)[1])] == t
+            ]
+            out += [
+                dict(lang=lang, type=t, path=str(f), page=0, render=True) for f in files[: max(0, k - have[(lang, t)])]
+            ]
     return out

@@ -6,4 +6,5 @@ make(plan, items) -> (rgb image, metadata): one page; see `python -m dspages.han
 
 def make(plan, items):
     from .page import make as _make
+
     return _make(plan, items)

@@ -4,6 +4,7 @@ index to DIR/<split>/layouts/ and DIR/<split>/geometry/ when present.
 
 python tools/split.py DIR [--frac 0.96 0.02 0.02] [--seed 0]
 """
+
 import argparse
 import os
 from pathlib import Path
@@ -20,7 +21,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     out = Path(a.out)
-    files = {part: {} for part in PARTS}                  # one listing per part, not one glob per sample
+    files = {part: {} for part in PARTS}  # one listing per part, not one glob per sample
     for part in PARTS:
         if (out / part).is_dir():
             for e in os.scandir(out / part):

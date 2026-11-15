@@ -1,12 +1,12 @@
 """Manifest entries and their page rasters."""
+
 import json
 
 import cv2
 import numpy as np
 
+from .config import RASTER_ZOOM  # noqa: F401
 from .deskew import rotate90, rotate_full_res
-
-RASTER_ZOOM = 2.0
 
 
 def load_manifest(path):
@@ -23,6 +23,7 @@ def raster_page(entry, scale=1.0):
     manifest's angles. PDF pages are rendered at that scale (vector sharp); images are resized."""
     if is_pdf(entry):
         import pymupdf as fitz
+
         with fitz.open(entry["source_path"]) as doc:
             z = RASTER_ZOOM * scale
             pix = doc[entry["page_index"]].get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csGRAY, alpha=False)

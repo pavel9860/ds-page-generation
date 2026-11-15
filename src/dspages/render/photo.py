@@ -6,6 +6,7 @@ visibility from a depth map rendered from each light sample, so the page shadows
 Everything is single-channel luminance. Camera effects run on linear luminance in [0, 1]: depth-of-field blur,
 motion blur, vignetting, exposure and gamma, sensor noise at an ISO, JPEG.
 """
+
 import cv2
 import numpy as np
 from numba import njit
@@ -14,11 +15,8 @@ from ..config import LightCfg, RenderCfg
 from ..layout.paper import variable_blur
 from ..noise import Field, _lattice, value_noise
 from .camera import look_at, project
+from .config import AREA_SAMPLES, PLAIN_GRAY_PROB, PLAIN_PAPER_PROB, SHADOW_BIAS_MM, SHADOW_PX, TONE_LEVELS  # noqa: F401
 from .raster import rasterize
-
-AREA_SAMPLES = 6
-SHADOW_PX = 384
-SHADOW_BIAS_MM = 0.6
 
 
 def _u(rng, r):
@@ -36,8 +34,13 @@ def sample_light(rng, c: LightCfg, target):
         a = np.linspace(0, 2 * np.pi, AREA_SAMPLES, endpoint=False) + rng.uniform(0, 2 * np.pi)
         rad = r * np.sqrt(rng.uniform(0.2, 1, (AREA_SAMPLES, 1)))
         pts = centre + rad * np.stack([np.cos(a), np.sin(a), np.zeros_like(a)], -1)
-    return dict(points=pts, sharp=bool(sharp), ambient=_u(rng, c.ambient), specular=_u(rng, c.specular),
-                shininess=_u(rng, c.shininess))
+    return dict(
+        points=pts,
+        sharp=bool(sharp),
+        ambient=_u(rng, c.ambient),
+        specular=_u(rng, c.specular),
+        shininess=_u(rng, c.shininess),
+    )
 
 
 def shadow_maps(light, P, faces, target):
@@ -89,7 +92,7 @@ def _shade(Q, N, eye, pts, Rs, cams, depths, ambient, specular, shininess, bias)
             hx, hy, hz = lx + vx, ly + vy, lz + vz
             hn = np.sqrt(hx * hx + hy * hy + hz * hz)
             nh = max((nx * hx + ny * hy + nz * hz) / hn, 0.0)
-            acc += lit / 9.0 * (nl + specular * nh ** shininess)
+            acc += lit / 9.0 * (nl + specular * nh**shininess)
         out[i] = ambient + (1 - ambient) * acc / m
     return out
 
@@ -99,9 +102,19 @@ def shade(Q, N, eye, light, maps):
     Rs = np.stack([cam["R"] for cam, _ in maps])
     cams = np.array([[cam["f"], cam["cx"], cam["cy"]] for cam, _ in maps])
     depths = np.stack([d for _, d in maps]).astype(np.float64)
-    return _shade(np.ascontiguousarray(Q, np.float64), np.ascontiguousarray(N, np.float64), np.asarray(eye, float),
-                  light["points"].astype(np.float64), Rs, cams, depths, light["ambient"], light["specular"],
-                  light["shininess"], SHADOW_BIAS_MM)
+    return _shade(
+        np.ascontiguousarray(Q, np.float64),
+        np.ascontiguousarray(N, np.float64),
+        np.asarray(eye, float),
+        light["points"].astype(np.float64),
+        Rs,
+        cams,
+        depths,
+        light["ambient"],
+        light["specular"],
+        light["shininess"],
+        SHADOW_BIAS_MM,
+    )
 
 
 def table_points(cam, size, step=1, xs=None, ys=None):
@@ -109,10 +122,12 @@ def table_points(cam, size, step=1, xs=None, ys=None):
     if they do not)."""
     w, h = size
     if xs is None:
-        xs, ys = np.meshgrid(np.arange(0, w, step, dtype=np.float32) + step / 2,
-                             np.arange(0, h, step, dtype=np.float32) + step / 2)
-    d = np.stack([(xs - cam["cx"]) / cam["f"], (ys - cam["cy"]) / cam["f"],
-                 np.ones_like(xs)], -1) @ cam["R"].astype(np.float32)
+        xs, ys = np.meshgrid(
+            np.arange(0, w, step, dtype=np.float32) + step / 2, np.arange(0, h, step, dtype=np.float32) + step / 2
+        )
+    d = np.stack([(xs - cam["cx"]) / cam["f"], (ys - cam["cy"]) / cam["f"], np.ones_like(xs)], -1) @ cam["R"].astype(
+        np.float32
+    )
     t = -cam["eye"][2] / d[..., 2]
     Q = cam["eye"] + t[..., None] * d
     Q[t <= 0] = np.nan
@@ -191,7 +206,7 @@ def _plain(rng, x, y, sd, n):
         width, mid, half = rng.uniform(0.15, 0.6), rng.uniform(-300, 300), rng.uniform(5, 80)
         tone = rng.choice((-1, 1)) * rng.uniform(0.15, 0.35)
         ends = c * np.cos(th) - (mid + np.array([-half, half])) * np.sin(th)
-        i = order[np.searchsorted(xs, ends.min() - width - 1):np.searchsorted(xs, ends.max() + width + 1)]
+        i = order[np.searchsorted(xs, ends.min() - width - 1) : np.searchsorted(xs, ends.max() + width + 1)]
         d = np.abs(x[i] * np.cos(th) + y[i] * np.sin(th) - c)
         along = -x[i] * np.sin(th) + y[i] * np.cos(th)
         g[i[(d < width) & (np.abs(along - mid) < half)]] += tone
@@ -314,9 +329,31 @@ def _carpet(rng, x, y, sd, n):
     return 0.4 + 0.2 * cid + 0.25 * d1 + 0.2 * n.fbm(sd + 1, x, y, rng.uniform(30, 200), 4)
 
 
-TEXTURES = (_wood, _fabric, _marble, _granite, _tiles, _felt, _plain, _leather, _terrazzo, _cork, _pebbled, _gingham,
-            _plaid, _striped, _brushed, _perforated, _concrete, _cardboard, _speckle, _rattan, _knit, _wallpaper,
-            _carpet)
+TEXTURES = (
+    _wood,
+    _fabric,
+    _marble,
+    _granite,
+    _tiles,
+    _felt,
+    _plain,
+    _leather,
+    _terrazzo,
+    _cork,
+    _pebbled,
+    _gingham,
+    _plaid,
+    _striped,
+    _brushed,
+    _perforated,
+    _concrete,
+    _cardboard,
+    _speckle,
+    _rattan,
+    _knit,
+    _wallpaper,
+    _carpet,
+)
 
 
 def _surface(rng, x, y, n):
@@ -348,10 +385,6 @@ def _clutter(rng, x, y, g, reach):
     return g
 
 
-PLAIN_PAPER_PROB = 0.05
-PLAIN_GRAY_PROB = 0.05
-
-
 def _uniform(rng, x, y, lvl, paper, n):
     """Uniform level, or a linear or radial gradient from it; faint paper structure when paper."""
     kind = rng.integers(3)
@@ -366,8 +399,11 @@ def _uniform(rng, x, y, lvl, paper, n):
     if not paper:
         return np.clip(g, 0, 1).astype(np.float32)
     sd = int(rng.integers(1 << 30))
-    g = g * (1 + rng.uniform(0, 0.02) * n.fbm(sd, x, y, rng.uniform(0.5, 3), 3)
-             + rng.uniform(0, 0.02) * n.fbm(sd + 1, x, y, rng.uniform(10, 80), 4))
+    g = g * (
+        1
+        + rng.uniform(0, 0.02) * n.fbm(sd, x, y, rng.uniform(0.5, 3), 3)
+        + rng.uniform(0, 0.02) * n.fbm(sd + 1, x, y, rng.uniform(10, 80), 4)
+    )
     return np.clip(g, 0, 1).astype(np.float32)
 
 
@@ -403,7 +439,6 @@ def table_texture(rng, Q, px, ns):
     return (np.clip(g, 0, 1) ** rng.uniform(0.7, 1.4)).astype(np.float32)
 
 
-TONE_LEVELS = 4096
 SRGB_TO_LINEAR = ((np.arange(256) / 255.0) ** 2.2).astype(np.float32)
 
 
@@ -430,7 +465,8 @@ def camera_effects(rng, img, depth, page_mask, c: RenderCfg):
     if "vignetting" in fx:
         yy, xx = np.ogrid[0:h, 0:w]
         gain = gain - _u(rng, fx["vignetting"].params["strength"]) * (
-            ((xx - w / 2) ** 2 + (yy - h / 2) ** 2) / (0.25 * (w * w + h * h))).astype(np.float32)
+            ((xx - w / 2) ** 2 + (yy - h / 2) ** 2) / (0.25 * (w * w + h * h))
+        ).astype(np.float32)
     gamma = 1.0
     if "exposure" in fx:
         p = fx["exposure"].params

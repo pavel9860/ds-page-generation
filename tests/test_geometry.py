@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
-
 from conftest import DATA
+
 from dspages.creases import deep, shallow
 from dspages.geometry.scenes import sample_ends
 from dspages.geometry.strip import solve_strip
@@ -49,16 +49,23 @@ def test_scene_feasibility(full_small):
                 prev = (p, h)
             for hf in sc["halves"] or ():
                 assert c.open_deg[0] - 1e-6 <= np.degrees(hf["clamp"]) <= c.open_deg[1] + 1e-6
-                assert all(H <= c.book_reach * s0 * np.sin(hf["clamp"]) + 1e-12 and s1 == L / 2 for s0, s1, H in hf["base"])
+                assert all(
+                    H <= c.book_reach * s0 * np.sin(hf["clamp"]) + 1e-12 and s1 == L / 2 for s0, s1, H in hf["base"]
+                )
             if sc["folds"]:
                 total = np.degrees((sc["clamp"] or 0) + sum(abs(t) for _, t, _ in sc["folds"]))
                 assert total <= (c.fold_total_deg_supported if sc["supports"] else c.fold_total_deg) + 1e-6
                 assert all(abs(np.degrees(t)) <= c.fold_angle_deg[1] + 1e-6 for _, t, _ in sc["folds"])
         if sa["halves"]:
-            assert all(abs(ha["clamp"] - hb["clamp"]) <= np.radians(c.open_side_b_deg) + 1e-9 for ha, hb in zip(sa["halves"], sb["halves"]))
+            assert all(
+                abs(ha["clamp"] - hb["clamp"]) <= np.radians(c.open_side_b_deg) + 1e-9
+                for ha, hb in zip(sa["halves"], sb["halves"])
+            )
         for f in sa["folds"]:
-            assert all(f[0] <= min(a, b) - c.fold_min_gap + 1e-12 or f[0] >= max(a, b) + c.fold_min_gap - 1e-12
-                       for (a, _), (b, _) in zip(sa["supports"], sb["supports"]))
+            assert all(
+                f[0] <= min(a, b) - c.fold_min_gap + 1e-12 or f[0] >= max(a, b) + c.fold_min_gap - 1e-12
+                for (a, _), (b, _) in zip(sa["supports"], sb["supports"])
+            )
 
 
 def _arc(p):
@@ -67,9 +74,15 @@ def _arc(p):
 
 def _conds(P):
     for i, (combo, _) in enumerate(P.geometry.scene.combos):
-        yield dict(combo=combo, two=not combo[3] and i % 2 == 0, along_long=bool(i % 2),
-                   bend_dir=float(-40 + 7 * i), gsm=P.paper.gsm[i % len(P.paper.gsm)], shallow=bool(i % 2),
-                   deep=("medium", "heavy")[i % 2] if combo[3] else "light" if i % 4 == 1 else "")
+        yield dict(
+            combo=combo,
+            two=not combo[3] and i % 2 == 0,
+            along_long=bool(i % 2),
+            bend_dir=float(-40 + 7 * i),
+            gsm=P.paper.gsm[i % len(P.paper.gsm)],
+            shallow=bool(i % 2),
+            deep=("medium", "heavy")[i % 2] if combo[3] else "light" if i % 4 == 1 else "",
+        )
 
 
 @pytest.mark.parametrize("i", range(13))
@@ -88,8 +101,9 @@ def test_surface_isometric_on_table(full_small, i):
 
 
 def test_surface_right_handed_face_up(full_small):
-    cond = dict(combo=(False, 0, False, False), two=False, along_long=False, bend_dir=0.0, gsm=80,
-                shallow=False, deep="")
+    cond = dict(
+        combo=(False, 0, False, False), two=False, along_long=False, bend_dir=0.0, gsm=80, shallow=False, deep=""
+    )
     s = make_surface(np.random.default_rng(0), full_small.geometry, full_small.paper, cond)
     du = np.array([s["X"][0, -1] - s["X"][0, 0], s["Y"][0, -1] - s["Y"][0, 0], 0])
     dv = np.array([s["X"][-1, 0] - s["X"][0, 0], s["Y"][-1, 0] - s["Y"][0, 0], 0])
@@ -100,8 +114,9 @@ def test_crease_heights_bounded(full_small):
     g = full_small.geometry
     rng = np.random.default_rng(0)
     c = g.shallow
-    lines = shallow.sample(rng, 210, 297, c.mean_groups, c.p_isolated, c.mean_extra, c.radius_mm, c.spread_deg,
-                           c.singles_per_group, c.k)
+    lines = shallow.sample(
+        rng, 210, 297, c.mean_groups, c.p_isolated, c.mean_extra, c.radius_mm, c.spread_deg, c.singles_per_group, c.k
+    )
     assert np.abs(shallow.render(lines, 210, 297, 1.0, c.w_max_mm)).max() <= c.w_max_mm
     for level in ("light", "medium", "heavy"):
         h = deep.render(deep.sample(rng, 210, 297, level, g.deep), 210, 297, level, g.deep, 1.0)
@@ -111,20 +126,29 @@ def test_crease_heights_bounded(full_small):
 def test_a_surface_does_not_depend_on_what_ran_before(full_small):
     """The parts of a sample draw from their own streams: a layout made first does not change the page surface."""
     from dspages.layout import paper
-    cond = dict(combo=(False, 0, False, True), two=False, along_long=False, bend_dir=0.0, gsm=80, shallow=True,
-                deep="heavy")
+
+    cond = dict(
+        combo=(False, 0, False, True), two=False, along_long=False, bend_dir=0.0, gsm=80, shallow=True, deep="heavy"
+    )
     a = make_surface(np.random.default_rng(3), full_small.geometry, full_small.paper, cond)["Z"]
-    paper.apply(np.random.default_rng(9), np.full((300, 200), 255, np.uint8), 5.0, full_small.layout, full_small.geometry.shallow)
+    paper.apply(
+        np.random.default_rng(9),
+        np.full((300, 200), 255, np.uint8),
+        5.0,
+        full_small.layout,
+        full_small.geometry.shallow,
+    )
     b = make_surface(np.random.default_rng(3), full_small.geometry, full_small.paper, cond)["Z"]
     assert np.array_equal(a, b)
 
 
 def test_creases_stand_out_along_the_normal_of_a_tilted_sheet():
     from dspages.geometry.surface import _spaced
+
     x, y = np.linspace(0, 0.2, 200), np.linspace(0, 0.2, 190)
     t = 0.6
     P = np.stack([np.meshgrid(x * np.cos(t), y)[0], np.meshgrid(x, y)[1], np.meshgrid(x * np.sin(t), y)[0]], -1)
-    h = 0.002 * np.exp(-((np.meshgrid(x, y)[0] - 0.1) / 0.005) ** 2)
+    h = 0.002 * np.exp(-(((np.meshgrid(x, y)[0] - 0.1) / 0.005) ** 2))
     n = np.cross(np.gradient(P, axis=1), np.gradient(P, axis=0))
     Q = P + h[..., None] * n / np.linalg.norm(n, axis=-1, keepdims=True)
     for _ in range(2):

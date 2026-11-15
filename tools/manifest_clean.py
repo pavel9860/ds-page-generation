@@ -7,6 +7,7 @@
                                          # 4) the old names saved to WORK/old_names.parquet, then dropped: plan.orig_path / orig_name / new_name / src, old_meta.path; files and docs follow
                                          # 5) emb_out/manifest.jsonl paths follow; VACUUM
 Rename: every document with a 12-hex id and a language value (mul / xx = not detected, kept in the name); a name already taken stays. The manifest was backed up before (manifest.sqlite.bak_before_cleanup_*)."""
+
 import argparse
 import collections
 import json
@@ -25,9 +26,22 @@ INFO = LAYOUTS / "archive" / "info"
 WORK = Path(PATHS.uvtm) / "tests" / "work" / "manifest_clean"
 MOVES = INFO / "moves.jsonl"
 HEX = re.compile(r"(?<![0-9a-f])[0-9a-f]{12}(?![0-9a-f])")
-NO_LANG = frozenset({""})                    # mul / xx are kept as names: "language not detected"
+NO_LANG = frozenset({""})  # mul / xx are kept as names: "language not detected"
 SKIP_INDEX = ("archive/similar/", "archive/tmp/")
-DOC_TABLES = ("feats", "fonts", "fonts_done", "lang_res", "lang_text", "ft_probs", "ft_more", "lang_img", "lang_strip", "site_res", "docs", "plan")
+DOC_TABLES = (
+    "feats",
+    "fonts",
+    "fonts_done",
+    "lang_res",
+    "lang_text",
+    "ft_probs",
+    "ft_more",
+    "lang_img",
+    "lang_strip",
+    "site_res",
+    "docs",
+    "plan",
+)
 HASH_TABLES = ("old_meta", "old_pagetype", "joined", "labels", "jpeg_grid")
 
 
@@ -73,7 +87,10 @@ def make_plan():
             cur.append(None), status.append("gone" if not alt else "ambiguous")
     P["cur"], P["status"] = cur, status
     P["new_name"] = [target(d, l, e, c) if pd.notna(c) else None for d, l, e, c in zip(P.doc, P.lang, P.ext, P.cur)]
-    P["taken"] = [(LAYOUTS / c.rsplit("/", 1)[0] / n).exists() if pd.notna(c) and pd.notna(n) else False for c, n in zip(P.cur, P.new_name)]
+    P["taken"] = [
+        (LAYOUTS / c.rsplit("/", 1)[0] / n).exists() if pd.notna(c) and pd.notna(n) else False
+        for c, n in zip(P.cur, P.new_name)
+    ]
     WORK.mkdir(parents=True, exist_ok=True)
     P.to_parquet(WORK / "plan.parquet")
     print(P.status.value_counts().to_dict())
@@ -86,7 +103,7 @@ def make_plan():
 def cmd_apply(_):
     P = pd.read_parquet(WORK / "plan.parquet") if (WORK / "plan.parquet").exists() else make_plan()
     db = sqlite3.connect(LAYOUTS / "manifest.sqlite", timeout=600)
-    gone = P.doc[P.status == "gone"].tolist()           # ambiguous ones (several files of the hash) stay as they are
+    gone = P.doc[P.status == "gone"].tolist()  # ambiguous ones (several files of the hash) stay as they are
     print(len(gone), "documents without a file: rows dropped", flush=True)
     for t in DOC_TABLES:
         db.executemany(f"delete from {t} where doc=?", [(d,) for d in gone])
@@ -116,10 +133,18 @@ def cmd_apply(_):
                 db.commit()
     db.commit()
     print(done, "files renamed; log", log, flush=True)
-    pd.read_sql("select doc as hash, orig_path, orig_name, new_name, src, orig_folder from plan", db).to_parquet(WORK / "old_names.parquet")
+    pd.read_sql("select doc as hash, orig_path, orig_name, new_name, src, orig_folder from plan", db).to_parquet(
+        WORK / "old_names.parquet"
+    )
     pd.read_sql("select hash, path as old_path from old_meta", db).to_parquet(WORK / "old_meta_paths.parquet")
     print("old names kept in", WORK / "old_names.parquet", "and old_meta_paths.parquet", flush=True)
-    for t, c in (("plan", "orig_path"), ("plan", "orig_name"), ("plan", "new_name"), ("plan", "src"), ("old_meta", "path")):
+    for t, c in (
+        ("plan", "orig_path"),
+        ("plan", "orig_name"),
+        ("plan", "new_name"),
+        ("plan", "src"),
+        ("old_meta", "path"),
+    ):
         if c in {x[1] for x in db.execute(f"pragma table_info({t})")}:
             db.execute(f"alter table {t} drop column {c}")
     db.commit()

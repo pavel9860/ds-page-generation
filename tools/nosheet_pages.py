@@ -1,12 +1,15 @@
 """Plain page renders for the fonts that have no table and no glyph sheet (no embedded font program to draw glyphs from): up to PAGES pages per font, from the corpus documents that
 use it, as tests/legacy_pages/<font>_<document>_p<page>.png. Nothing else.
 python tools/nosheet_pages.py [family ...]"""
+
 import json
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-from dspages.layout import legacy as L, legacy_evidence as E, legacy_tables as T
+from dspages.layout import legacy as L
+from dspages.layout import legacy_evidence as E
+from dspages.layout import legacy_tables as T
 
 OUT = os.path.join(os.path.dirname(E.LAYOUTS), "tests", "legacy_pages")
 PAGES, DPI = 3, 110
@@ -18,7 +21,13 @@ def without_sheet():
     audit = json.load(open(os.path.join(T.TABLES, "AUDIT.json"), encoding="utf-8"))
     known = json.load(open(os.path.join(T.TABLES, "UNICODE_OK.json"), encoding="utf-8"))["fonts"]
     want = {r["family"]: r["script"] for r in cov if r["table"] is None}
-    want.update({f: v[0] for f, v in audit.items() if not v[0].startswith("CJK") and f not in want and f not in known and T.route(f) is None})
+    want.update(
+        {
+            f: v[0]
+            for f, v in audit.items()
+            if not v[0].startswith("CJK") and f not in want and f not in known and T.route(f) is None
+        }
+    )
     return {f: s for f, s in want.items() if not os.path.exists(os.path.join(E.READS, f, "glyphs.json"))}
 
 

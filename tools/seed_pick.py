@@ -11,6 +11,7 @@ pipeline reads a passage from it that passes the text filter (decoded legacy fon
   SEED_SET=v2 python tools/seed_pick.py [--hw 200 --filled 200 --notes 20]  ->  ds100k/seeds/<SEED_SET>/{hw,filled,notes}.csv (path, page, h, type,
   lang, dist (predicted), src: the language of a layout that is translated, else empty, edit)
 Texts and forms of the seeds (translated where src is set): tools/seed_texts.py, then the existing generators (see there)"""
+
 import argparse
 import os
 import pickle
@@ -27,14 +28,15 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent))
 import ds_targets as T  # noqa: E402
 import shift_test as ST  # noqa: E402
-from dspages.hand import corpus, langs, plan, texts  # noqa: E402
+
+from dspages.hand import corpus, plan, texts  # noqa: E402
 from dspages.hand.langs import EXPECT, NO_TEXT_LAYER  # noqa: E402
 from dspages.ingest.lang import garbled  # noqa: E402
 from dspages.layout import legacy  # noqa: E402
 
-OUT = T.D.OUT / "seeds" / os.environ.get("SEED_SET", "v2")                          # the seed set (SEED_SET= : the first set, ds100k/seeds)
+OUT = T.D.OUT / "seeds" / os.environ.get("SEED_SET", "v2")  # the seed set (SEED_SET= : the first set, ds100k/seeds)
 RUN = T.OUT / "n200k"
-COVER, PLAIN = 0.15, 0.8                         # targets a pick covers; share of Unicode letters of a plain page
+COVER, PLAIN = 0.15, 0.8  # targets a pick covers; share of Unicode letters of a plain page
 LANGS = sorted(l for l, s in EXPECT.items() if s != "Latin")
 
 
@@ -52,7 +54,21 @@ def passage(job):
     """(path, page, lang, follow): the passage the hand pipeline reads from the page (its first page is 1) and the next follow - 1 pages, None when it fails the
     text filter."""
     path, page, lang, follow = job
-    t = texts.passage((dict(path=str(corpus.resolve(path)), kind="article", doc=path, lang=lang, page=int(page) + 1, follow=follow, native=True, layout=True), 1))
+    t = texts.passage(
+        (
+            dict(
+                path=str(corpus.resolve(path)),
+                kind="article",
+                doc=path,
+                lang=lang,
+                page=int(page) + 1,
+                follow=follow,
+                native=True,
+                layout=True,
+            ),
+            1,
+        )
+    )
     return t if t and not garbled(t["text"]) and plan.usable(t, repeats=True) else None
 
 
@@ -67,7 +83,11 @@ def gate(job):
         text = pg.get_text()
     letters = [c for c in chars if c.isalpha()]
     if letters and legacy.native_share(letters, script) >= PLAIN and not any(legacy.stray(c, script) for c in chars):
-        return len(text) >= 120 and not garbled(text) and plan.usable(dict(text=text, lang=lang, kind="article"), repeats=True)
+        return (
+            len(text) >= 120
+            and not garbled(text)
+            and plan.usable(dict(text=text, lang=lang, kind="article"), repeats=True)
+        )
     return passage((path, page, lang, 1)) is not None
 
 
@@ -83,11 +103,13 @@ def pick(Z, R, cand, tg, n, edits, used):
     order = random.Random(0).sample(LANGS, len(LANGS))
     with ProcessPoolExecutor(6) as ex:
         while len(out) < n and any(v < quota for v in per.values()):
-            todo = [l for l in sorted(order, key=lambda x: per[x]) if per[l] < quota][:n - len(out)]
+            todo = [l for l in sorted(order, key=lambda x: per[x]) if per[l] < quota][: n - len(out)]
             land, dist, rank = {}, {}, {}
             for l in todo:
                 mine = lang == l
-                land[l] = np.where(mine[:, None], ST.landings(Z0, edits[0], lang, l, model), ST.landings(Z0, edits[1], lang, l, model))
+                land[l] = np.where(
+                    mine[:, None], ST.landings(Z0, edits[0], lang, l, model), ST.landings(Z0, edits[1], lang, l, model)
+                )
                 dist[l] = torch.cdist(torch.from_numpy(land[l]), tg[alive]).min(1).values.numpy()
                 key = dist[l].copy()
                 key[np.isin(docs, list(used))] = np.inf
@@ -96,11 +118,18 @@ def pick(Z, R, cand, tg, n, edits, used):
             pending = list(todo)
             while pending:
                 want = sorted({rank[l][ptr[l]] for l in pending if ptr[l] < len(rank[l])} - read.keys())
-                read.update(zip(want, ex.map(gate, [(R.path.iloc[cand[c]], R.page.iloc[cand[c]], lang[c]) for c in want], chunksize=1)))
+                read.update(
+                    zip(
+                        want,
+                        ex.map(
+                            gate, [(R.path.iloc[cand[c]], R.page.iloc[cand[c]], lang[c]) for c in want], chunksize=1
+                        ),
+                    )
+                )
                 nxt = []
                 for l in pending:
                     if ptr[l] >= len(rank[l]):
-                        per[l] = quota                                                         # no readable layout is left for the language
+                        per[l] = quota  # no readable layout is left for the language
                         continue
                     c = rank[l][ptr[l]]
                     if not read[c] or docs[c] in used:
@@ -129,19 +158,44 @@ def main():
     R = T.pages()
     Z = np.load(T.OUT / "aux" / "Z.npz")["Z"].astype(np.float32)
     OUT.mkdir(parents=True, exist_ok=True)
-    base = ~R.scan.to_numpy() & (R.text.to_numpy() >= 3) & R.lang.isin(EXPECT).to_numpy() & ~R.lang.isin(NO_TEXT_LAYER).to_numpy()
-    used, tg = set(), {c: targets(Z, R, c) for c in ("hw", "filled")}                    # a layout serves one class once; the targets a class covers are done
-    for name, cls, types, n, edits in (("hw", "hw", ("text", "books_pdf"), a.hw, ("hand", "tr_hand")),
-                                       ("filled", "filled", ("forms", "forms_clean"), a.filled, ("filled", "tr_filled")),
-                                       ("notes", "hw", ("text", "books_pdf", "magazines"), a.notes, ("hand", "tr_hand"))):
-        cand = np.flatnonzero(base & R.type.isin(types).to_numpy() & (R.text.to_numpy() <= (20 if name == "notes" else 10 ** 6)))
+    base = (
+        ~R.scan.to_numpy()
+        & (R.text.to_numpy() >= 3)
+        & R.lang.isin(EXPECT).to_numpy()
+        & ~R.lang.isin(NO_TEXT_LAYER).to_numpy()
+    )
+    used, tg = (
+        set(),
+        {c: targets(Z, R, c) for c in ("hw", "filled")},
+    )  # a layout serves one class once; the targets a class covers are done
+    for name, cls, types, n, edits in (
+        ("hw", "hw", ("text", "books_pdf"), a.hw, ("hand", "tr_hand")),
+        ("filled", "filled", ("forms", "forms_clean"), a.filled, ("filled", "tr_filled")),
+        ("notes", "hw", ("text", "books_pdf", "magazines"), a.notes, ("hand", "tr_hand")),
+    ):
+        cand = np.flatnonzero(
+            base & R.type.isin(types).to_numpy() & (R.text.to_numpy() <= (20 if name == "notes" else 10**6))
+        )
         S = pick(Z, R, cand, tg[cls], n, edits, used)
         land = np.stack([ST.landings(Z[[r]], e, [R.lang.iloc[r]], l)[0] for r, e, l in zip(S.row, S.edit, S.lang)])
         tg[cls] = tg[cls][torch.cdist(torch.from_numpy(tg[cls]), torch.from_numpy(land)).min(1).values.numpy() >= COVER]
-        S = pd.concat([R.iloc[S.row].reset_index(drop=True)[["path", "page", "h", "type"]], S[["lang", "dist", "src", "edit"]]], axis=1)
+        S = pd.concat(
+            [R.iloc[S.row].reset_index(drop=True)[["path", "page", "h", "type"]], S[["lang", "dist", "src", "edit"]]],
+            axis=1,
+        )
         S.to_csv(OUT / f"{name}.csv", index=False)
-        print(name, len(S), S.lang.nunique(), "languages, translated", int((S.src.fillna("") != "").sum()), "predicted dist median", round(S.dist.median(), 3),
-              "within COVER", round((S.dist < COVER).mean(), 3), flush=True)
+        print(
+            name,
+            len(S),
+            S.lang.nunique(),
+            "languages, translated",
+            int((S.src.fillna("") != "").sum()),
+            "predicted dist median",
+            round(S.dist.median(), 3),
+            "within COVER",
+            round((S.dist < COVER).mean(), 3),
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ or the folder is books / scientific papers. Passages are prose blocks of one pag
 
 python -m dspages.hand texts --out texts.jsonl [--per-lang 400] [--workers 11]
 """
+
 import argparse
 import json
 import os
@@ -18,21 +19,38 @@ from multiprocessing import Pool
 import numpy as np
 import pymupdf as fitz
 import regex
-
-from . import corpus, pagekind
-from ..layout import legacy, refont as R
-from .config import PATHS
 from hwsynth.scripts import script
+
 from ..ingest.lang import garbled
+from ..layout import legacy
+from ..layout import refont as R
+from . import corpus, pagekind
+from .config import (
+    PATHS,
+    SYMBOL_BULLET,  # noqa: F401
+)
 from .structure import to_items
 from .util import walk_text
 
 LAYOUTS = PATHS.layouts
 PROSE = {"plain", "formatted", "scientific", "magazines", "bureaucracy", "poems", "recieps"}
-FOLDER_KIND = {"books_pdf": "book", "scientific_paper": "paper", "text": "article", "bureaucracy": "letter",
-               "exams": "exam", "magazines": "magazine"}
-LABEL_KIND = {"plain": "article", "formatted": "article", "scientific": "paper", "magazines": "magazine",
-              "bureaucracy": "letter", "poems": "poem", "recieps": "recipe"}
+FOLDER_KIND = {
+    "books_pdf": "book",
+    "scientific_paper": "paper",
+    "text": "article",
+    "bureaucracy": "letter",
+    "exams": "exam",
+    "magazines": "magazine",
+}
+LABEL_KIND = {
+    "plain": "article",
+    "formatted": "article",
+    "scientific": "paper",
+    "magazines": "magazine",
+    "bureaucracy": "letter",
+    "poems": "poem",
+    "recieps": "recipe",
+}
 SCRIPT = {"en": "Latin"}
 
 
@@ -61,8 +79,7 @@ BULLET = regex.compile(r"^(?:(?:[•▪●◦‣⁃■□➢►\-–—*·
 STOP = regex.compile(r"[.!?。…:;।۔؟։]\W*$")
 
 
-SYMBOL_BULLET = {0xB7: "\u2022", 0xA7: "\u25aa", 0xD8: "\u27a2", 0xFC: "\u2713", 0xA8: "\u25fb", 0xE0: "\u2192", 0xB0: "\u00b0", 0xB1: "\u00b1"}
-SYMBOL = regex.compile(r"[\uf020-\uf0ff]")                                    # a symbol font's codes: ASCII below 0x80, bullets and arrows above
+SYMBOL = regex.compile(r"[\uf020-\uf0ff]")  # a symbol font's codes: ASCII below 0x80, bullets and arrows above
 
 
 def _symbol(m):
@@ -71,8 +88,13 @@ def _symbol(m):
 
 
 PRESENTATION = regex.compile(r"[\ufb50-\ufdff\ufe70-\ufefc]+")
-ARABIC_LETTERS = str.maketrans("ھیکۀ", "هيكة")                                # an Arabic text set in a Persian / Urdu font: its heh, yeh, kaf take those codes
-HOMOGLYPH = {"Cyrillic": dict(zip("ABCEHKMOPTXYaceopxyi", "АВСЕНКМОРТХУасеорхуі")), "Greek": dict(zip("ABEHIKMNOPTXYZovu", "ΑΒΕΗΙΚΜΝΟΡΤΧΥΖονυ"))}
+ARABIC_LETTERS = str.maketrans(
+    "ھیکۀ", "هيكة"
+)  # an Arabic text set in a Persian / Urdu font: its heh, yeh, kaf take those codes
+HOMOGLYPH = {
+    "Cyrillic": dict(zip("ABCEHKMOPTXYaceopxyi", "АВСЕНКМОРТХУасеорхуі")),
+    "Greek": dict(zip("ABEHIKMNOPTXYZovu", "ΑΒΕΗΙΚΜΝΟΡΤΧΥΖονυ")),
+}
 
 
 def _lam_alef(w, lang):
@@ -82,7 +104,9 @@ def _lam_alef(w, lang):
         from wordfreq import zipf_frequency
     except ImportError:
         return w
-    spots = [i for i in range(len(w) - 1) if w[i] in "\u0627\u0623\u0625\u0622" and w[i + 1] == "\u0644"][:6]      # alef, hamza alefs, madda alef
+    spots = [i for i in range(len(w) - 1) if w[i] in "\u0627\u0623\u0625\u0622" and w[i + 1] == "\u0644"][
+        :6
+    ]  # alef, hamza alefs, madda alef
     if not spots:
         return w
     best, top = w, zipf_frequency(w, lang)
@@ -106,12 +130,20 @@ def _word(w, lang=None):
         w = _lam_alef(w, lang)
     if main == "Arabic" and lang == "ar":
         w = w.translate(ARABIC_LETTERS)
-    return "".join(HOMOGLYPH[main].get(c, c) if main in HOMOGLYPH and script(c) == "Latin" else c for c in w) if main in HOMOGLYPH and sc["Latin"] else w
+    return (
+        "".join(HOMOGLYPH[main].get(c, c) if main in HOMOGLYPH and script(c) == "Latin" else c for c in w)
+        if main in HOMOGLYPH and sc["Latin"]
+        else w
+    )
 
 
 def _glue(t):
     """A space before a dependent sign (vowel sign, virama, accent) is a positioning gap of the glyph pieces, not a word break."""
-    return "".join(c for i, c in enumerate(t) if not (c == " " and 0 < i < len(t) - 1 and unicodedata.category(t[i + 1])[0] == "M" and t[i - 1] != " "))
+    return "".join(
+        c
+        for i, c in enumerate(t)
+        if not (c == " " and 0 < i < len(t) - 1 and unicodedata.category(t[i + 1])[0] == "M" and t[i - 1] != " ")
+    )
 
 
 def _spans_text(spans):
@@ -119,7 +151,13 @@ def _spans_text(spans):
     (words set as lines of their own)."""
     out = []
     for a, b in zip([None] + spans[:-1], spans):
-        if a is not None and out and not out[-1].endswith(" ") and not b["text"].startswith(" ") and b["bbox"].x0 - a["bbox"].x1 > R.C.word_margin * b["size"]:
+        if (
+            a is not None
+            and out
+            and not out[-1].endswith(" ")
+            and not b["text"].startswith(" ")
+            and b["bbox"].x0 - a["bbox"].x1 > R.C.word_margin * b["size"]
+        ):
             out.append(" ")
         out.append(b["text"])
     return "".join(out)
@@ -128,7 +166,7 @@ def _spans_text(spans):
 def _line_text(line, lang=None):
     t = _glue(_spans_text(line["spans"]))
     t = SYMBOL.sub(_symbol, t)
-    t = PRESENTATION.sub(lambda m: unicodedata.normalize("NFKC", m.group()), t)             # Arabic presentation forms -> letters
+    t = PRESENTATION.sub(lambda m: unicodedata.normalize("NFKC", m.group()), t)  # Arabic presentation forms -> letters
     return " ".join(_word(w, lang) for w in re.sub(r"\s+", " ", t).strip().split(" "))
 
 
@@ -137,7 +175,12 @@ def page_lines(page, lang):
     header and footer kept): the one text reader of the page for every tool."""
     with legacy.language(lang):
         blocks = R.page_blocks(R.Source(page.parent), page.number, True)
-    return [dict(text=t, bbox=tuple(l["bbox"]), size=b["size"], spans=l["spans"]) for b in blocks for l in b["lines"] if (t := _line_text(l, lang))]
+    return [
+        dict(text=t, bbox=tuple(l["bbox"]), size=b["size"], spans=l["spans"])
+        for b in blocks
+        for l in b["lines"]
+        if (t := _line_text(l, lang))
+    ]
 
 
 def page_paragraphs(page, lang):
@@ -192,11 +235,13 @@ def blocks_of(page, poem=False, blocks=None):
         box = tuple(b["bbox"])
         tabbed = any(l.get("tabbed") for l, _ in lines)
         if tabbed or (len(lines) >= 2 and align):
-            out += [("l", t, tuple(l["bbox"]), b["size"], extra) for l, t in lines]       # rows of a form or table, a centred title: as set
+            out += [
+                ("l", t, tuple(l["bbox"]), b["size"], extra) for l, t in lines
+            ]  # rows of a form or table, a centred title: as set
         elif poem and len(lines) >= 2:
             out += [("v", t, tuple(l["bbox"]), b["size"], extra) for l, t in lines]
         elif BULLET.match(text) or b["lines"][0].get("marked") or _glyph_marker(lines[0][0]):
-            text = re.sub(r"^[\ue000-\uf8ff]\s*", "", text)        # a bullet of a symbol font: the writer's own marker
+            text = re.sub(r"^[\ue000-\uf8ff]\s*", "", text)  # a bullet of a symbol font: the writer's own marker
             col0 = b["colspan"][0] if b.get("colspan") else box[0]
             out.append(("li", text, box, b["size"], dict(extra, lvl=min(int(max(box[0] - col0, 0) / (1.5 * body)), 3))))
         elif len(lines) <= 2 and len(text) <= 110 and (b["size"] >= 1.12 * body or bold) and not STOP.search(text):
@@ -219,8 +264,15 @@ def _hanging(items):
     out = []
     for it in items:
         o = out[-1] if out else None
-        if o and o[0] == "li" and it[0] in ("l", "p") and not BULLET.match(it[1]) and abs(it[3] - o[3]) < 0.5 \
-                and 0 <= it[2][1] - o[2][3] < 0.6 * it[3] and o[2][0] + 0.5 * it[3] < it[2][0] < o[2][0] + 4 * it[3]:
+        if (
+            o
+            and o[0] == "li"
+            and it[0] in ("l", "p")
+            and not BULLET.match(it[1])
+            and abs(it[3] - o[3]) < 0.5
+            and 0 <= it[2][1] - o[2][3] < 0.6 * it[3]
+            and o[2][0] + 0.5 * it[3] < it[2][0] < o[2][0] + 4 * it[3]
+        ):
             out[-1] = ("li", joined([o[1], it[1]]), (o[2][0], o[2][1], max(o[2][2], it[2][2]), it[2][3]), o[3], o[4])
         else:
             out.append(it)
@@ -236,7 +288,9 @@ def _tables(items):
         k, t, (x0, y0, x1, y1), sz, _ = items[i]
         for bd in bands[-3:]:
             by0, by1 = bd["y"]
-            if min(by1, y1) - max(by0, y0) > 0.5 * min(by1 - by0, y1 - y0) and all(x1 <= items[j][2][0] or x0 >= items[j][2][2] for j in bd["ix"]):
+            if min(by1, y1) - max(by0, y0) > 0.5 * min(by1 - by0, y1 - y0) and all(
+                x1 <= items[j][2][0] or x0 >= items[j][2][2] for j in bd["ix"]
+            ):
                 bd["ix"].append(i)
                 bd["y"] = (min(by0, y0), max(by1, y1))
                 break
@@ -273,7 +327,12 @@ def _tables(items):
                 c = max(j for j, x in enumerate(cols) if x <= items[i][2][0] + 1.5 * sz)
                 row[c] = (row[c] + " " + items[i][1]).strip()
             rows.append(row)
-        box = (min(items[i][2][0] for i in ix), min(items[i][2][1] for i in ix), max(items[i][2][2] for i in ix), max(items[i][2][3] for i in ix))
+        box = (
+            min(items[i][2][0] for i in ix),
+            min(items[i][2][1] for i in ix),
+            max(items[i][2][2] for i in ix),
+            max(items[i][2][3] for i in ix),
+        )
         tables.append(("table", " ".join(c for r in rows for c in r if c), box, sz, dict(rows=rows)))
         gone |= set(ix)
     return sorted([it for i, it in enumerate(items) if i not in gone] + tables, key=lambda it: (it[2][1], it[2][0]))
@@ -284,17 +343,19 @@ def passage(job):
     alignment and columns of the page."""
     c, seed = job
     rng = random.Random(seed)
-    legacy.LANG.set(c["lang"])                           # legacy-font runs are decoded by the tables / glyph shapes of layout.legacy
+    legacy.LANG.set(c["lang"])  # legacy-font runs are decoded by the tables / glyph shapes of layout.legacy
     try:
         pdf = fitz.open(c["path"])
         n = len(pdf)
         lo = int(0.1 * n) if n >= 20 else 0
         hi = n - int(0.08 * n) if n >= 20 else n
-        pages = [c["page"] - 1] if c.get("page") else list(range(lo, max(hi, lo + 1)))      # a given page (seed layouts) or any page of the document
+        pages = (
+            [c["page"] - 1] if c.get("page") else list(range(lo, max(hi, lo + 1)))
+        )  # a given page (seed layouts) or any page of the document
         rng.shuffle(pages)
         for pg in pages[:4]:
             bl = blocks_of(pdf[pg], c["kind"] == "poem")
-            loose = c.get("layout")                           # a page of seed layouts: lines, list items and headings are a page too
+            loose = c.get("layout")  # a page of seed layouts: lines, list items and headings are a page too
             starts = [i for i, b in enumerate(bl) if (loose or b[0] in ("h", "p", "v")) and not b[1][:1].islower()]
             if not starts or not (loose or any(b[0] in ("p", "v") for b in bl)):
                 continue
@@ -302,7 +363,9 @@ def passage(job):
             s0 = rng.choice(heads if heads and rng.random() < 0.4 else starts)
             cut = rng.choice((1500, 2500, 4000, 6000))
             items, size, text = [], 0, ""
-            for q in range(pg, min(pg + c.get("follow", 4), n)):                    # the passage goes on over the next pages until a page can be filled
+            for q in range(
+                pg, min(pg + c.get("follow", 4), n)
+            ):  # the passage goes on over the next pages until a page can be filled
                 if q > pg:
                     bl = blocks_of(pdf[q], c["kind"] == "poem")
                     s = next((i for i, b in enumerate(bl) if loose or b[0] in ("h", "p", "v")), None)
@@ -328,7 +391,9 @@ def passage(job):
                 continue
             text = "\n".join(walk_text(items))
             pk, _ = pagekind.kind(pdf[pg])
-            return dict(c, items=items, text=text, page=pg, pages=n, pagekind=pk, path=os.path.relpath(c["path"], LAYOUTS))
+            return dict(
+                c, items=items, text=text, page=pg, pages=n, pagekind=pk, path=os.path.relpath(c["path"], LAYOUTS)
+            )
     except Exception as e:
         print("passage failed:", c["path"], repr(e)[:120], flush=True)
     return None
@@ -357,13 +422,13 @@ def main(argv=None):
             kinds[c["kind"]].append(c)
         for v in kinds.values():
             rng.shuffle(v)
-        order = []                          # kinds in turn: every source kind is represented
+        order = []  # kinds in turn: every source kind is represented
         while any(kinds.values()) and len(order) < int((a.en if lg == "en" and a.en else a.per_lang) * 1.4):
             for k in list(kinds):
                 if kinds[k]:
                     order.append(kinds[k].pop())
         jobs += [(c, rng.getrandbits(32)) for c in order]
-        if len(order) < a.per_lang:                      # small pools: a second page of every document
+        if len(order) < a.per_lang:  # small pools: a second page of every document
             jobs += [(c, rng.getrandbits(32)) for c in order]
     print(len(jobs), "documents")
     n = 0

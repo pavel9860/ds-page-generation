@@ -1,4 +1,5 @@
 """Training data (gen), feature search (study) and the final models (train)."""
+
 import json
 import pickle
 import re
@@ -29,8 +30,22 @@ def sample_jobs(n, cfg=CONFIG):
     D = D.assign(top=D.path.str.replace(str(LAYOUTS) + "/", "", regex=False).str.split("/").str[0])
     rng = np.random.default_rng(cfg.train.seed)
     per = max(n // D.top.nunique(), 20)
-    P = pd.concat([pd.concat([g[g["pic"] > 0.02].sample(min(per // 2, int((g["pic"] > 0.02).sum())), random_state=1), g.sample(min(per // 2, len(g)), random_state=2)])
-                   for _, g in D.groupby("top")]).drop_duplicates(["path", "page"]).sample(frac=1, random_state=1).reset_index(drop=True)
+    P = (
+        pd.concat(
+            [
+                pd.concat(
+                    [
+                        g[g["pic"] > 0.02].sample(min(per // 2, int((g["pic"] > 0.02).sum())), random_state=1),
+                        g.sample(min(per // 2, len(g)), random_state=2),
+                    ]
+                )
+                for _, g in D.groupby("top")
+            ]
+        )
+        .drop_duplicates(["path", "page"])
+        .sample(frac=1, random_state=1)
+        .reset_index(drop=True)
+    )
     return [(r.path, int(r.page), int(rng.integers(1 << 30))) for r in P.itertuples()]
 
 
@@ -77,27 +92,59 @@ def split(R, n_eval):
 def matrices(R, v, cfg=CONFIG):
     """(X, ink, pic) of the pages for the window v ('A' or 'B'), all columns of derive."""
     c = cfg.train.chunk_pages
-    X = np.concatenate([derive(np.stack([r[f"cells{v}"] for r in R[i:i + c]]), np.stack([r["scal"] for r in R[i:i + c]]), cfg) for i in range(0, len(R), c)])
+    X = np.concatenate(
+        [
+            derive(np.stack([r[f"cells{v}"] for r in R[i : i + c]]), np.stack([r["scal"] for r in R[i : i + c]]), cfg)
+            for i in range(0, len(R), c)
+        ]
+    )
     return X, np.concatenate([r[f"ink{v}"] for r in R]), np.concatenate([r[f"pic{v}"] for r in R])
 
 
 def fit_models(X, ink, pic, trees, depth, lr, cols, cfg=CONFIG):
     from xgboost import XGBClassifier, XGBRegressor
+
     t = cfg.train
-    kw = dict(n_estimators=trees, max_depth=depth, learning_rate=lr, subsample=t.subsample, colsample_bytree=t.colsample, n_jobs=t.workers, tree_method="hist", random_state=t.seed)
-    return Detector(XGBClassifier(**kw).fit(X[:, cols], ink), XGBRegressor(objective="reg:logistic", **kw).fit(X[:, cols], pic), cols, cfg)
+    kw = dict(
+        n_estimators=trees,
+        max_depth=depth,
+        learning_rate=lr,
+        subsample=t.subsample,
+        colsample_bytree=t.colsample,
+        n_jobs=t.workers,
+        tree_method="hist",
+        random_state=t.seed,
+    )
+    return Detector(
+        XGBClassifier(**kw).fit(X[:, cols], ink),
+        XGBRegressor(objective="reg:logistic", **kw).fit(X[:, cols], pic),
+        cols,
+        cfg,
+    )
 
 
 def summary(e):
     """Mean abs error, median, p90 (percentage points), share within 5 points and bias of an error array in shares."""
     e = 100 * np.asarray(e)
-    return dict(mean_abs=np.abs(e).mean(), median=np.median(np.abs(e)), p90=np.quantile(np.abs(e), .9), within5=100 * (np.abs(e) <= 5).mean(), bias=e.mean())
+    return dict(
+        mean_abs=np.abs(e).mean(),
+        median=np.median(np.abs(e)),
+        p90=np.quantile(np.abs(e), 0.9),
+        within5=100 * (np.abs(e) <= 5).mean(),
+        bias=e.mean(),
+    )
 
 
 def tile_metrics(ink, pic, pi, pp):
     tp, fp, fn = (pi & ink).sum(), (pi & ~ink).sum(), (~pi & ink).sum()
-    return dict(ink_acc=100 * (pi == ink).mean(), ink_prec=100 * tp / max(tp + fp, 1), ink_rec=100 * tp / max(tp + fn, 1), ink_f1=100 * 2 * tp / max(2 * tp + fp + fn, 1),
-                pic_tile_mae=100 * np.abs(pp - pic).mean(), pic_tile_r2=1 - ((pp - pic) ** 2).sum() / max(((pic - pic.mean()) ** 2).sum(), 1e-9))
+    return dict(
+        ink_acc=100 * (pi == ink).mean(),
+        ink_prec=100 * tp / max(tp + fp, 1),
+        ink_rec=100 * tp / max(tp + fn, 1),
+        ink_f1=100 * 2 * tp / max(2 * tp + fp + fn, 1),
+        pic_tile_mae=100 * np.abs(pp - pic).mean(),
+        pic_tile_r2=1 - ((pp - pic) ** 2).sum() / max(((pic - pic.mean()) ** 2).sum(), 1e-9),
+    )
 
 
 def _pair(R, cfg):
@@ -137,7 +184,12 @@ def study(test=False, cfg=CONFIG):
         log.append(dict(step=f"{kind} {name}", kept=bool(keep), **s))
         if keep:
             maps, derived, best = mp, dv, s
-    json.dump(dict(maps=sorted(maps), derived=sorted(derived), log=log), open(WORK / "features.json", "w"), indent=1, default=float)
+    json.dump(
+        dict(maps=sorted(maps), derived=sorted(derived), log=log),
+        open(WORK / "features.json", "w"),
+        indent=1,
+        default=float,
+    )
     print("kept maps", sorted(maps), "derived", sorted(derived))
 
 
@@ -147,7 +199,9 @@ def train(cfg=CONFIG):
     feat = json.load(open(WORK / "features.json"))
     cols = chosen(set(feat["maps"]), set(feat["derived"]), cfg)
     tr, te = split(load(), t.n_eval_docs)
-    print(f"{len(tr)} training pages, {len(te)} held-out pages (other documents), {int(cols.sum())} features", flush=True)
+    print(
+        f"{len(tr)} training pages, {len(te)} held-out pages (other documents), {int(cols.sum())} features", flush=True
+    )
     X, ink, pic = _pair(tr, cfg)
     t0 = time.time()
     d = fit_models(X, ink, pic, t.train_trees, t.train_depth, t.train_lr, cols, cfg)
@@ -159,10 +213,13 @@ def train(cfg=CONFIG):
         pi, pp = d.tiles(X)
         print(f"\n{name}: tiles", {k: round(float(x), 2) for k, x in tile_metrics(ink, pic, pi, pp).items()})
         fill_p, pic_p = pi.reshape(n, -1).mean(1), pp.reshape(n, -1).mean(1)
-        rows = [("fill vs label", fill_p - ink.reshape(n, -1).mean(1)), ("pic vs label", pic_p - pic.reshape(n, -1).mean(1))]
+        rows = [
+            ("fill vs label", fill_p - ink.reshape(n, -1).mean(1)),
+            ("pic vs label", pic_p - pic.reshape(n, -1).mean(1)),
+        ]
         for what, e in rows:
             print(f"  page {what} ({len(e)} pages):", {k: round(float(x), 2) for k, x in summary(e).items()})
     t0 = time.time()
     for _ in range(20):
-        d.tiles(X[: cfg.geometry.grid ** 2])
+        d.tiles(X[: cfg.geometry.grid**2])
     print(f"\nmodel time per page {1000 * (time.time() - t0) / 20:.0f} ms (ink + picture, one window)")

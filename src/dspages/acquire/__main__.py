@@ -7,6 +7,7 @@
 Both end in files for dspages.ingest (acquired/pdf/<sha12>.pdf, acquired/lens/got/<class>/<sha12>.jpg).
 Run long steps inside a memory-capped cgroup, so a leak kills the step and never the machine:
   systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 .venv/bin/python -m dspages.acquire cc fetch"""
+
 import argparse
 import json
 from pathlib import Path
@@ -50,7 +51,13 @@ def main():
     sp.add_parser("status")
     a = ap.parse_args()
     if a.cmd == "lens":
-        {"queries": lambda: lens.queries(a.run, a.n), "seeds": lambda: lens.seeds(a.dirs), "serve": lens.serve, "worker": lens.worker, "agent": lens.agent}[a.step]()
+        {
+            "queries": lambda: lens.queries(a.run, a.n),
+            "seeds": lambda: lens.seeds(a.dirs),
+            "serve": lens.serve,
+            "worker": lens.worker,
+            "agent": lens.agent,
+        }[a.step]()
     elif a.cmd == "cc":
         if a.step == "train":
             cc.train(*space(), a.r)

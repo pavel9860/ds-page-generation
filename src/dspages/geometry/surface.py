@@ -7,6 +7,7 @@ deep crease network are height maps in page coordinates. The surface is worked o
 mesh, work_scale times finer): each node takes the profile at its own p, and passes along the page rows and columns
 give them their lengths back; the mesh is every work_scale-th node.
 """
+
 from dataclasses import replace
 
 import cv2
@@ -15,12 +16,11 @@ from numba import njit
 
 from ..config import GeometryCfg, paper_props
 from ..creases import cockle, deep, shallow
+from ..render.camera import vertex_normals, views
+from .config import ISO_PASSES  # noqa: F401
 from .sag import sag_field, solve_sag
 from .scenes import lerp_scene, sample_ends, scene_label
 from .strip import solve_strip
-from ..render.camera import vertex_normals, views
-
-ISO_PASSES = 2                  # row and column passes that give a creased sheet its lengths back (strain < 1e-4)
 
 
 @njit(cache=True)
@@ -35,8 +35,11 @@ def _resample(Q, t):
             while k < m - 2 and s0 + seg < t[j]:
                 s0 += seg
                 k += 1
-                seg = np.sqrt((Q[r, k + 1, 0] - Q[r, k, 0]) ** 2 + (Q[r, k + 1, 1] - Q[r, k, 1]) ** 2
-                              + (Q[r, k + 1, 2] - Q[r, k, 2]) ** 2)
+                seg = np.sqrt(
+                    (Q[r, k + 1, 0] - Q[r, k, 0]) ** 2
+                    + (Q[r, k + 1, 1] - Q[r, k, 1]) ** 2
+                    + (Q[r, k + 1, 2] - Q[r, k, 2]) ** 2
+                )
             w = (t[j] - s0) / max(seg, 1e-12)
             for c in range(3):
                 out[r, j, c] = Q[r, k, c] + w * (Q[r, k + 1, c] - Q[r, k, c])
@@ -54,8 +57,9 @@ def _lerp2(axes, values, pts):
     (i, j), (s, t) = idx, frac
     if values.ndim > 2:
         s, t = s[..., None], t[..., None]
-    return ((1 - s) * ((1 - t) * values[i, j] + t * values[i, j + 1])
-            + s * ((1 - t) * values[i + 1, j] + t * values[i + 1, j + 1]))
+    return (1 - s) * ((1 - t) * values[i, j] + t * values[i, j + 1]) + s * (
+        (1 - t) * values[i + 1, j] + t * values[i + 1, j + 1]
+    )
 
 
 def _spaced(P, t, axis):
@@ -86,11 +90,28 @@ def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
     if cond["shallow"]:
         c = g.shallow
         folds = np.array(fold_ls)
-        cand = shallow.sample(rng, w_mm, h_mm, c.mean_groups, c.p_isolated, c.mean_extra, c.radius_mm, c.spread_deg,
-                              c.singles_per_group, c.k)
-        lines = [cr for cr in cand if not len(folds) or np.abs(
-            lm_to_p(*_swap(cr["line"][:, 0] * 1e-3, cr["line"][:, 1] * 1e-3, cond["along_long"]))[:, None]
-            - folds[None, :]).min() > c.fold_clear_mm * 1e-3]
+        cand = shallow.sample(
+            rng,
+            w_mm,
+            h_mm,
+            c.mean_groups,
+            c.p_isolated,
+            c.mean_extra,
+            c.radius_mm,
+            c.spread_deg,
+            c.singles_per_group,
+            c.k,
+        )
+        lines = [
+            cr
+            for cr in cand
+            if not len(folds)
+            or np.abs(
+                lm_to_p(*_swap(cr["line"][:, 0] * 1e-3, cr["line"][:, 1] * 1e-3, cond["along_long"]))[:, None]
+                - folds[None, :]
+            ).min()
+            > c.fold_clear_mm * 1e-3
+        ]
         h, pitch = shallow.render(lines, w_mm, h_mm, step, c.w_max_mm), step
     if cond["deep"]:
         net = deep.sample(rng, w_mm, h_mm, cond["deep"], g.deep, mesh_step)
@@ -105,10 +126,16 @@ def _crease_heights(rng, g: GeometryCfg, cond, fold_ls, lm_to_p):
 def _open_book(solve, length, pp, n, halves, y):
     """An open book's profile: each half solved from the spine in the middle out (clamped there), the first one mirrored.
     y: the halves' states (None: rest). -> s, x, z, states."""
-    (sl, xl, zl, yl), (sr, xr, zr, yr) = (solve(0.5 * length, pp["q"], pp["bending"], (), (), hf["clamp"], n, y0,
-                                                hf["base"]) for hf, y0 in zip(halves, y or (None, None)))
-    return (np.r_[0.5 * length - sl[::-1], 0.5 * length + sr[1:]], np.r_[xl[-1] - xl[::-1], xl[-1] + xr[1:]],
-            np.r_[zl[::-1], zr[1:]], (yl, yr))
+    (sl, xl, zl, yl), (sr, xr, zr, yr) = (
+        solve(0.5 * length, pp["q"], pp["bending"], (), (), hf["clamp"], n, y0, hf["base"])
+        for hf, y0 in zip(halves, y or (None, None))
+    )
+    return (
+        np.r_[0.5 * length - sl[::-1], 0.5 * length + sr[1:]],
+        np.r_[xl[-1] - xl[::-1], xl[-1] + xr[1:]],
+        np.r_[zl[::-1], zr[1:]],
+        (yl, yr),
+    )
 
 
 def page_points(work, u, v):
@@ -120,7 +147,7 @@ def page_points(work, u, v):
 def _water(rng, S, g, scale):
     """Cockling of a real water-damaged page (creases.cockle) on the working grid S [m]: field and present band
     energy on a grid of the band tables' pitch over the sheet, the field resized to the working grid."""
-    shape = tuple(int(round(L / d)) + 1 for L, d in zip(g.sheet_mm[::-1], cockle.pitch()[::-1]))   # (rows, cols)
+    shape = tuple(int(round(L / d)) + 1 for L, d in zip(g.sheet_mm[::-1], cockle.pitch()[::-1]))  # (rows, cols)
     Zt = cv2.resize(1e3 * S[..., 2], shape[::-1], interpolation=cv2.INTER_LINEAR)
     w = g.water
     h = cockle.field(shape, rng, cockle.sample(rng), dict(rms=cockle.bands(Zt).std((1, 2))), scale)
@@ -145,7 +172,9 @@ def seen(s, camera):
     """Whether a camera view of a page grid (make_page output) is possible within camera.side_offset."""
     k = camera.view_step
     X, Y, Z = s["X"][::k, ::k], s["Y"][::k, ::k], s["Z"][::k, ::k]
-    _, _, _, _, lo, hi = views(np.stack([X, Y, Z], -1), vertex_normals(X, Y, Z), replace(camera, view_step=1), camera.side_offset, True)
+    _, _, _, _, lo, hi = views(
+        np.stack([X, Y, Z], -1), vertex_normals(X, Y, Z), replace(camera, view_step=1), camera.side_offset, True
+    )
     return bool((lo <= hi).any())
 
 
@@ -195,14 +224,15 @@ def make_page(rng, g: GeometryCfg, paper, cond, strips=None, sag=None):
         if sc["halves"]:
             s, x, z, y = _open_book(solve, lp, pp, g.strip_segments // 2, sc["halves"], y)
         else:
-            s, x, z, y = solve(lp, pp["q"], pp["bending"], sc["folds"], sc["supports"], sc["clamp"],
-                                     g.strip_segments, y, sc["base"])
+            s, x, z, y = solve(
+                lp, pp["q"], pp["bending"], sc["folds"], sc["supports"], sc["clamp"], g.strip_segments, y, sc["base"]
+            )
         raw.append((s, x, z))
     ws = g.work_scale
     u = np.linspace(0.0, sw, (nu - 1) * ws + 1)
     v = np.linspace(0.0, sh, (nv - 1) * ws + 1)
     l_, m_ = _swap(*np.meshgrid(u, v), cond["along_long"])
-    pn, qn = lm_to_p(l_, m_), -l_ * sn + m_ * cb + g0                    # page nodes on the profile and its generators
+    pn, qn = lm_to_p(l_, m_), -l_ * sn + m_ * cb + g0  # page nodes on the profile and its generators
 
     def blend(q, f):
         """Slice values f(k) blended across the generators at q."""
@@ -247,6 +277,20 @@ def make_page(rng, g: GeometryCfg, paper, cond, strips=None, sag=None):
     work = dict(W=W, Wu=1e3 * u, Wv=1e3 * v)
     X, Y, Z = W[:, ::ws, ::ws]
     u, v = u[::ws], v[::ws]
-    return dict(X=X, Y=Y, Z=Z, u=1e3 * u, v=1e3 * v, **work, scene_a=sa, scene_b=sb,
-                label=scene_label(sa), paper=pp, cond=cond, creases=lines, strips=[] if replay else solved, sag=sag,
-                box_strain=float(max(np.abs(a).max() for a in strains(*W, work["Wu"], work["Wv"]))))
+    return dict(
+        X=X,
+        Y=Y,
+        Z=Z,
+        u=1e3 * u,
+        v=1e3 * v,
+        **work,
+        scene_a=sa,
+        scene_b=sb,
+        label=scene_label(sa),
+        paper=pp,
+        cond=cond,
+        creases=lines,
+        strips=[] if replay else solved,
+        sag=sag,
+        box_strain=float(max(np.abs(a).max() for a in strains(*W, work["Wu"], work["Wv"]))),
+    )

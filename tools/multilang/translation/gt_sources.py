@@ -1,9 +1,11 @@
 """More source forms for the languages short of forms
 python scripts/translation/gt_sources.py [N_MORE_PER_SHORT_FORM]"""
+
 import json
 import sys
 
 import pymupdf
+
 from dspages.multilang import translate as T
 from dspages.multilang.config import TRANSLATE
 from dspages.multilang.paths import FILLING, TRANSLATION
@@ -23,7 +25,13 @@ def main():
     for fid, m in meta.items():
         if len(src) >= 80:
             break
-        if fid in have or st.get(fid) != "ok" or m["lang"] not in RICH or "/generation/" in m["path"] or "/langds/tr" in m["path"]:
+        if (
+            fid in have
+            or st.get(fid) != "ok"
+            or m["lang"] not in RICH
+            or "/generation/" in m["path"]
+            or "/langds/tr" in m["path"]
+        ):
             continue
         with pymupdf.open(m["path"]) as doc:
             lines = [l["text"] for l in T.lines(doc[int(m["page"])])]
@@ -34,7 +42,7 @@ def main():
     for lang, n in short.items():
         used = set(jobs[lang][2]) if lang in jobs else set()
         free = [i for i in range(len(src)) if i not in used and src[i][1] != lang]
-        extra.append([lang, jobs[lang][1] if lang in jobs else lang, free[len(free) // 3:][:3 * n + spare]])
+        extra.append([lang, jobs[lang][1] if lang in jobs else lang, free[len(free) // 3 :][: 3 * n + spare]])
     (S / "jobs_extra.json").write_text(json.dumps(extra))
     print(len(src), "sources;", sum(len(e[2]) for e in extra), "translations for", len(extra), "languages")
 

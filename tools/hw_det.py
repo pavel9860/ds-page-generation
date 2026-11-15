@@ -9,6 +9,7 @@ conf uint8 (round(conf * 255), floor 0.25); failed int32 (k, 2). Boxes of page i
 A page in several shards takes the highest group: d0..d13 rendered 14,746 pages from the wrong file of a hash, d14 (info/pages_fix)
 has them from the manifest's file. CHECK (d16, emb_check: a re-render of 3000 random pages) counts only for pages no other shard
 has and is compared with the counts that are used. Needs pymupdf < 1.28 (1.28 aborts with a double free on a broken structure tree)."""
+
 import argparse
 import collections
 import io
@@ -20,14 +21,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from dspages import paths as _P  # noqa: E402
 from dspages.hand.config import PATHS
 
 UV = Path(PATHS.uvtm)
 LAYOUTS = Path(PATHS.layouts)
 HW = UV / "Labels" / "hw_detection"
 EMB = UV / "Labels" / "embedding" / "emb_out"
-WEIGHTS = Path("/run/media/p/D/BUISNESS/handwriting_detection/models/hwdet-s-1.0.0.pt")
-CONF, CHECK, STEP = 0.25, 16, 10                     # conf floor; check group; shard number step of a new group
+WEIGHTS = _P.HWDET_WEIGHTS
+CONF, CHECK, STEP = 0.25, 16, 10  # conf floor; check group; shard number step of a new group
 HEX = re.compile(r"(?<![0-9a-f])[0-9a-f]{12}(?![0-9a-f])")
 
 
@@ -41,7 +43,7 @@ def emb_paths():
 
 
 def shards():
-    return sorted(HW.glob("d*__pages_*.npz"), key=lambda f: int(f.name[1:f.name.index("__")]))
+    return sorted(HW.glob("d*__pages_*.npz"), key=lambda f: int(f.name[1 : f.name.index("__")]))
 
 
 def counts(f):
@@ -49,13 +51,16 @@ def counts(f):
     z = np.load(f)
     o, c = z["offsets"], np.r_[0, np.cumsum(z["cls"] == 0)]
     hw = c[o[1:]] - c[o[:-1]]
-    return pd.DataFrame(dict(key=keys(z["ids"]), grp=int(f.name[1:f.name.index("__")]), shard=f.name, hw=hw, text=np.diff(o) - hw))
+    return pd.DataFrame(
+        dict(key=keys(z["ids"]), grp=int(f.name[1 : f.name.index("__")]), shard=f.name, hw=hw, text=np.diff(o) - hw)
+    )
 
 
 def cmd_detect(_):
     import form_pages as F
     from PIL import Image
     from ultralytics import YOLO
+
     done = np.concatenate([keys(np.load(f)["ids"]) for f in shards()])
     miss = np.setdiff1d(keys(np.load(EMB / "ids.npy")), done)
     print(len(miss), "embedded pages without detection", flush=True)
@@ -72,15 +77,26 @@ def cmd_detect(_):
         if key not in jpg:
             failed.append(key)
             continue
-        b = model.predict(np.asarray(Image.open(io.BytesIO(jpg[key])).convert("RGB"))[:, :, ::-1], imgsz=1024, conf=CONF, verbose=False)[0].boxes
+        b = model.predict(
+            np.asarray(Image.open(io.BytesIO(jpg[key])).convert("RGB"))[:, :, ::-1],
+            imgsz=1024,
+            conf=CONF,
+            verbose=False,
+        )[0].boxes
         ids.append(key)
         cls += b.cls.int().tolist()
         conf += (b.conf * 255).round().int().tolist()
         off.append(len(cls))
-    g = int(shards()[-1].name[1:shards()[-1].name.index("__")]) + 1
+    g = int(shards()[-1].name[1 : shards()[-1].name.index("__")]) + 1
     out = HW / f"d{g}__pages_{(g + 15) * STEP:04d}.npz"
-    np.savez(out, ids=np.array(ids, np.int32).reshape(-1, 2), offsets=np.array(off, np.int64), cls=np.array(cls, np.uint8),
-             conf=np.array(conf, np.uint8), failed=np.array(failed, np.int32).reshape(-1, 2))
+    np.savez(
+        out,
+        ids=np.array(ids, np.int32).reshape(-1, 2),
+        offsets=np.array(off, np.int64),
+        cls=np.array(cls, np.uint8),
+        conf=np.array(conf, np.uint8),
+        failed=np.array(failed, np.int32).reshape(-1, 2),
+    )
     idx = json.loads((HW / "index.json").read_text())
     idx["pages"][out.name] = len(ids)
     (HW / "index.json").write_text(json.dumps(idx, indent=1))
@@ -92,16 +108,25 @@ def cmd_merge(_):
     chk = D[D.grp == CHECK]
     D = D.assign(rank=np.where(D.grp == CHECK, -1, D.grp)).sort_values("rank").drop_duplicates("key", keep="last")
     c = chk.merge(D[D.grp != CHECK], on="key", suffixes=("_chk", ""))
-    print(f"check: {len(c)} pages rendered twice, hw equal {(c.hw_chk == c.hw).mean():.4f}, text equal {(c.text_chk == c.text).mean():.4f},"
-          f" text |diff| <= 2 {((c.text_chk - c.text).abs() <= 2).mean():.4f}")
+    print(
+        f"check: {len(c)} pages rendered twice, hw equal {(c.hw_chk == c.hw).mean():.4f}, text equal {(c.text_chk == c.text).mean():.4f},"
+        f" text |diff| <= 2 {((c.text_chk - c.text).abs() <= 2).mean():.4f}"
+    )
     E = keys(np.load(EMB / "ids.npy"))
     D = D[D.key.isin(E)].assign(doc=lambda d: d.key // 100000, page=lambda d: d.key % 100000)
     path = emb_paths()
     D["hash"] = [m.group(0) if (m := HEX.search(Path(path.get(d, "")).name)) else None for d in D.doc]
     with sqlite3.connect(LAYOUTS / "manifest.sqlite") as con:
         con.execute("drop table if exists hw_det")
-        con.execute("create table hw_det (doc integer, page integer, hash text, text integer, hw integer, shard text, src_doc integer, primary key (doc, page))")
-        con.executemany("insert into hw_det values (?,?,?,?,?,?,?)", D.assign(src_doc=D.doc)[["doc", "page", "hash", "text", "hw", "shard", "src_doc"]].astype(object).itertuples(False, None))
+        con.execute(
+            "create table hw_det (doc integer, page integer, hash text, text integer, hw integer, shard text, src_doc integer, primary key (doc, page))"
+        )
+        con.executemany(
+            "insert into hw_det values (?,?,?,?,?,?,?)",
+            D.assign(src_doc=D.doc)[["doc", "page", "hash", "text", "hw", "shard", "src_doc"]]
+            .astype(object)
+            .itertuples(False, None),
+        )
     print(f"hw_det: {len(D)} of {len(E)} embedded pages; pages by group", D.grp.value_counts().sort_index().to_dict())
 
 

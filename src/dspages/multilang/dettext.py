@@ -1,28 +1,60 @@
 """Text written by hand in the detection set, kept to what a person writes on a document of the language"""
+
 import json
 import random
 import re
 import unicodedata
-from functools import lru_cache
+from functools import cache, lru_cache
 
 from .config import VALUES as V
 from .paths import DATA as D
 
 UNSPACED = {"th", "lo", "km", "my", "bo", "dz", "zh", "ja"}
-NATIVE_DIGITS = {"ar": "Arabic", "bn": "Bengali", "as": "Bengali", "my": "Myanmar", "km": "Khmer", "lo": "Lao", "ne": "Devanagari",
-                 "mr": "Devanagari", "bo": "Tibetan", "dz": "Tibetan", "th": "Thai", "fa": "Persian", "ur": "Persian", "ps": "Persian"}
+NATIVE_DIGITS = {
+    "ar": "Arabic",
+    "bn": "Bengali",
+    "as": "Bengali",
+    "my": "Myanmar",
+    "km": "Khmer",
+    "lo": "Lao",
+    "ne": "Devanagari",
+    "mr": "Devanagari",
+    "bo": "Tibetan",
+    "dz": "Tibetan",
+    "th": "Thai",
+    "fa": "Persian",
+    "ur": "Persian",
+    "ps": "Persian",
+}
 INITIALS = {"Latin", "Cyrillic", "Greek"}
-CITE = re.compile(r"(\bet al\b|\bpp?\.\s*\d|\bIn:|\bISBN\b|\bISSN\b|https?://|www\.|\bdoi\b|@|\(\d{4}[a-z]?\)|\b(19|20)\d\d[a-z]?\)\s*[.,:]"
-                  r"|\bvol\.\s*\d|\beds?\.\s|\bno\.\s*\d|©|\[\d+\])", re.I)
-GROUPS = [{"hr", "sr", "bs", "sl"}, {"id", "ms"}, {"hi", "mr", "ne"}, {"no", "da", "nb", "nn", "sv"}, {"cs", "sk"}, {"bg", "mk"},
-          {"ru", "uk", "be", "kk", "ky", "mn", "tg"}, {"fa", "ur", "ps"}, {"es", "gl", "pt", "ca"}, {"af", "nl"}, {"zh", "ja"}, {"ms", "tl"}]
+CITE = re.compile(
+    r"(\bet al\b|\bpp?\.\s*\d|\bIn:|\bISBN\b|\bISSN\b|https?://|www\.|\bdoi\b|@|\(\d{4}[a-z]?\)|\b(19|20)\d\d[a-z]?\)\s*[.,:]"
+    r"|\bvol\.\s*\d|\beds?\.\s|\bno\.\s*\d|©|\[\d+\])",
+    re.I,
+)
+GROUPS = [
+    {"hr", "sr", "bs", "sl"},
+    {"id", "ms"},
+    {"hi", "mr", "ne"},
+    {"no", "da", "nb", "nn", "sv"},
+    {"cs", "sk"},
+    {"bg", "mk"},
+    {"ru", "uk", "be", "kk", "ky", "mn", "tg"},
+    {"fa", "ur", "ps"},
+    {"es", "gl", "pt", "ca"},
+    {"af", "nl"},
+    {"zh", "ja"},
+    {"ms", "tl"},
+]
 
 
 @lru_cache(maxsize=1)
 def _detector():
     from lingua import Language, LanguageDetectorBuilder
-    return LanguageDetectorBuilder.from_all_languages().with_preloaded_language_models().build(), \
-        {l.iso_code_639_1.name.lower(): l for l in Language.all()}
+
+    return LanguageDetectorBuilder.from_all_languages().with_preloaded_language_models().build(), {
+        l.iso_code_639_1.name.lower(): l for l in Language.all()
+    }
 
 
 def same_language(text, lang):
@@ -42,10 +74,11 @@ def same_language(text, lang):
 
 def script_of(text):
     from hwsynth.scripts import text_script
+
     return text_script(text)
 
 
-@lru_cache(maxsize=None)
+@cache
 def clean_pool(lang, script=None):
     """Texts of the language fit to be written by hand (see the module doc); script"""
     f = D / "langds/paras" / f"{lang}.json"
@@ -58,6 +91,7 @@ def clean_pool(lang, script=None):
         return ()
     if script is None:
         from collections import Counter
+
         script = Counter(script_of(t) for t in texts[:200]).most_common(1)[0][0]
     return tuple(t for t in texts if script_of(t) == script and same_language(t, lang))
 
@@ -90,8 +124,9 @@ class Values:
         self.cast = []
         from faker import Faker  # required: a missing package fails here, not as forms without names
         from faker.config import AVAILABLE_LOCALES
+
         loc = [l for l in AVAILABLE_LOCALES if l == lang or l.startswith(lang + "_")]
-        if loc:                                                   # a language Faker has no locale for: names from the bank (person)
+        if loc:  # a language Faker has no locale for: names from the bank (person)
             self.fake = Faker(rng.choice(sorted(loc)) if len(loc) < 6 else sorted(loc, key=len)[0])
             self.fake.seed_instance(rng.getrandbits(32))
 
@@ -99,6 +134,7 @@ class Values:
         sc = NATIVE_DIGITS.get(self.lang)
         if sc and self.rng.random() < 0.5:
             from dspages.pagegen.canvas import native_digits
+
             m = {str(i): chr(0x06F0 + i) for i in range(10)} if sc == "Persian" else native_digits(sc)
             return "".join(m.get(c, c) for c in s)
         return s
@@ -107,8 +143,18 @@ class Values:
         """A date in one of the formats people write; with a month name when the locale has them."""
         r = self.rng
         d, m, y = r.randint(1, 28), r.randint(1, 12), r.randint(lo, hi)
-        f = r.choice(["{d:02d}.{m:02d}.{y}", "{d}/{m}/{y}", "{d:02d}/{m:02d}/{yy:02d}", "{y}-{m:02d}-{d:02d}", "{d}.{m}.{yy:02d}", "{d:02d}-{m:02d}-{y}",
-                      "{d}.{m}.{y}", "{m:02d}/{d:02d}/{y}"])
+        f = r.choice(
+            [
+                "{d:02d}.{m:02d}.{y}",
+                "{d}/{m}/{y}",
+                "{d:02d}/{m:02d}/{yy:02d}",
+                "{y}-{m:02d}-{d:02d}",
+                "{d}.{m}.{yy:02d}",
+                "{d:02d}-{m:02d}-{y}",
+                "{d}.{m}.{y}",
+                "{m:02d}/{d:02d}/{y}",
+            ]
+        )
         if self.fake is not None and self.lang in V.month_names and r.random() < V.p_month_name:
             f = r.choice(["{d} {M} {y}", "{M} {d}, {y}", "{d}-{M}-{yy:02d}"])
             return f.format(d=d, M=self.fake.month_name(), y=y, yy=y % 100)
@@ -124,19 +170,30 @@ class Values:
         s = str(r.randint(1, 9)) + "".join(r.choice("0123456789") for _ in range(max(n - 1, 0)))
         if n >= 7 and r.random() < V.p_group_digits:
             g = r.choice([3, 4])
-            s = " ".join(s[i:i + g] for i in range(0, len(s), g))
+            s = " ".join(s[i : i + g] for i in range(0, len(s), g))
         return self._digits(s)
 
     def number(self, cap=None):
         r = self.rng
-        opts = [str(r.randint(1, 99)), str(r.randint(100, 99999)), f"{r.randint(1, 999)},{r.randint(0, 99):02d}", f"{r.randint(1, 99)}%",
-                f"№ {r.randint(1, 999)}", f"{r.randint(1, 9)}.{r.randint(1, 9)}", f"x{r.randint(2, 12)}", str(r.randint(1, 12)),
-                f"{r.randint(10, 999)}/{r.randint(1, 99)}", f"{r.choice('ABCDEFKMPRST')}-{r.randint(100, 9999)}"]
+        opts = [
+            str(r.randint(1, 99)),
+            str(r.randint(100, 99999)),
+            f"{r.randint(1, 999)},{r.randint(0, 99):02d}",
+            f"{r.randint(1, 99)}%",
+            f"№ {r.randint(1, 999)}",
+            f"{r.randint(1, 9)}.{r.randint(1, 9)}",
+            f"x{r.randint(2, 12)}",
+            str(r.randint(1, 12)),
+            f"{r.randint(10, 999)}/{r.randint(1, 99)}",
+            f"{r.choice('ABCDEFKMPRST')}-{r.randint(100, 9999)}",
+        ]
         s = r.choice(opts)
         return self._digits(s[:cap] if cap else s)
 
     def phone(self):
-        if self.fake is not None and hasattr(self.fake, "phone_number") and self.rng.random() < 0.7:     # a locale without phone numbers: digits
+        if (
+            self.fake is not None and hasattr(self.fake, "phone_number") and self.rng.random() < 0.7
+        ):  # a locale without phone numbers: digits
             return self._digits(self.fake.phone_number())
         r = self.rng
         return self._digits(r.choice(["+", "", "0"]) + self.digits(r.choice([9, 10, 11])))
@@ -179,5 +236,15 @@ class Values:
             a, b = re.sub(r"[^a-z]", "", first.lower()), re.sub(r"[^a-z]", "", last.lower())
         else:
             a, b = _handle(r), _handle(r)
-        user = r.choice([f"{a}.{b}", f"{a[:1]}{b}", f"{a}{b}", f"{a}_{b}", f"{b}.{a}", f"{a}{r.randint(1, 99)}", f"{a[:1]}.{b}{r.randint(1, 9)}"])
+        user = r.choice(
+            [
+                f"{a}.{b}",
+                f"{a[:1]}{b}",
+                f"{a}{b}",
+                f"{a}_{b}",
+                f"{b}.{a}",
+                f"{a}{r.randint(1, 99)}",
+                f"{a[:1]}.{b}{r.randint(1, 9)}",
+            ]
+        )
         return f"{user}@{r.choice(V.domains)}"

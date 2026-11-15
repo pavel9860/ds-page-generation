@@ -1,4 +1,5 @@
 """One handwritten page of a layout"""
+
 import logging
 import random
 import unicodedata
@@ -6,20 +7,16 @@ from collections import Counter
 from dataclasses import dataclass
 
 from hwsynth.scripts import text_script
+
 from . import paper
 from .canvas import Canvas, Hand, readable
-from .config import GenCfg
+from .config import MIN_COVER, ROW_MM, RULED, GenCfg  # noqa: F401
+from .config import PAGE_MARGIN as MARGIN
 from .layouts import LAYOUTS
 
 log = logging.getLogger(__name__)
 
 WORDS, GLYPHS, LAST_WORDS = 100, 400, 50
-MIN_COVER = 0.25
-ROW_MM = (7.5, 15.0)
-MARGIN = 1.15
-RULED = {"plain": 0.5, "letter": 0.7, "notes": 0.6, "blocks": 0.4, "math": 0.3, "table": 0.0, "diary": 0.7, "recipe": 0.3,
-         "checklist": 0.4, "cornell": 0.2, "twocol": 0.3, "minutes": 0.4, "poem": 0.2, "qa": 0.5, "schedule": 0.0,
-         "application": 0.3, "outline": 0.5, "quote": 0.0, "contacts": 0.3, "corrections": 0.5}
 
 
 @dataclass
@@ -105,12 +102,21 @@ def _page(layout, pool, cfg: GenCfg, rng: random.Random) -> HandwrittenPage | No
     row_mm = lo + pick * (top - lo)
     for last in (False, True):
         c = lay(row_mm, False)
-        log.debug("%s: row %.1f mm (max %.1f), fill %.2f, %d words, %d glyphs, cover %.2f, failures %s", layout, row_mm, top,
-                  fill, c.words, c.glyphs, c.coverage(), dict(hand.failures))
+        log.debug(
+            "%s: row %.1f mm (max %.1f), fill %.2f, %d words, %d glyphs, cover %.2f, failures %s",
+            layout,
+            row_mm,
+            top,
+            fill,
+            c.words,
+            c.glyphs,
+            c.coverage(),
+            dict(hand.failures),
+        )
         if enough(c, last):
             img = readable(paper.degrade(c.img, rng, cfg, cfg.p_scan_hw), c.img)
             return HandwrittenPage(img, c.words, c.glyphs, c.coverage(), row_mm, hand.failures)
         got = max(c.words / WORDS, c.glyphs / GLYPHS, 0.3)
-        row_mm = max(lo, row_mm * min(0.95, 0.95 * got ** 0.5))
+        row_mm = max(lo, row_mm * min(0.95, 0.95 * got**0.5))
         fill = 1.0
     return None

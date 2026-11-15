@@ -1,14 +1,16 @@
 """Drop from the labelling page (tests/legacy_label/tables.json, original kept as tables_all.json) every glyph of a font that has a published table (route is not "labelled"). Tables left empty disappear.
 Also used by export_labelled.py: a published table wins over a label.   python tools/ready_filter.py"""
+
 import json
 import os
 import shutil
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from dspages import paths as _P  # noqa: E402
 from dspages.layout import legacy_tables as T
 
-L = "/run/media/p/D/ML_DS/UVTM/tests/legacy_label/"
+L = f"{_P.ROOT}/tests/legacy_label/"
 
 
 def ready(font, ch):

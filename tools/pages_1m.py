@@ -7,6 +7,7 @@ Selection: pages whose file exists and that are inside it (not page 1 of a one-i
 with fewer pages than the cap keeps all of them, the rest share what is left); inside a language the k-means clusters of the embedding space are trimmed to a common cap (water filling: big clusters lose pages, small ones
 keep all) and a trimmed cluster loses its densest points first (`thin`: the point closest to another goes, until the quota is left).
 The documents are shuffled before the shards are cut, so every shard is a sample of the whole set. 6 workers; build resumes."""
+
 import argparse
 import json
 import re
@@ -17,12 +18,13 @@ import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
+import form_pages as F
 import numpy as np
 import pandas as pd
 
-import form_pages as F
+from dspages import paths as _P  # noqa: E402
 
-sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting")
+sys.path.insert(0, f"{_P.CORPUS}")
 
 LAYOUTS, EMB = F.LAYOUTS, F.EMB
 WORK = LAYOUTS / "archive" / "info" / "pages_1m"
@@ -56,13 +58,13 @@ def thin(V, q):
     S = V @ V.T
     np.fill_diagonal(S, -2)
     alive = np.ones(n, bool)
-    am = S.argmax(1)                                           # nearest neighbour of every point and its similarity
+    am = S.argmax(1)  # nearest neighbour of every point and its similarity
     nn = S[np.arange(n), am]
     for _ in range(n - q):
         i = int(np.argmax(np.where(alive, nn, -3)))
         alive[i] = False
         S[i, :], S[:, i] = -3, -3
-        for j in np.where(alive & (am == i))[0]:               # the points that had i as their neighbour look again
+        for j in np.where(alive & (am == i))[0]:  # the points that had i as their neighbour look again
             am[j] = S[j].argmax()
             nn[j] = S[j, am[j]]
     return np.where(alive)[0]
@@ -70,10 +72,15 @@ def thin(V, q):
 
 def cmd_select(_):
     from sklearn.cluster import MiniBatchKMeans
+
     ids = np.load(EMB / "ids.npy")
     E = np.load(EMB / "embeddings.npy", mmap_mode="r")
     man = {json.loads(l)["id"]: json.loads(l)["path"] for l in open(EMB / "manifest.jsonl")}
-    D = pd.read_parquet(LAYOUTS / "archive/info/emb_sync/docs.parquet", columns=["doc", "actual"]).set_index("doc").actual
+    D = (
+        pd.read_parquet(LAYOUTS / "archive/info/emb_sync/docs.parquet", columns=["doc", "actual"])
+        .set_index("doc")
+        .actual
+    )
     db = sqlite3.connect(f"file:{LAYOUTS / 'manifest.sqlite'}?mode=ro", uri=True)
     lang = dict(db.execute("select doc, lang from plan"))
     S = pd.DataFrame({"row": np.arange(len(ids)), "doc": ids[:, 0], "page": ids[:, 1]})
@@ -94,7 +101,15 @@ def cmd_select(_):
     S["d"] = 1 - (X * cen[km.labels_]).sum(1)
     lc = S.lang.value_counts()
     lq = dict(zip(lc.index, water(lc.values, TOTAL)))
-    print("language cap:", int(max(lq.values())), "| languages kept whole:", sum(lq[l] == lc[l] for l in lc.index), "of", len(lc), flush=True)
+    print(
+        "language cap:",
+        int(max(lq.values())),
+        "| languages kept whole:",
+        sum(lq[l] == lc[l] for l in lc.index),
+        "of",
+        len(lc),
+        flush=True,
+    )
     keep = []
     for l, g in S.groupby("lang"):
         if lq[l] >= len(g):
@@ -112,7 +127,15 @@ def cmd_select(_):
     K = K.assign(o=K.doc.map(order)).sort_values(["o", "page"]).drop(columns="o").reset_index(drop=True)
     WORK.mkdir(parents=True, exist_ok=True)
     K.to_parquet(WORK / "select.parquet")
-    print(len(K), "pages,", K.doc.nunique(), "documents;", "scans/pdf by extension:", K.path.str.lower().str.endswith(".pdf").mean().round(3), "pdf share")
+    print(
+        len(K),
+        "pages,",
+        K.doc.nunique(),
+        "documents;",
+        "scans/pdf by extension:",
+        K.path.str.lower().str.endswith(".pdf").mean().round(3),
+        "pdf share",
+    )
     print(K.lang.value_counts().head(8).to_dict())
 
 
@@ -121,7 +144,9 @@ class Shard:
 
     def __init__(self, idx, part):
         self.idx, self.n = idx, len(part)
-        self.jobs = [(str(LAYOUTS / g.path.iloc[0]), list(zip(g.doc, g.page))) for _, g in part.groupby("doc", sort=False)]
+        self.jobs = [
+            (str(LAYOUTS / g.path.iloc[0]), list(zip(g.doc, g.page))) for _, g in part.groupby("doc", sort=False)
+        ]
         self.path = NPZ / f"pages_{idx:04d}.npz"
         self.bin = open(NPZ / f"pages_{idx:04d}.bin", "wb")
         self.ids, self.len, self.failed = [], [], []
@@ -158,8 +183,12 @@ class Shard:
         off = np.cumsum([0] + self.len).astype(np.int64)
         tmp = self.path.with_name(self.path.name + ".tmp.npz")
         binf = self.path.with_suffix(".bin")
-        np.savez(tmp, ids=np.asarray(self.ids, np.int32).reshape(-1, 2), offsets=off,
-                 jpeg=np.memmap(binf, np.uint8, "r") if off[-1] else np.zeros(0, np.uint8))
+        np.savez(
+            tmp,
+            ids=np.asarray(self.ids, np.int32).reshape(-1, 2),
+            offsets=off,
+            jpeg=np.memmap(binf, np.uint8, "r") if off[-1] else np.zeros(0, np.uint8),
+        )
         tmp.rename(self.path)
         binf.unlink()
         return len(self.ids), self.n
@@ -184,6 +213,7 @@ def cmd_build(a):
     """The 6 workers are never idle: the jobs of the next shard are queued while the previous one is written, and the writes and the
     uploads run in threads. A shard that is not on disk is built again after a crash; datasets already on Kaggle are skipped."""
     from dspages.kaggle_api import api
+
     global WORK, NPZ
     if a.work:
         WORK = LAYOUTS / "archive" / "info" / a.work
@@ -192,7 +222,9 @@ def cmd_build(a):
     first, base = a.first_shard, a.ds_base
     S = pd.read_parquet(WORK / "select.parquet")
     NPZ.mkdir(parents=True, exist_ok=True)
-    for f in list(NPZ.glob("*.tmp.npz")) + list(NPZ.glob("*.bin")):        # a shard that was being written when the process died
+    for f in list(NPZ.glob("*.tmp.npz")) + list(
+        NPZ.glob("*.bin")
+    ):  # a shard that was being written when the process died
         f.unlink()
     k = api()
     n_sh = -(-len(S) // F.SHARD_PAGES)
@@ -210,20 +242,23 @@ def cmd_build(a):
 
     def write_shard(sh):
         n, want = sh.write()
-        print(f"{sh.path.name}: {n}/{want} pages, {round(sh.path.stat().st_size / 1e9, 2)} GB, {int(time.time() - t0)} s", flush=True)
+        print(
+            f"{sh.path.name}: {n}/{want} pages, {round(sh.path.stat().st_size / 1e9, 2)} GB, {int(time.time() - t0)} s",
+            flush=True,
+        )
         maybe_upload()
 
-    maybe_upload()                                                         # datasets complete from an earlier run
+    maybe_upload()  # datasets complete from an earlier run
     todo = [s for s in range(n_sh) if not (NPZ / f"pages_{first + s:04d}.npz").exists()]
     pool, inflight, wfuts = make_pool(), [], []
 
     def feed(s):
         nonlocal pool
-        sh = Shard(first + s, S.iloc[s * F.SHARD_PAGES:(s + 1) * F.SHARD_PAGES])
+        sh = Shard(first + s, S.iloc[s * F.SHARD_PAGES : (s + 1) * F.SHARD_PAGES])
         for job in sh.jobs:
             try:
                 fut = pool.submit(F.render_job, job)
-            except BrokenProcessPool:                                      # a file killed MuPDF: new pool, the lost jobs are retried in write()
+            except BrokenProcessPool:  # a file killed MuPDF: new pool, the lost jobs are retried in write()
                 pool = make_pool()
                 fut = pool.submit(F.render_job, job)
             fut.add_done_callback(lambda f, sh=sh, job=job: sh.finish(job, f))
@@ -262,5 +297,6 @@ if __name__ == "__main__":
     except BaseException:
         import os
         import traceback
+
         traceback.print_exc()
-        os._exit(1)                         # not a lingering process held up by the upload thread: the service restarts at once
+        os._exit(1)  # not a lingering process held up by the upload thread: the service restarts at once

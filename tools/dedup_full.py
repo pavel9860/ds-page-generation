@@ -9,6 +9,7 @@ same prefilter and rules as pagetype.dedup) is checked on every page both docume
   python tools/dedup_full.py plan              # moves -> WORK/moves.tsv (files that pagetype.dedup apply would move)
 
 Data goes to UVTM/tests/work/dedup_full (WORK)."""
+
 import argparse
 import collections
 import sys
@@ -18,18 +19,19 @@ import numpy as np
 import pandas as pd
 import pymupdf
 
+from dspages import paths as _P
 from dspages.hand.config import PATHS
 
-sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting")
-from pagetype import dedup                                             # noqa: E402
-from pagetype.layouts import Layouts, load_manifest                    # noqa: E402
+sys.path.insert(0, f"{_P.CORPUS}")
+from pagetype import dedup  # noqa: E402
+from pagetype.layouts import Layouts, load_manifest  # noqa: E402
 
 LAYOUTS = Path(PATHS.layouts)
 EMB = Path(PATHS.uvtm) / "emb_out"
 WORK = Path(PATHS.uvtm) / "tests" / "work" / "dedup_full"
-LABELS = "/run/media/p/D/BUISNESS/corpus_collecting/pagetype/data/labels.json"
-EXTRA_OK = 0.95                      # mean cosine of the pages beyond 0 / 1 for a copy; below it: same template, other content
-SIDE = 420                           # height of a sample page, px
+LABELS = f"{_P.CORPUS}/pagetype/data/labels.json"
+EXTRA_OK = 0.95  # mean cosine of the pages beyond 0 / 1 for a copy; below it: same template, other content
+SIDE = 420  # height of a sample page, px
 
 pymupdf.TOOLS.mupdf_display_errors(False)
 
@@ -55,7 +57,10 @@ def unit(E, rows):
 def candidates(E, pg, thr=dedup.LOW):
     """[(mode, a, b, cosine on the first two embedded pages)]: "one" for documents with a single embedded page, "two" for the rest."""
     out = []
-    for mode, docs in (("one", [d for d, p in pg.items() if len(p) == 1]), ("two", [d for d, p in pg.items() if len(p) >= 2])):
+    for mode, docs in (
+        ("one", [d for d, p in pg.items() if len(p) == 1]),
+        ("two", [d for d, p in pg.items() if len(p) >= 2]),
+    ):
         k = 1 if mode == "one" else 2
         pages = [unit(E, [sorted(pg[d].items())[j][1] for d in docs]) for j in range(k)]
         print(mode, len(docs), "documents", flush=True)
@@ -82,9 +87,16 @@ def classify(P, lay):
     """Adds path a / b, same language, the old rule's verdict (pages 0 / 1 only) and the class after the check of the other pages."""
     P["path_a"], P["path_b"] = [lay.path(d) for d in P.a], [lay.path(d) for d in P.b]
     P["same_lang"] = [lay.same_lang(a, b) for a, b in zip(P.a, P.b)]
-    P["rule"] = [dedup.RULES[m](v, s, str(pa), str(pb)) for m, v, s, pa, pb in zip(P["mode"], P.cos, P.same_lang, P.path_a, P.path_b)]
+    P["rule"] = [
+        dedup.RULES[m](v, s, str(pa), str(pb))
+        for m, v, s, pa, pb in zip(P["mode"], P.cos, P.same_lang, P.path_a, P.path_b)
+    ]
     P["both_files"] = P.path_a.notna() & P.path_b.notna() & (P.path_a != P.path_b)
-    cls = np.where(P.common == 0, "first pages only", np.where(P.extra_mean >= EXTRA_OK, "confirmed by more pages", "template only"))
+    cls = np.where(
+        P.common == 0,
+        "first pages only",
+        np.where(P.extra_mean >= EXTRA_OK, "confirmed by more pages", "template only"),
+    )
     P["cls"] = np.where(P.rule & P.both_files, cls, "no (rule or file)")
     return P
 
@@ -98,7 +110,10 @@ def cmd_search(_):
     print(f"{len(P)} candidate pairs (cosine >= {dedup.LOW} on the first pages)")
     print(P.cls.value_counts().to_string())
     ok = P[P.cls.isin(["confirmed by more pages", "first pages only"])]
-    for name, s in (("pairs the old rule accepts", P[P.rule & P.both_files]), ("pairs after the check of the other pages", ok)):
+    for name, s in (
+        ("pairs the old rule accepts", P[P.rule & P.both_files]),
+        ("pairs after the check of the other pages", ok),
+    ):
         files = set(s.path_a) | set(s.path_b)
         print(f"{name}: {len(s)} pairs, {len(files)} files involved")
     for lo in (0.0, 0.9, 0.95, 0.98, 0.99):
@@ -110,7 +125,7 @@ def cmd_search(_):
 def plan_files(P, lay):
     """Moves for the pairs that stand after the check: {moved file: (kept file, cosine)} (pagetype.dedup.plan_moves on the edge list)."""
     ok = P[P.cls.isin(["confirmed by more pages", "first pages only"])]
-    rules = {m: (lambda v, same, a, b: True) for m in ("one", "two")}          # the old rules were applied in classify
+    rules = {m: (lambda v, same, a, b: True) for m in ("one", "two")}  # the old rules were applied in classify
     return dedup.plan_moves(list(zip(ok["mode"], ok.a, ok.b, ok.cos)), lay, dedup.protected_paths(lay, LABELS), rules)
 
 
@@ -118,9 +133,13 @@ def cmd_plan(_):
     _, _, lay = load()
     P = pd.read_parquet(WORK / "pairs.parquet")
     moves = plan_files(P, lay)
-    pd.DataFrame([(s, k, v) for s, (k, v) in moves.items()], columns=["moved_from", "kept_copy", "cosine"]).to_csv(WORK / "moves.tsv", sep="\t", index=False)
-    print(f"{len(moves)} files would move (kept: {len({k for k, _ in moves.values()})}); by folder:",
-          collections.Counter(p.split("/")[0] for p in moves).most_common(10))
+    pd.DataFrame([(s, k, v) for s, (k, v) in moves.items()], columns=["moved_from", "kept_copy", "cosine"]).to_csv(
+        WORK / "moves.tsv", sep="\t", index=False
+    )
+    print(
+        f"{len(moves)} files would move (kept: {len({k for k, _ in moves.values()})}); by folder:",
+        collections.Counter(p.split("/")[0] for p in moves).most_common(10),
+    )
 
 
 def thumb(path, page=0):
@@ -136,14 +155,19 @@ def thumb(path, page=0):
 
 def montage(path_a, path_b, label, out):
     import cv2
+
     tiles = []
     for p in (path_a, path_b):
         for pm in (thumb(p, 0), thumb(p, 2)):
             if pm is None:
                 tile = np.full((SIDE, SIDE * 3 // 4, 3), 255, np.uint8)
             else:
-                tile = cv2.resize(np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.w, pm.n)[..., :3] if pm.n >= 3
-                                  else np.repeat(np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.w, 1), 3, 2), (SIDE * 3 // 4, SIDE))
+                tile = cv2.resize(
+                    np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.w, pm.n)[..., :3]
+                    if pm.n >= 3
+                    else np.repeat(np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.w, 1), 3, 2),
+                    (SIDE * 3 // 4, SIDE),
+                )
             tiles.append(np.pad(tile, ((0, 0), (0, 6), (0, 0)), constant_values=127))
     img = np.concatenate(tiles, 1)
     cv2.putText(img, label[:150], (4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 0, 0), 1)
@@ -153,11 +177,11 @@ def montage(path_a, path_b, label, out):
 def cmd_samples(a):
     P = pd.read_parquet(WORK / "pairs.parquet")
     rng = np.random.default_rng(0)
-    P["band"] = pd.cut(P.cos, [0, .97, .98, .99, 1.01]).astype(str)
+    P["band"] = pd.cut(P.cos, [0, 0.97, 0.98, 0.99, 1.01]).astype(str)
     for cls, s in P[P.cls != "no (rule or file)"].groupby("cls"):
         d = WORK / "samples" / cls.replace(" ", "_")
         d.mkdir(parents=True, exist_ok=True)
-        for k, (_, r) in enumerate(s.iloc[rng.permutation(len(s))[:a.n]].iterrows()):
+        for k, (_, r) in enumerate(s.iloc[rng.permutation(len(s))[: a.n]].iterrows()):
             label = f"{r.cos:.3f} extra {r.extra_mean:.3f} ({int(r.common)}p) | {r.path_a} | {r.path_b}"
             montage(LAYOUTS / r.path_a, LAYOUTS / r.path_b, label, d / f"{k:03d}_{r.cos:.3f}.jpg")
         print(cls, len(s), "pairs, samples in", d)

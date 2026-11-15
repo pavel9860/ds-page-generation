@@ -1,10 +1,11 @@
 """Procedural noise evaluated per point (no grids, sharp at any scale): hashed value noise, fractal noise,
 cellular (Worley) noise and domain warping, compiled with numba."""
+
 import cv2
 import numpy as np
 from numba import njit, vectorize
 
-C_COARSE = 4.0                                      # feature size, in pixels, from which noise is evaluated on a coarser grid
+from .config import C_COARSE  # noqa: F401
 
 
 @njit(cache=True, inline="always")
@@ -70,8 +71,19 @@ def fbm_rotated(seed, h, w, step, theta, k, scale, octaves=5, gain=0.5):
     """Fractal noise of an (h, w) pixel grid of pitch `step`, the coordinates turned by theta and the second stretched by k:
     fbm of the rotated coordinates without the coordinate arrays."""
     sc = float(scale)
-    q = 2 if sc >= C_COARSE * step else 1                         # features of a few pixels are evaluated on every 2nd pixel
-    field = _fbm_rotated(int(seed), -(-h // q), -(-w // q), float(step) * q, np.cos(theta), np.sin(theta), float(k), sc, int(octaves), float(gain))
+    q = 2 if sc >= C_COARSE * step else 1  # features of a few pixels are evaluated on every 2nd pixel
+    field = _fbm_rotated(
+        int(seed),
+        -(-h // q),
+        -(-w // q),
+        float(step) * q,
+        np.cos(theta),
+        np.sin(theta),
+        float(k),
+        sc,
+        int(octaves),
+        float(gain),
+    )
     return field if q == 1 else cv2.resize(field, (w, h), interpolation=cv2.INTER_LINEAR)
 
 

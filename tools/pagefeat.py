@@ -4,9 +4,9 @@ feature set separate what the embedding cannot (scripts, ruled forms, checkboxes
 python tools/pagefeat.py extract --n 24000     pool pages (digital, live) -> OUT/pagefeat.parquet (resumable, 6 workers)
 python tools/pagefeat.py eval                  probes label / lang / script / cluster from embedding, features, both -> OUT/pagefeat_eval.csv
 """
+
 import argparse
 import sys
-import unicodedata
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
@@ -16,7 +16,20 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import diverse_ds as D  # noqa: E402
 
 GRID = 6
-SCRIPTS = ("latin", "cyrillic", "greek", "cjk", "kana", "hangul", "arabic", "hebrew", "devanagari", "thai", "other_indic", "other")
+SCRIPTS = (
+    "latin",
+    "cyrillic",
+    "greek",
+    "cjk",
+    "kana",
+    "hangul",
+    "arabic",
+    "hebrew",
+    "devanagari",
+    "thai",
+    "other_indic",
+    "other",
+)
 
 
 def script_of(ch):
@@ -63,6 +76,7 @@ def feat(job):
     """(row, feature vector or None) of one pdf page."""
     i, path, page = job
     import pymupdf
+
     pymupdf.TOOLS.mupdf_display_errors(False)
     try:
         p = D.resolve(path)
@@ -83,8 +97,10 @@ def feat(job):
             x0, y0, x1, y1 = b["bbox"]
             bw_.append((x1 - x0) / W)
             bh_.append((y1 - y0) / H)
-            occ[min(int(y0 / H * GRID), GRID - 1):min(int(y1 / H * GRID) + 1, GRID),
-                min(int(x0 / W * GRID), GRID - 1):min(int(x1 / W * GRID) + 1, GRID)] += 1
+            occ[
+                min(int(y0 / H * GRID), GRID - 1) : min(int(y1 / H * GRID) + 1, GRID),
+                min(int(x0 / W * GRID), GRID - 1) : min(int(x1 / W * GRID) + 1, GRID),
+            ] += 1
             for ln in b["lines"]:
                 lines_n += 1
                 lefts.append(ln["bbox"][0] / W)
@@ -107,9 +123,18 @@ def feat(job):
         sc = sc / max(sc.sum(), 1)
         f.update({f"sc_{n}": v for n, v in zip(SCRIPTS, sc)})
         sz = np.array(sizes) if sizes else np.zeros(1)
-        f.update(chars=np.log1p(chars), blocks=len(blocks), lines=lines_n, fonts=len(fonts), size_mean=sz.mean(), size_std=sz.std(),
-                 size_max=sz.max(), bold=bold / max(chars, 1), line_h=np.mean(lh) / H if lh else 0,
-                 text_area=sum((b["bbox"][2] - b["bbox"][0]) * (b["bbox"][3] - b["bbox"][1]) for b in blocks) / (W * H))
+        f.update(
+            chars=np.log1p(chars),
+            blocks=len(blocks),
+            lines=lines_n,
+            fonts=len(fonts),
+            size_mean=sz.mean(),
+            size_std=sz.std(),
+            size_max=sz.max(),
+            bold=bold / max(chars, 1),
+            line_h=np.mean(lh) / H if lh else 0,
+            text_area=sum((b["bbox"][2] - b["bbox"][0]) * (b["bbox"][3] - b["bbox"][1]) for b in blocks) / (W * H),
+        )
         dist(f, "span_size", sizes)
         dist(f, "line_w", lw)
         dist(f, "chars_line", cpl)
@@ -117,11 +142,17 @@ def feat(job):
         dist(f, "block_h", bh_)
         ts = np.sort(np.array(top)) if top else np.zeros(1)
         gaps = np.diff(ts) if len(ts) > 1 else np.zeros(1)
-        dist(f, "line_gap", gaps)                                       # vertical spacing of lines (leading, paragraph gaps)
+        dist(f, "line_gap", gaps)  # vertical spacing of lines (leading, paragraph gaps)
         f.update(top_margin=ts.min(), bottom_margin=1 - max(bot) if bot else 1.0, white=1 - min(1.0, f["text_area"]))
         L, R = np.array(lefts) if lefts else np.zeros(1), np.array(rights) if rights else np.zeros(1)
-        f.update(left_min=L.min(), right_max=R.max(), left_std=L.std(), right_std=R.std(),
-                 left_modes=len(np.unique(np.round(L, 2))) / max(len(L), 1), columns=float(np.sum(np.histogram(L, bins=10, range=(0, 1))[0] > 0.1 * len(L))))
+        f.update(
+            left_min=L.min(),
+            right_max=R.max(),
+            left_std=L.std(),
+            right_std=R.std(),
+            left_modes=len(np.unique(np.round(L, 2))) / max(len(L), 1),
+            columns=float(np.sum(np.histogram(L, bins=10, range=(0, 1))[0] > 0.1 * len(L))),
+        )
         for a in range(GRID):
             for c in range(GRID):
                 f[f"occ_{a}{c}"] = occ[a, c]
@@ -161,13 +192,41 @@ def feat(job):
                 elif it[0] == "c":
                     curves += 1
         imgs = pg.get_image_info()
-        isz = [(max(0, min(W, i_["bbox"][2]) - max(0, i_["bbox"][0])) * max(0, min(H, i_["bbox"][3]) - max(0, i_["bbox"][1]))) / (W * H) for i_ in imgs]
+        isz = [
+            (
+                max(0, min(W, i_["bbox"][2]) - max(0, i_["bbox"][0]))
+                * max(0, min(H, i_["bbox"][3]) - max(0, i_["bbox"][1]))
+            )
+            / (W * H)
+            for i_ in imgs
+        ]
         cover = sum(isz)
-        dpi = [max(i_["width"] / max((i_["bbox"][2] - i_["bbox"][0]) / 72, 1e-3), i_["height"] / max((i_["bbox"][3] - i_["bbox"][1]) / 72, 1e-3)) for i_ in imgs]
-        f.update(hlines=hl, vlines=vl, hlen=hlen, rects=rects, checkboxes=boxes, big_fills=fills, curves=curves, images=len(imgs),
-                 img_cover=min(cover, 1.0), widgets=len(list(pg.widgets() or [])), links=len(pg.get_links()), annots=len(list(pg.annots() or [])),
-                 drawings=len(draws), img_max=max(isz) if isz else 0.0, img_small=sum(x < 0.01 for x in isz), img_gray=sum(i_.get("colorspace", 3) == 1 for i_ in imgs),
-                 img_mask=sum(bool(i_.get("has-mask")) for i_ in imgs))
+        dpi = [
+            max(
+                i_["width"] / max((i_["bbox"][2] - i_["bbox"][0]) / 72, 1e-3),
+                i_["height"] / max((i_["bbox"][3] - i_["bbox"][1]) / 72, 1e-3),
+            )
+            for i_ in imgs
+        ]
+        f.update(
+            hlines=hl,
+            vlines=vl,
+            hlen=hlen,
+            rects=rects,
+            checkboxes=boxes,
+            big_fills=fills,
+            curves=curves,
+            images=len(imgs),
+            img_cover=min(cover, 1.0),
+            widgets=len(list(pg.widgets() or [])),
+            links=len(pg.get_links()),
+            annots=len(list(pg.annots() or [])),
+            drawings=len(draws),
+            img_max=max(isz) if isz else 0.0,
+            img_small=sum(x < 0.01 for x in isz),
+            img_gray=sum(i_.get("colorspace", 3) == 1 for i_ in imgs),
+            img_mask=sum(bool(i_.get("has-mask")) for i_ in imgs),
+        )
         dist(f, "img_area", isz)
         dist(f, "img_dpi", np.log10(np.maximum(dpi, 1)) if dpi else [])
         dist(f, "hline_len", hls)
@@ -186,7 +245,7 @@ def cmd_extract(a):
     f = D.OUT / "pagefeat.parquet"
     done = pd.read_parquet(f) if f.exists() else pd.DataFrame()
     todo = [(i, r.path, r.page) for i, r in zip(pick.index, pick.itertuples()) if i not in set(done.index)]
-    out, rows = {}, []
+    out, _rows = {}, []
     with ProcessPoolExecutor(D.WORKERS, initializer=D._init, initargs=(D.hash_index(),)) as ex:
         for n, (i, v) in enumerate(ex.map(feat, todo, chunksize=32)):
             if v is not None:
@@ -203,6 +262,7 @@ def probe(Z, y, seed=0):
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import f1_score
     from sklearn.model_selection import train_test_split
+
     tr, te = train_test_split(np.arange(len(y)), test_size=0.3, random_state=seed)
     m = LogisticRegression(max_iter=300, C=2).fit(Z[tr], y[tr])
     p = m.predict(Z[te])
@@ -213,13 +273,14 @@ def knn_agree(Z, E, k=10, n=4000):
     """Mean share of the k nearest neighbours (in Z) that are also among the k nearest in E: how much the two spaces agree."""
     rng = np.random.default_rng(0)
     q = rng.choice(len(Z), n, replace=False)
-    a = np.argsort(-(Z[q] @ Z.T), 1)[:, 1:k + 1]
-    b = np.argsort(-(E[q] @ E.T), 1)[:, 1:k + 1]
+    a = np.argsort(-(Z[q] @ Z.T), 1)[:, 1 : k + 1]
+    b = np.argsort(-(E[q] @ E.T), 1)[:, 1 : k + 1]
     return round(float(np.mean([len(set(x) & set(y)) / k for x, y in zip(a, b)])), 3)
 
 
 def cmd_eval(_):
     from sklearn.preprocessing import StandardScaler
+
     F = pd.read_parquet(D.OUT / "pagefeat.parquet")
     P = pd.read_parquet(D.OUT / "pool.parquet").loc[F.index]
     X = np.load(D.OUT / "X.npy", mmap_mode="r")
@@ -227,7 +288,28 @@ def cmd_eval(_):
     E /= np.linalg.norm(E, axis=1, keepdims=True)
     G = F.copy()
     for c in G.columns:
-        if c.startswith(("blocks", "lines", "hlines", "vlines", "rects", "checkboxes", "curves", "images", "links", "occ_", "widgets", "annots", "fonts", "big_", "drawings", "img_small", "img_gray", "img_mask")):
+        if c.startswith(
+            (
+                "blocks",
+                "lines",
+                "hlines",
+                "vlines",
+                "rects",
+                "checkboxes",
+                "curves",
+                "images",
+                "links",
+                "occ_",
+                "widgets",
+                "annots",
+                "fonts",
+                "big_",
+                "drawings",
+                "img_small",
+                "img_gray",
+                "img_mask",
+            )
+        ):
             G[c] = np.log1p(G[c])
     Z = StandardScaler().fit_transform(G.fillna(0).values).astype(np.float32)
     Zn = Z / np.linalg.norm(Z, axis=1, keepdims=True)
@@ -235,7 +317,12 @@ def cmd_eval(_):
     both = np.hstack([E * 4, Z / np.sqrt(Z.shape[1])]).astype(np.float32)
     lang = P.lang.where(P.lang.map(P.lang.value_counts()) >= 150, "other").values
     rows = []
-    for tname, y in (("label", P.label.values), ("lang", lang), ("script", script), ("cluster_c2", P.c2.values.astype(str))):
+    for tname, y in (
+        ("label", P.label.values),
+        ("lang", lang),
+        ("script", script),
+        ("cluster_c2", P.c2.values.astype(str)),
+    ):
         for sname, S in (("embedding", E), ("features", Z), ("both", both)):
             acc, f1 = probe(S, y)
             rows.append(dict(target=tname, space=sname, acc=acc, macro_f1=f1))
@@ -243,9 +330,44 @@ def cmd_eval(_):
     print(R.to_string())
     print("knn agreement features vs embedding (k=10):", knn_agree(Zn, E))
     # per-feature-group: which single groups carry label / lang information
-    groups = {"script": "sc_", "grid": "occ_", "lines_rects_boxes": ("hlines", "vlines", "hlen", "rects", "checkboxes", "big_fills", "curves", "hline_", "vline_", "rect_", "draw"),
-              "text_stats": ("chars", "blocks", "lines", "fonts", "size_", "span_", "bold", "line_h", "text_area", "line_w", "chars_line", "block_", "line_gap", "top_", "bottom_", "white"), "margins": ("left_", "right_", "columns"),
-              "images": ("images", "img_"), "widgets": ("widgets", "links", "annots")}
+    groups = {
+        "script": "sc_",
+        "grid": "occ_",
+        "lines_rects_boxes": (
+            "hlines",
+            "vlines",
+            "hlen",
+            "rects",
+            "checkboxes",
+            "big_fills",
+            "curves",
+            "hline_",
+            "vline_",
+            "rect_",
+            "draw",
+        ),
+        "text_stats": (
+            "chars",
+            "blocks",
+            "lines",
+            "fonts",
+            "size_",
+            "span_",
+            "bold",
+            "line_h",
+            "text_area",
+            "line_w",
+            "chars_line",
+            "block_",
+            "line_gap",
+            "top_",
+            "bottom_",
+            "white",
+        ),
+        "margins": ("left_", "right_", "columns"),
+        "images": ("images", "img_"),
+        "widgets": ("widgets", "links", "annots"),
+    }
     g = []
     for n, pre in groups.items():
         cols = [i for i, c in enumerate(G.columns) if c.startswith(pre)]

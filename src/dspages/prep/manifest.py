@@ -9,6 +9,7 @@ fill. Rejected pages (and the check they failed) go to
 
 python -m dspages.prep.manifest --out <paths.manifest>
 """
+
 import argparse
 import json
 import time
@@ -24,11 +25,12 @@ import pymupdf as fitz
 
 from ..conditions import script
 from ..config import Paths, get_preset
-from ..layout.content import bbox, content_mask, place_window, window_limits, window_stats
 from ..layout import refont
+from ..layout.content import bbox, content_mask, place_window, window_limits, window_stats
 from ..layout.deskew import detect_rotation, estimate_deskew_angle, needs_deskew, rotate90
 from ..layout.pictures import picture_area
 from ..layout.sources import RASTER_ZOOM
+from .config import FILE_DONE  # noqa: F401
 
 LAYOUTS = Paths().layouts
 
@@ -49,9 +51,8 @@ def _seed(path: str) -> int:
 # ---------------------------------------------------------------------------
 
 _LAYOUT = get_preset("full").layout
-_JPEG = {}                      # path -> xrefs of its images with strong JPEG artifacts (_init reads them)
-WHOLE_FILE = ("unreadable", "crashed", "error")   # rejections of a whole file: not tried again
-FILE_DONE = 1 << 30             # pages counted as taken from such a file
+_JPEG = {}  # path -> xrefs of its images with strong JPEG artifacts (_init reads them)
+WHOLE_FILE = ("unreadable", "crashed", "error")  # rejections of a whole file: not tried again
 
 
 def _reject(path, pi, language, reason, **kw):
@@ -81,8 +82,19 @@ def _page_record(img, path, pi, language, category, scan, f=1.0):
         return _reject(path, pi, language, "too small")
 
     def window(pics, max_image):
-        return place_window(np.random.default_rng(0), box, pw / ph, c.margin_frac[1], pw / cap, mask, s, pics,
-                            c.min_fill, c.fill_grid, max_image)
+        return place_window(
+            np.random.default_rng(0),
+            box,
+            pw / ph,
+            c.margin_frac[1],
+            pw / cap,
+            mask,
+            s,
+            pics,
+            c.min_fill,
+            c.fill_grid,
+            max_image,
+        )
 
     _, fill, _, ok = window(np.zeros_like(mask), 1.0)
     if not ok:
@@ -92,10 +104,21 @@ def _page_record(img, path, pi, language, category, scan, f=1.0):
     if not ok:
         return _reject(path, pi, language, "pictures", fill=round(fill, 3), picture_share=round(share, 3))
     angle = estimate_deskew_angle(gray) if scan else 0.0
-    return dict(source_path=path, page_index=pi, language=language, category=category, kind="raster",
-                rotate90=rot, deskew_deg=round(angle, 2) if needs_deskew(angle) else 0.0, used_h=round(gray.shape[0] * f),
-                used_w=round(gray.shape[1] * f), window=[round(v, 1) for v in win], margin=round(_margin(box, win), 4),
-                fill=round(fill, 3), picture_share=round(share, 3))
+    return dict(
+        source_path=path,
+        page_index=pi,
+        language=language,
+        category=category,
+        kind="raster",
+        rotate90=rot,
+        deskew_deg=round(angle, 2) if needs_deskew(angle) else 0.0,
+        used_h=round(gray.shape[0] * f),
+        used_w=round(gray.shape[1] * f),
+        window=[round(v, 1) for v in win],
+        margin=round(_margin(box, win), 4),
+        fill=round(fill, 3),
+        picture_share=round(share, 3),
+    )
 
 
 def _margin(box, win):
@@ -112,8 +135,11 @@ def _box(b, s):
 
 def _bbox_keep(b, h, w):
     y0, y1, x0, x1 = b
-    return ((y1 - y0 + 1) * (x1 - x0 + 1) >= _LAYOUT.min_content_area * h * w
-            and 1 - (y1 - y0 + 1) / h <= _LAYOUT.max_blank_margin and 1 - (x1 - x0 + 1) / w <= _LAYOUT.max_blank_margin)
+    return (
+        (y1 - y0 + 1) * (x1 - x0 + 1) >= _LAYOUT.min_content_area * h * w
+        and 1 - (y1 - y0 + 1) / h <= _LAYOUT.max_blank_margin
+        and 1 - (x1 - x0 + 1) / w <= _LAYOUT.max_blank_margin
+    )
 
 
 def _restyled_ok(img, box, z):
@@ -137,7 +163,15 @@ def _body_pt(src, pi, box):
     """Body size of a restyled page on the sheet (its content box fitted, no margin)."""
     c = _LAYOUT
     pw, ph = c.page_px
-    return refont.body_size(refont.page_blocks(src, pi, True)) * min(pw, ph * box.width / box.height) / box.width * c.sheet_mm[0] / 25.4 * 72 / pw
+    return (
+        refont.body_size(refont.page_blocks(src, pi, True))
+        * min(pw, ph * box.width / box.height)
+        / box.width
+        * c.sheet_mm[0]
+        / 25.4
+        * 72
+        / pw
+    )
 
 
 def _job_pdf(args):
@@ -154,7 +188,7 @@ def _job_pdf(args):
     with doc:
         src = refont.Source(doc)
         order = [pi for pi in np.random.default_rng(_seed(path)).permutation(doc.page_count).tolist() if pi not in skip]
-        for pi in order[:c.tries_per_page * cap]:
+        for pi in order[: c.tries_per_page * cap]:
             page = doc[pi]
             if _JPEG.get(path, set()) & {im[0] for im in page.get_images()}:
                 recs.append(_reject(path, pi, language, "jpeg artifacts"))
@@ -163,12 +197,22 @@ def _job_pdf(args):
             pix = page.get_pixmap(matrix=fitz.Matrix(z, z), colorspace=fitz.csRGB, alpha=False)
             img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
             box = refont.content_box(page)
-            body = (_body_pt(src, pi, box) if digital and category not in c.raster_only and refont.usable(src, pi, latin)
-                    else 0.0)
+            body = (
+                _body_pt(src, pi, box)
+                if digital and category not in c.raster_only and refont.usable(src, pi, latin)
+                else 0.0
+            )
             ok, fill = _restyled_ok(img, box, z) if body else (False, 0.0)
             if ok:
-                rec = dict(source_path=path, page_index=pi, language=language, category=category, kind="refont",
-                           fill=round(fill, 3), body_pt=round(body, 1))
+                rec = dict(
+                    source_path=path,
+                    page_index=pi,
+                    language=language,
+                    category=category,
+                    kind="refont",
+                    fill=round(fill, 3),
+                    body_pt=round(body, 1),
+                )
             else:
                 rec = _page_record(img, path, pi, language, category, not page.get_text().strip(), RASTER_ZOOM / z)
             recs.append(rec)
@@ -242,8 +286,11 @@ def _tree(files, c, quota, taken):
         f = files[i]
         g = script(f, c.scripts)
         tried, kept = taken.get(f["path"], (set(), 0))
-        cap = (min(c.book_pages_max, max(c.pages_per_pdf, round(c.doc_share * quota[g]))) if f["category"] == BOOKS
-               else c.pages_per_pdf) - kept
+        cap = (
+            min(c.book_pages_max, max(c.pages_per_pdf, round(c.doc_share * quota[g])))
+            if f["category"] == BOOKS
+            else c.pages_per_pdf
+        ) - kept
         cap = min(cap, f["pages"] - len(tried))
         if cap > 0:
             tree[g][f["language"]][f["topic"]].append(dict(f, cap=cap, skip=tried))
@@ -273,7 +320,7 @@ def _records(batch, workers, sink):
                     out[k] = f.result()
                     sink(out[k])
             except BrokenProcessPool:
-                running = [k for k in todo if k not in out][:workers + 1]
+                running = [k for k in todo if k not in out][: workers + 1]
         for k in running:
             try:
                 with ProcessPoolExecutor(max_workers=1, initializer=_init) as one:
@@ -299,6 +346,7 @@ def main(out_path, workers, pages=None, exclude=(), files=None):
     def mark(r, kept):
         taken[r["source_path"]][0].add(r["page_index"])
         taken[r["source_path"]][1] += FILE_DONE if r.get("reason") in WHOLE_FILE else kept
+
     for m in exclude:
         for p, kept in ((Path(m), 1), (Path(m).with_suffix(".rejected.jsonl"), 0)):
             with open(p, encoding="utf-8") as f:
@@ -309,6 +357,7 @@ def main(out_path, workers, pages=None, exclude=(), files=None):
     def add(r):
         (rejected if r["kind"] == "rejected" else recs).append(r)
         got[script(r, c.scripts)] += r["kind"] != "rejected"
+
     partial = Path(out_path).with_suffix(".partial.jsonl")
     if partial.exists():
         with open(partial, encoding="utf-8") as f:
@@ -320,11 +369,13 @@ def main(out_path, workers, pages=None, exclude=(), files=None):
         tree = _tree([json.loads(line) for line in f], c, quota, taken)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(partial, "a", encoding="utf-8") as part:
+
         def sink(rs):
             part.writelines(json.dumps(r) + "\n" for r in rs)
             part.flush()
             for r in rs:
                 add(r)
+
         while batch := _allocate(tree, {g: max(q - got[g], 0) for g, q in quota.items()}):
             _records(batch, workers, sink)
             print(f"entries={len(recs)} elapsed={time.time() - t0:.0f}s", flush=True)

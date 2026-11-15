@@ -1,5 +1,6 @@
 """Forms translated by Google Translate (browser; translation/google/gt_<lang>.json {lang, items: [{key, tr}]}, typed source lines in translation/source/src_typed.json) set again in the target language: each translated line replaces the printed line it came from (typed lines are matched to the lines of the source page in order), lines that were not translated are erased, the page is rendered with a font of the language (translate.render) into translation/pages/<lang>/<key>.pdf, and its fields are prepared (filledforms.prep_one) into handwriting/forms as new batches in_NNNN.json (answers by the agents, then forms3k_status.py). python gt_build.py [--lang xx]
 python gt_build.py [--lang xx]"""
+
 import difflib
 import glob
 import json
@@ -10,6 +11,7 @@ from multiprocessing import get_context
 from pathlib import Path
 
 import pymupdf
+
 from dspages.multilang.paths import FILLING as W
 from dspages.multilang.paths import TRANSLATION
 
@@ -24,7 +26,11 @@ def align(typed, orig):
     for t in typed:
         best, bi = 0.0, None
         for i in range(j, len(orig)):
-            r = difflib.SequenceMatcher(None, norm(t), norm(orig[i])).ratio() if norm(t) and norm(orig[i]) else float(t.strip() == orig[i].strip())
+            r = (
+                difflib.SequenceMatcher(None, norm(t), norm(orig[i])).ratio()
+                if norm(t) and norm(orig[i])
+                else float(t.strip() == orig[i].strip())
+            )
             if r > best:
                 best, bi = r, i
             if r > 0.97:
@@ -40,6 +46,7 @@ def align(typed, orig):
 def build(args):
     lang, item, meta, typed, font, tl = args
     from dspages.multilang import translate as T
+
     fid = item["key"]
     m = meta.get(fid)
     if m is None:
@@ -62,8 +69,10 @@ def build(args):
 
 
 def main():
-    from dspages.multilang import translate as T
     from hwsynth.writer import _index
+
+    from dspages.multilang import translate as T
+
     only = sys.argv[sys.argv.index("--lang") + 1] if "--lang" in sys.argv else None
     meta = json.loads((W / "meta.json").read_text())
     typed = {s[0]: s[2] for s in json.loads((TRANSLATION / "source/src_typed.json").read_text())}
@@ -78,7 +87,11 @@ def main():
         try:
             font = T.fonts_for(sample, index, 1)[0]
         except IndexError:
-            miss = [c for c in sorted(set(sample)) if not index.covers(next(iter(index.cmap)), c) and not any(index.covers(f, c) for f in index.cmap)]
+            miss = [
+                c
+                for c in sorted(set(sample))
+                if not index.covers(next(iter(index.cmap)), c) and not any(index.covers(f, c) for f in index.cmap)
+            ]
             print(lang, "no font for", "".join(miss)[:40], flush=True)
             continue
         for it in d["items"]:
@@ -90,6 +103,7 @@ def main():
             if pdf:
                 done.append((pdf, 0, lang))
     from dspages.multilang import filledforms as F
+
     with ProcessPoolExecutor(6, mp_context=get_context("spawn")) as ex:
         res = [r for r in ex.map(F.prep_one, [(p, g, l, str(W), 0) for p, g, l in done]) if r]
     first = len(list(W.glob("in_*.json")))
@@ -99,7 +113,7 @@ def main():
         meta[m["fid"]] = m
     (W / "meta.json").write_text(json.dumps(meta))
     for n in range(0, len(items), 4):
-        (W / f"in_{first + n // 4:04d}.json").write_text(json.dumps(items[n:n + 4], ensure_ascii=False))
+        (W / f"in_{first + n // 4:04d}.json").write_text(json.dumps(items[n : n + 4], ensure_ascii=False))
     print(len(done), "forms rendered,", len(items), "prepared in", -(-len(items) // 4), "batches from in_%04d" % first)
 
 

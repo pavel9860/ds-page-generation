@@ -4,6 +4,7 @@ DATA_DIR (default /kaggle/input) holds the shard datasets and the detector datas
 searched; the modules sit flat in it and are assembled into package fillpic at start). Output (OUT_DIR, default /kaggle/working), one file per shard, resumable: scan_pct_<shard>.npz with ids (n, 2), fill (n,), pic (n,), win (n, 4) [x, y, w, h as
 shares of the canvas]; NaN rows: the JPEG did not decode. A page without ink is fill 0, pic 0 with the whole canvas, 0 0 1 1, as its window. One worker process per CPU
 takes whole shards; no shard is started after HARD_STOP_H hours; a worker that dies raises here instead of hanging the run."""
+
 import glob
 import os
 import sys
@@ -13,16 +14,17 @@ from pathlib import Path
 
 DATA = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/kaggle/input")
 OUT = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("/kaggle/working")
-ROOT = os.environ.get("DETECTOR_DIR") or str(Path(next(glob.iglob(str(DATA / "**" / "detector.py"), recursive=True))).parent)
+ROOT = os.environ.get("DETECTOR_DIR") or str(
+    Path(next(glob.iglob(str(DATA / "**" / "detector.py"), recursive=True))).parent
+)
 PKG = Path("/tmp/pkg/fillpic")
 PKG.mkdir(parents=True, exist_ok=True)
 for f in Path(ROOT).glob("*.py"):
     (PKG / f.name).write_bytes(f.read_bytes())
 sys.path.insert(0, str(PKG.parent))
-from fillpic import CONFIG, Detector, shards  # noqa: E402   (sets one BLAS thread before numpy is imported)
-
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
+from fillpic import CONFIG, Detector, shards  # noqa: E402   (sets one BLAS thread before numpy is imported)
 
 LIMIT = int(os.environ.get("LIMIT", 0))
 ONLY = [x for x in os.environ.get("ONLY", "").split(",") if x]
@@ -63,12 +65,21 @@ def do_shard(path):
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    todo = [s for s in sorted(glob.glob(str(DATA / "**" / "pages_*.npz"), recursive=True)) if not ONLY or Path(s).stem in ONLY]
+    todo = [
+        s
+        for s in sorted(glob.glob(str(DATA / "**" / "pages_*.npz"), recursive=True))
+        if not ONLY or Path(s).stem in ONLY
+    ]
     print(len(todo), "shards,", WORKERS, "workers, detector in", ROOT, flush=True)
     done = pages = 0
     with ProcessPoolExecutor(WORKERS, initializer=init) as pool:
         for path, n, sec, rd in pool.map(do_shard, todo):
             done += 1
             pages += n
-            print(f"[{int((time.time() - T0) / 60)} min] {Path(path).name}: {n} pages, {sec:.0f} s (read {rd:.0f} s) ({done}/{len(todo)} shards, {pages} pages)", flush=True)
-    print("not done (time limit):", [Path(s).name for s in todo if not (OUT / shards.result_name(s)).exists()], flush=True)
+            print(
+                f"[{int((time.time() - T0) / 60)} min] {Path(path).name}: {n} pages, {sec:.0f} s (read {rd:.0f} s) ({done}/{len(todo)} shards, {pages} pages)",
+                flush=True,
+            )
+    print(
+        "not done (time limit):", [Path(s).name for s in todo if not (OUT / shards.result_name(s)).exists()], flush=True
+    )

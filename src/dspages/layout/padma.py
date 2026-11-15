@@ -1,6 +1,7 @@
 """Legacy-font text to Unicode by Padma's own tables and parser (https://github.com/pankaj28843/padma, GPL v2 or later; Telugu, Malayalam, Tamil, Devanagari,
 Gujarati, Kannada, Bengali, Gurmukhi: about 100 font names). Padma's JavaScript (encodings, DynamicFontParser, Transformer) runs unchanged in V8
 (mini-racer); `convert(font name, text)` is Padma's `Transformer(dynamic fonts -> Unicode)`. The clone is in VENDOR; no Padma code is copied into the repo."""
+
 import os
 import re
 from functools import lru_cache
@@ -9,7 +10,16 @@ from .legacy import CACHE
 
 VENDOR = os.path.join(CACHE, "tables", "padma", "src", "content")
 ORDER_FIRST = ["encodings/Common/Padma.js", "encodings/Common/Syllable.js", "encodings/Common/Unicode/Shared.js"]
-SKIP = {"defaults.js", "padma.js", "prefs.js", "upgrade.js", "relationships.js", "whitelist.js", "version.js", "contents.rdf"}
+SKIP = {
+    "defaults.js",
+    "padma.js",
+    "prefs.js",
+    "upgrade.js",
+    "relationships.js",
+    "whitelist.js",
+    "version.js",
+    "contents.rdf",
+}
 SHIM = """var window = this; var Components = {classes: {}, interfaces: {}}; function alert(){}; function dump(){};
 var document = {getElementById: function(){return null;}, createElement: function(){return {};}};"""
 
@@ -28,15 +38,18 @@ def _files():
 @lru_cache(maxsize=1)
 def engine():
     from py_mini_racer import MiniRacer
+
     ctx = MiniRacer()
     ctx.eval(SHIM)
     for f in _files():
         path = os.path.join(VENDOR, f)
         if os.path.exists(path):
             try:
-                ctx.eval(open(path, encoding="utf-8", errors="replace").read())      # table definitions: no loop to stop (a timeout only failed them under load)
+                ctx.eval(
+                    open(path, encoding="utf-8", errors="replace").read()
+                )  # table definitions: no loop to stop (a timeout only failed them under load)
             except Exception as e:
-                raise RuntimeError(f"Padma file {f}: {e}")
+                raise RuntimeError(f"Padma file {f}: {e}") from e
     ctx.eval("Unicode.initialize(); Transformer.initialize();")
     ctx.eval("""var __t = Transformer.createTransformer(Transformer.method_DynFonts, Transformer.method_Unicode);
 function __conv(face, text) { if (!__t.setDynamicFontByName(face)) return null; return __t.convert(text); }
@@ -69,7 +82,7 @@ def face_of(name):
         m = STYLE.search(k)
         if not m or m.start() < 4:
             return None
-        k = k[:m.start()]
+        k = k[: m.start()]
     return None
 
 

@@ -27,15 +27,13 @@ Methods (KERNEL):
             1536-d space of a page to the nearest selected page) of the labelled pages by class and of a pool sample by k10-density decile
 
 python tools/ds_spread.py lite | prep [--fused] | push M [--n 100000] | fetch M | test M [--full] | extent M [--n 100000] | compare"""
+
 import argparse
 import glob
 import json
 import sqlite3
 import time
 from concurrent.futures import ProcessPoolExecutor
-
-import numpy as np
-import pandas as pd
 
 import diverse_ds as DD
 import ds100k as D
@@ -44,8 +42,9 @@ import ds_grid as G
 import ds_lda as LD
 import kaggle_fps as KF
 import more_pages as M
-import pages_1m as P1
+import numpy as np
 import pages_extra as X
+import pandas as pd
 
 OUT = D.OUT / "spread"
 AUX, FUSED = "pavel9860/ds-spread-aux", "pavel9860/ds-spread-fused"
@@ -369,7 +368,9 @@ def alive_mask():
     P = pd.read_parquet(D.OUT / "pool.parquet", columns=["doc", "page"])
     ids = np.load(D.EMB / "ids.npy")
     cur = np.unique(ids[:, 0].astype(np.int64) * M.KEY + ids[:, 1])
-    return np.load(G.WORK / "aux" / "mask.npy") & np.isin(P.doc.to_numpy().astype(np.int64) * M.KEY + P.page.to_numpy(), cur)
+    return np.load(G.WORK / "aux" / "mask.npy") & np.isin(
+        P.doc.to_numpy().astype(np.int64) * M.KEY + P.page.to_numpy(), cur
+    )
 
 
 def lite_store():
@@ -394,8 +395,11 @@ def cmd_lite(a):
         f = DD.resolve(g.path.iloc[0])
         if f is not None:
             jobs.append((int(doc), str(f), bool(g.scan.iloc[0]), sorted(g.page.astype(int).tolist())))
-    jobs = jobs[:a.limit] if a.limit else jobs
-    print(f"{len(Q)} pages without lite vectors; {len(jobs)} documents, {sum(len(j[3]) for j in jobs)} pages to look at", flush=True)
+    jobs = jobs[: a.limit] if a.limit else jobs
+    print(
+        f"{len(Q)} pages without lite vectors; {len(jobs)} documents, {sum(len(j[3]) for j in jobs)} pages to look at",
+        flush=True,
+    )
     fd = OUT / ("lite_test" if a.limit else "lite")
     fd.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
@@ -404,10 +408,12 @@ def cmd_lite(a):
             f = fd / f"{c // CHUNK:04d}.npz"
             if f.exists():
                 continue
-            res = list(ex.map(X.lite_job, jobs[c:c + CHUNK], chunksize=4))
+            res = list(ex.map(X.lite_job, jobs[c : c + CHUNK], chunksize=4))
             k = [d * M.KEY + p for d, o, _ in res for p in o]
             V = np.stack([v for _, o, _ in res for v in o.values()]) if k else np.zeros((0, X.LDIM), np.float32)
-            np.savez(f"{f}.tmp.npz", key=np.array(k, np.int64), V=V, err=json.dumps({int(d): e for d, _, e in res if e}))
+            np.savez(
+                f"{f}.tmp.npz", key=np.array(k, np.int64), V=V, err=json.dumps({int(d): e for d, _, e in res if e})
+            )
             f.with_name(f.name + ".tmp.npz").rename(f)
             print(f"lite {c + len(res)}/{len(jobs)} docs, {int(time.time() - t0)} s", flush=True)
 
@@ -416,12 +422,16 @@ def strata(P):
     with sqlite3.connect(f"file:{M.LAYOUTS / 'manifest.sqlite'}?mode=ro", uri=True) as db:
         typ = dict(db.execute("select doc, type from plan"))
     t = P.h.map(typ).fillna("_untyped")
-    return pd.Series(P.lang.fillna("unknown").to_numpy() + "|" + t.to_numpy() + "|" + (P.hw > 0).astype(str).to_numpy(), index=P.index)
+    return pd.Series(
+        P.lang.fillna("unknown").to_numpy() + "|" + t.to_numpy() + "|" + (P.hw > 0).astype(str).to_numpy(),
+        index=P.index,
+    )
 
 
 def top_var(Z, share):
     """Eigen-decomposition of the covariance of the rows Z; (mean, eigenvalues desc, vectors desc)."""
     import torch
+
     T = torch.from_numpy(Z).double()
     mu = T.mean(0)
     ev, V = torch.linalg.eigh(torch.cov(T.T))
@@ -429,7 +439,9 @@ def top_var(Z, share):
 
 
 def upload(d, ident):
-    (d / "dataset-metadata.json").write_text(json.dumps({"title": ident.split("/")[1], "id": ident, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+    (d / "dataset-metadata.json").write_text(
+        json.dumps({"title": ident.split("/")[1], "id": ident, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]})
+    )
     print(KF.kaggle("datasets", "create", "-p", str(d), timeout=7200)[-300:])
 
 
@@ -455,7 +467,10 @@ def cmd_prep(a):
     muE, evE, _ = top_var(E[real[samp]].astype(np.float32), 1)
     key, V = lite_store()
     V = np.nan_to_num(V, nan=0.0, posinf=0.0, neginf=0.0)
-    for lo, hi, flag in ((0, X.LITE, X.LDIM - 2), (X.LITE, X.LITE + M.NP, X.LDIM - 1)):     # z-score of each block (pages_topup select)
+    for lo, hi, flag in (
+        (0, X.LITE, X.LDIM - 2),
+        (X.LITE, X.LITE + M.NP, X.LDIM - 1),
+    ):  # z-score of each block (pages_topup select)
         h = V[:, flag] > 0
         mu, sd = V[h, lo:hi].mean(0), V[h, lo:hi].std(0) + 1e-6
         V[:, lo:hi] = np.where(h[:, None], np.clip((V[:, lo:hi] - mu) / sd, -5, 5), 0)
@@ -465,7 +480,9 @@ def cmd_prep(a):
     ok = (at < len(key)) & (key[np.minimum(at, len(key) - 1)] == pk)
     L = np.zeros((len(real), X.LDIM), np.float32)
     L[ok] = V[at[ok]]
-    print(f"lite vectors: {int(ok.sum())} of {len(real)} pages ({len(real) - int(ok.sum())} without: empty / unreadable page, zeros)")
+    print(
+        f"lite vectors: {int(ok.sum())} of {len(real)} pages ({len(real) - int(ok.sum())} without: empty / unreadable page, zeros)"
+    )
     muL, evL, _ = top_var(L[samp], 1)
     L -= muL.astype(np.float32)
     langs, lg = np.unique(R.lang.fillna("unknown").to_numpy(), return_inverse=True)
@@ -480,28 +497,53 @@ def cmd_prep(a):
     Fo = Fo[Fo.fam.isin(fams)]
     di = {h: i for i, h in enumerate(R.h.unique())}
     from scipy import sparse
-    Ind = sparse.csr_matrix((np.ones(len(Fo), np.float32), (Fo.doc.map(di).to_numpy(), pd.Index(fams).get_indexer(Fo.fam))), shape=(len(di), len(fams)))
+
+    Ind = sparse.csr_matrix(
+        (np.ones(len(Fo), np.float32), (Fo.doc.map(di).to_numpy(), pd.Index(fams).get_indexer(Fo.fam))),
+        shape=(len(di), len(fams)),
+    )
     pdoc = R.h.map(di).to_numpy()
     muF, evF, VF = top_var(Ind[pdoc[samp]].toarray(), 1)
     kF = int(np.searchsorted(np.cumsum(evF) / evF.sum(), FONT_VAR) + 1)
-    Fp = np.concatenate([((Ind[pdoc[a:a + 100_000]].toarray() - muF) @ VF[:, :kF]).astype(np.float16) for a in range(0, len(real), 100_000)])
-    print(f"font families in >= {FONT_DOCS} documents: {len(fams)}; {kF} PCs hold {FONT_VAR:.0%}; pages with a listed family "
-          f"{float(np.isin(R.h, Fo.doc.unique()).mean()):.3f}")
+    Fp = np.concatenate(
+        [
+            ((Ind[pdoc[a : a + 100_000]].toarray() - muF) @ VF[:, :kF]).astype(np.float16)
+            for a in range(0, len(real), 100_000)
+        ]
+    )
+    print(
+        f"font families in >= {FONT_DOCS} documents: {len(fams)}; {kF} PCs hold {FONT_VAR:.0%}; pages with a listed family "
+        f"{float(np.isin(R.h, Fo.doc.unique()).mean()):.3f}"
+    )
     w = {"wE": 1 / np.sqrt(evE[0]), "wL": 1 / np.sqrt(evL[0]), "wG": 1 / np.sqrt(evG[0]), "wF": 1 / np.sqrt(evF[0])}
     inert = {"E": evE.sum() / evE[0], "L": evL.sum() / evL[0], "G": evG.sum() / evG[0], "F": evF[:kF].sum() / evF[0]}
-    print("MFA weights (1 / first singular value):", {k: round(float(v), 3) for k, v in w.items()}, "| block inertia after weighting:",
-          {k: round(float(v), 2) for k, v in inert.items()})
+    print(
+        "MFA weights (1 / first singular value):",
+        {k: round(float(v), 3) for k, v in w.items()},
+        "| block inertia after weighting:",
+        {k: round(float(v), 2) for k, v in inert.items()},
+    )
     for k, part in enumerate(np.array_split(np.arange(len(real)), PARTS)):
         np.save(f / f"lite_{k}.npy", L[part].astype(np.float16))
         np.save(f / f"fonts_{k}.npy", Fp[part])
     np.save(f / "lang.npy", lg.astype(np.int16))
-    np.savez(f / "mfa.npz", muE=muE.astype(np.float32), p=p.astype(np.float32), langs=langs, fams=np.array(fams), **{k: np.float32(v) for k, v in w.items()})
+    np.savez(
+        f / "mfa.npz",
+        muE=muE.astype(np.float32),
+        p=p.astype(np.float32),
+        langs=langs,
+        fams=np.array(fams),
+        **{k: np.float32(v) for k, v in w.items()},
+    )
     upload(f, FUSED)
 
 
 def kernel_code(method, n, root, outdir, dev, sub):
     ratios = (74, 20, 10, 5)
-    return (f"METHOD, N, ROOT, OUTDIR, DEV, SUB, RATIOS, KN, BE = {method!r}, {n}, {root!r}, {outdir!r}, {dev!r}, {sub}, {ratios}, 64, 500\n" + KERNEL)
+    return (
+        f"METHOD, N, ROOT, OUTDIR, DEV, SUB, RATIOS, KN, BE = {method!r}, {n}, {root!r}, {outdir!r}, {dev!r}, {sub}, {ratios}, 64, 500\n"
+        + KERNEL
+    )
 
 
 def kid(method):
@@ -514,20 +556,41 @@ def cmd_push(a):
     (d / "run.py").write_text(kernel_code(a.method, a.n, "/kaggle/input", "/kaggle/working", "cuda", None))
     src = [KF.DS, AUX] + ([FUSED] if a.method.startswith("fused") else [])
     ks = [kid("fused_knn")] if a.method in ("fused_elim", "fused_herd") else []
-    (d / "kernel-metadata.json").write_text(json.dumps({
-        "id": kid(a.method), "title": kid(a.method).split("/")[1], "code_file": "run.py", "language": "python", "kernel_type": "script",
-        "is_private": True, "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "dataset_sources": src, "kernel_sources": ks,
-        "competition_sources": [], "model_sources": [], "machine_shape": "NvidiaTeslaT4"}))
+    (d / "kernel-metadata.json").write_text(
+        json.dumps(
+            {
+                "id": kid(a.method),
+                "title": kid(a.method).split("/")[1],
+                "code_file": "run.py",
+                "language": "python",
+                "kernel_type": "script",
+                "is_private": True,
+                "enable_gpu": True,
+                "enable_tpu": False,
+                "enable_internet": False,
+                "dataset_sources": src,
+                "kernel_sources": ks,
+                "competition_sources": [],
+                "model_sources": [],
+                "machine_shape": "NvidiaTeslaT4",
+            }
+        )
+    )
     print(KF.kaggle("kernels", "push", "-p", str(d)))
 
 
 def cmd_test(a):
     """The kernel on the CPU: pool parts of kaggle_fps WORK/data, OUT/aux and OUT/fused linked into one folder."""
     import torch
+
     torch.set_num_threads(M.WORKERS)
     root = D.TESTS / "spread" / "test" / "in"
     root.mkdir(parents=True, exist_ok=True)
-    for f in [*glob.glob(str(KF.WORK / "data" / "pool_*.npy")), *glob.glob(str(OUT / "aux" / "*.npy")), *glob.glob(str(OUT / "fused" / "*.np*"))]:
+    for f in [
+        *glob.glob(str(KF.WORK / "data" / "pool_*.npy")),
+        *glob.glob(str(OUT / "aux" / "*.npy")),
+        *glob.glob(str(OUT / "fused" / "*.np*")),
+    ]:
         t = root / f.rsplit("/", 1)[1]
         if not t.exists():
             t.symlink_to(f)
@@ -555,25 +618,38 @@ def cmd_fetch(a):
 def fused_rows():
     """The multi-view vectors of the in-scope pages (rows = OUT/aux mask order), fp16, as the kernel builds them."""
     import torch
+
     real = np.flatnonzero(np.load(OUT / "aux" / "mask.npy"))
     E = B.pool_X()
     f = OUT / "fused"
     w = np.load(f / "mfa.npz")
     Lz = np.concatenate([np.load(f / f"lite_{k}.npy") for k in range(PARTS)])
     Fp = np.concatenate([np.load(f / f"fonts_{k}.npy") for k in range(PARTS)])
-    lg = np.load(f / "lang.npy")
-    muE, p = torch.from_numpy(w["muE"]), torch.from_numpy(w["p"])
-    U = np.empty((len(real), E.shape[1] + Lz.shape[1] + Fp.shape[1]), np.float16)                 # no language block
+    np.load(f / "lang.npy")
+    muE, _p = torch.from_numpy(w["muE"]), torch.from_numpy(w["p"])
+    U = np.empty((len(real), E.shape[1] + Lz.shape[1] + Fp.shape[1]), np.float16)  # no language block
     for a in range(0, len(real), 100_000):
         b = min(a + 100_000, len(real))
         e = (torch.from_numpy(E[real[a:b]]).float() - muE) * float(w["wE"])
-        U[a:b] = torch.cat([e, torch.from_numpy(Lz[a:b]).float() * float(w["wL"]), torch.from_numpy(Fp[a:b]).float() * float(w["wF"])], 1).half().numpy()
+        U[a:b] = (
+            torch.cat(
+                [
+                    e,
+                    torch.from_numpy(Lz[a:b]).float() * float(w["wL"]),
+                    torch.from_numpy(Fp[a:b]).float() * float(w["wF"]),
+                ],
+                1,
+            )
+            .half()
+            .numpy()
+        )
     return U
 
 
 def kcenter_radii(V):
     """Greedy k-center order of the rows V (first: the row nearest their mean) -> insertion distance per row in pick order (first: inf), order."""
     import torch
+
     T = torch.from_numpy(V).float()
     sq = (T * T).sum(1)
     j = int(((T - T.mean(0)) ** 2).sum(1).argmin())
@@ -582,13 +658,14 @@ def kcenter_radii(V):
     for t in range(len(T)):
         order[t], rad[t] = j, np.inf if t == 0 else float(d[j]) ** 0.5
         torch.minimum(d, (sq + sq[j] - 2 * (T @ T[j])).clamp_(min=0), out=d)
-        d[order[:t + 1]] = -1
+        d[order[: t + 1]] = -1
         j = int(d.argmax())
     return rad, order
 
 
 def cmd_extent(a):
     import torch
+
     torch.set_num_threads(M.WORKERS)
     z = np.load(OUT / "out" / a.method / f"{a.method}.npz")
     cl, pool_i = z["cl"], z["pool_i"]
@@ -597,7 +674,10 @@ def cmd_extent(a):
     U = fused_rows() if a.method.startswith("fused") else B.pool_X()[real]
     o = np.argsort(cl, kind="stable")
     groups = np.split(o, np.cumsum(np.bincount(cl))[:-1])
-    print(f"{len(groups)} clusters, pages per cluster median {int(np.median([len(g) for g in groups]))} max {max(len(g) for g in groups)}", flush=True)
+    print(
+        f"{len(groups)} clusters, pages per cluster median {int(np.median([len(g) for g in groups]))} max {max(len(g) for g in groups)}",
+        flush=True,
+    )
     t0, rad, idx = time.time(), [], []
     for k, g in enumerate(groups):
         r, order = kcenter_radii(U[g])
@@ -605,7 +685,7 @@ def cmd_extent(a):
         if k % 1000 == 0:
             print(f"{k} clusters, {int(time.time() - t0)} s", flush=True)
     rad, idx = np.concatenate(rad), np.concatenate(idx)
-    top = np.argsort(-rad, kind="stable")[:a.n]
+    top = np.argsort(-rad, kind="stable")[: a.n]
     print(f"common spacing (the {a.n}th insertion distance): {rad[top[-1]]:.4f}")
     ideal = np.bincount(cl[idx[top]], minlength=len(groups))
     name = f"{a.method}_extent"
@@ -613,8 +693,10 @@ def cmd_extent(a):
     out.mkdir(parents=True, exist_ok=True)
     np.savez(out / f"{name}.npz", pick=real[idx[top]], pool_i=pool_i, cl=cl, ideal=ideal.astype(np.float64))
     pd.DataFrame({"pool_i": real[idx[top]]}).to_parquet(OUT / f"{name}.parquet")
-    print(f"{a.n} pages -> {OUT / f'{name}.parquet'}; pages per cluster: median {int(np.median(ideal))}, max {ideal.max()}, "
-          f"clusters with one page {int((ideal == 1).sum())}, clusters taken whole {int((ideal == np.bincount(cl)).sum())}")
+    print(
+        f"{a.n} pages -> {OUT / f'{name}.parquet'}; pages per cluster: median {int(np.median(ideal))}, max {ideal.max()}, "
+        f"clusters with one page {int((ideal == 1).sum())}, clusters taken whole {int((ideal == np.bincount(cl)).sum())}"
+    )
 
 
 CONT = ("fused_elim", "fused_herd", "invdens", "dmap")
@@ -642,23 +724,27 @@ def cmd_cont(a):
         pick = np.searchsorted(pool_i, k["pick"])
         if "count" in k.files:
             mass = k["count"].astype(np.float64)
-    elif a.method == "invdens":                                        # volume per page T_k^d (Levina-Bickel intrinsic dimension)
+    elif a.method == "invdens":  # volume per page T_k^d (Levina-Bickel intrinsic dimension)
         T = z["kd"][:, :ID_K].astype(np.float64) + 1e-9
         inv_m = np.log(T[:, -1:] / T[:, :-1]).mean(1)
         dim = 1 / inv_m.mean()
         lv = dim * np.log(T[:, DENS_K - 1])
         v = np.exp(lv - lv.max())
         mass = N * v / v.sum()
-        print(f"intrinsic dimension (Levina-Bickel, k={ID_K}, MacKay-Ghahramani mean): {dim:.1f}; local median {np.median(1 / inv_m):.1f}")
+        print(
+            f"intrinsic dimension (Levina-Bickel, k={ID_K}, MacKay-Ghahramani mean): {dim:.1f}; local median {np.median(1 / inv_m):.1f}"
+        )
         pick = pps(mass)
-    else:                                                              # 1 / kernel density at the k-center spacing (Coifman-Lafon alpha = 1)
+    else:  # 1 / kernel density at the k-center spacing (Coifman-Lafon alpha = 1)
         v = 1 / z["dens"]
         mass = N * v / v.sum()
         pick = pps(mass)
     if mass is not None:
         add = np.maximum(mass - 1, 0)
-        print(f"target mass per page: median {np.median(mass):.3f}, max {mass.max():.1f}; pages with mass > 1: {int((mass > 1).sum())}; "
-              f"pages to add {int(round(add.sum()))}")
+        print(
+            f"target mass per page: median {np.median(mass):.3f}, max {mass.max():.1f}; pages with mass > 1: {int((mass > 1).sum())}; "
+            f"pages to add {int(round(add.sum()))}"
+        )
         out = OUT / "out" / name
         out.mkdir(parents=True, exist_ok=True)
         np.savez(out / f"{name}.npz", pick=pool_i[pick], pool_i=pool_i, mass=mass)
@@ -670,12 +756,13 @@ def coverage(E, q, s, block=1024):
     """Distance of every query page q (pool rows) to the nearest other page of the set s (unit rows of E; a query page in s is not its own
     neighbour)."""
     import torch
+
     s = np.sort(s)
     St = torch.from_numpy(E[s]).float()
     out = []
     for a in range(0, len(q), block):
-        v, i = (torch.from_numpy(E[q[a:a + block]]).float() @ St.T).topk(2, dim=1)
-        own = torch.from_numpy(s[i[:, 0].numpy()] == q[a:a + block])
+        v, i = (torch.from_numpy(E[q[a : a + block]]).float() @ St.T).topk(2, dim=1)
+        own = torch.from_numpy(s[i[:, 0].numpy()] == q[a : a + block])
         c = torch.where(own, v[:, 1], v[:, 0])
         out.append((2 - 2 * c).clamp(min=0).sqrt().numpy())
     return np.concatenate(out)
@@ -683,6 +770,7 @@ def coverage(E, q, s, block=1024):
 
 def cmd_compare(a):
     import torch
+
     torch.set_num_threads(M.WORKERS)
     P = pd.read_parquet(D.OUT / "pool.parquet", columns=["h", "lang", "hw", "scan"])
     m = alive_mask()
@@ -692,10 +780,18 @@ def cmd_compare(a):
     P["hw>0"] = P.hw > 0
     raw = pd.read_parquet(D.OUT / "select.parquet").pool_i.to_numpy()
     sets = {"pool": np.flatnonzero(m), "raw_fps": raw[m[raw]]}
-    sets |= {k: pd.read_parquet(OUT / f"{k}.parquet").pool_i.to_numpy() for k in a.sets.split(",") if (OUT / f"{k}.parquet").exists()}
+    sets |= {
+        k: pd.read_parquet(OUT / f"{k}.parquet").pool_i.to_numpy()
+        for k in a.sets.split(",")
+        if (OUT / f"{k}.parquet").exists()
+    }
     print("pages per set:", {k: len(v) for k, v in sets.items()})
     for col in ("type", "hw>0", "scan", "lang"):
-        T = pd.DataFrame({k: P[col].iloc[v].value_counts(normalize=True) for k, v in sets.items()}).fillna(0).sort_values("pool", ascending=False)
+        T = (
+            pd.DataFrame({k: P[col].iloc[v].value_counts(normalize=True) for k, v in sets.items()})
+            .fillna(0)
+            .sort_values("pool", ascending=False)
+        )
         if col == "lang":
             print("languages:", {k: int((P.lang.iloc[v].value_counts() > 0).sum()) for k, v in sets.items()})
             T = T.head(12)
@@ -734,7 +830,9 @@ def cmd_compare(a):
     print(pd.DataFrame(In).round(3).to_string())
     print("median distance to the nearest other selected page")
     print(pd.DataFrame(C).round(3).to_string())
-    print("\n20,000 pool pages by k10-distance decile (1 = densest): median distance to the nearest other selected page")
+    print(
+        "\n20,000 pool pages by k10-distance decile (1 = densest): median distance to the nearest other selected page"
+    )
     print(pd.DataFrame(Dn).round(3).to_string())
 
 
@@ -757,4 +855,13 @@ if __name__ == "__main__":
     p.add_argument("--n", type=int, default=100_000)
     sp.add_parser("compare").add_argument("--sets", default="fused_fps," + ",".join(CONT))
     a = ap.parse_args()
-    {"lite": cmd_lite, "prep": cmd_prep, "push": cmd_push, "fetch": cmd_fetch, "test": cmd_test, "extent": cmd_extent, "cont": cmd_cont, "compare": cmd_compare}[a.cmd](a)
+    {
+        "lite": cmd_lite,
+        "prep": cmd_prep,
+        "push": cmd_push,
+        "fetch": cmd_fetch,
+        "test": cmd_test,
+        "extent": cmd_extent,
+        "cont": cmd_cont,
+        "compare": cmd_compare,
+    }[a.cmd](a)

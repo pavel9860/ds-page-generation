@@ -8,6 +8,7 @@ one-image file) are skipped; files MuPDF cannot open (webp, a broken pdf) are re
 
 Shard = ids int32 (n, 2) [doc, page] (emb_out ids), offsets int64 (n + 1), jpeg uint8 (page i = jpeg[offsets[i]:offsets[i + 1]]), the
 layout of pagetype.pack_npz. A dataset holds SHARDS_PER_DATASET shards (~5 GB). 6 workers at most; build / upload skip what exists."""
+
 import argparse
 import io
 import json
@@ -24,9 +25,10 @@ import pandas as pd
 import pymupdf
 from PIL import Image
 
+from dspages import paths as _P  # noqa: E402
 from dspages.hand.config import PATHS
 
-sys.path.insert(0, "/run/media/p/D/BUISNESS/corpus_collecting")
+sys.path.insert(0, f"{_P.CORPUS}")
 
 LAYOUTS = Path(PATHS.layouts)
 EMB = Path(PATHS.uvtm) / "emb_out"
@@ -34,7 +36,7 @@ WORK = LAYOUTS / "archive" / "info" / "form_pages"
 NPZ = WORK / "npz"
 P_MIN = 0.2
 W, H, QUALITY = 768, 1024, 90
-SHARD_PAGES, SHARDS_PER_DATASET = 12_000, 10                   # ~2 GB a shard, ~20 GB a dataset
+SHARD_PAGES, SHARDS_PER_DATASET = 12_000, 10  # ~2 GB a shard, ~20 GB a dataset
 WORKERS = 6
 DOC_SECONDS = 120
 DATASET = "pavel9860/form-pages-724x1024"
@@ -55,13 +57,14 @@ def cmd_select(_):
     from pagetype import config as C
     from pagetype.head import Head
     from pagetype.layouts import Layouts, load_manifest
+
     h = Head.load(C.MODEL_PATH)
     fb, ff = h.classes.index("forms_blank"), h.classes.index("forms_filled")
     E, ids = np.load(EMB / "embeddings.npy", mmap_mode="r"), np.load(EMB / "ids.npy")
     pb, pf = np.zeros(len(ids), np.float32), np.zeros(len(ids), np.float32)
     for a in range(0, len(ids), 100_000):
-        p = h.predict_proba(np.asarray(E[a:a + 100_000], np.float32))
-        pb[a:a + 100_000], pf[a:a + 100_000] = p[:, fb], p[:, ff]
+        p = h.predict_proba(np.asarray(E[a : a + 100_000], np.float32))
+        pb[a : a + 100_000], pf[a : a + 100_000] = p[:, fb], p[:, ff]
     S = pd.DataFrame({"doc": ids[:, 0], "page": ids[:, 1], "pb": pb, "pf": pf})
     S = S[(S.pb > P_MIN) | (S.pf > P_MIN)].sort_values(["doc", "page"]).reset_index(drop=True)
     lay = Layouts(LAYOUTS, load_manifest(EMB / "manifest.jsonl"))
@@ -76,7 +79,9 @@ def resize(rgb):
     """Any page to W x H, no padding (a page rendered at that size is left as it is)."""
     if rgb.shape[:2] == (H, W):
         return rgb
-    return cv2.resize(rgb, (W, H), interpolation=cv2.INTER_AREA if rgb.shape[0] * rgb.shape[1] > W * H else cv2.INTER_CUBIC)
+    return cv2.resize(
+        rgb, (W, H), interpolation=cv2.INTER_AREA if rgb.shape[0] * rgb.shape[1] > W * H else cv2.INTER_CUBIC
+    )
 
 
 def encode(rgb):
@@ -90,11 +95,29 @@ def fallback(path, d, p):
     """(doc, page, jpeg) by another reader: PIL for an image MuPDF refuses, pdftoppm for a pdf; None when that fails too."""
     import subprocess
     import tempfile
+
     try:
         if path.lower().endswith(".pdf"):
             with tempfile.TemporaryDirectory() as tmp:
-                subprocess.run(["pdftoppm", "-jpeg", "-f", str(p + 1), "-l", str(p + 1), "-scale-to-x", str(W), "-scale-to-y", str(H),
-                                path, f"{tmp}/o"], check=True, timeout=120, capture_output=True)
+                subprocess.run(
+                    [
+                        "pdftoppm",
+                        "-jpeg",
+                        "-f",
+                        str(p + 1),
+                        "-l",
+                        str(p + 1),
+                        "-scale-to-x",
+                        str(W),
+                        "-scale-to-y",
+                        str(H),
+                        path,
+                        f"{tmp}/o",
+                    ],
+                    check=True,
+                    timeout=120,
+                    capture_output=True,
+                )
                 got = sorted(Path(tmp).glob("o*.jpg"))
                 rgb = np.asarray(Image.open(got[0]).convert("RGB"))
         elif p == 0:
@@ -109,6 +132,7 @@ def fallback(path, d, p):
 def render_job(args):
     """(path, [(doc, page)]) -> [(doc, page, jpeg)]: scan pictures decoded at reduced scale, other pages rendered."""
     from pagetype import thumbs as T
+
     path, items = args
     out = []
     signal.signal(signal.SIGALRM, _alarm)
@@ -120,7 +144,11 @@ def render_job(args):
                     pg = doc[p]
                     rgb = T.scan_image(doc, pg, H)
                     if rgb is None:
-                        pm = pg.get_pixmap(matrix=pymupdf.Matrix(W / pg.rect.width, H / pg.rect.height), colorspace=pymupdf.csRGB, alpha=False)
+                        pm = pg.get_pixmap(
+                            matrix=pymupdf.Matrix(W / pg.rect.width, H / pg.rect.height),
+                            colorspace=pymupdf.csRGB,
+                            alpha=False,
+                        )
                         rgb = np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.w, 3)
                     out.append((d, p, encode(rgb)))
                 except Timeout:
@@ -152,6 +180,7 @@ def run_jobs(jobs):
 def upload(k, i, files, dataset=DATASET, work=None):
     """Dataset <dataset>-<i> with `files`; waits until they are listed (the status endpoint answers 403 for a while)."""
     import shutil
+
     ref = f"{dataset}-{i}"
     work = work or WORK
     names = {f.name for f in files}
@@ -165,8 +194,11 @@ def upload(k, i, files, dataset=DATASET, work=None):
     folder.mkdir()
     for f in files:
         (folder / f.name).hardlink_to(f)
-    (folder / "dataset-metadata.json").write_text(json.dumps({"title": ref.split("/")[1], "id": ref, "licenses": [{"name": "CC-BY-NC-SA-4.0"}],
-                                                              "isPrivate": False}))
+    (folder / "dataset-metadata.json").write_text(
+        json.dumps(
+            {"title": ref.split("/")[1], "id": ref, "licenses": [{"name": "CC-BY-NC-SA-4.0"}], "isPrivate": False}
+        )
+    )
     t0 = time.time()
     try:
         k.dataset_status(ref)
@@ -176,7 +208,7 @@ def upload(k, i, files, dataset=DATASET, work=None):
     for _ in range(90):
         try:
             if names <= {x.name for x in k.dataset_list_files(ref).files}:
-                try:                                         # the CLI creates every dataset private whatever isPrivate says: make it public
+                try:  # the CLI creates every dataset private whatever isPrivate says: make it public
                     k.dataset_metadata_update(ref, str(folder))
                 except Exception as e:
                     print(f"{ref}: could not make it public: {e!r}"[:200], flush=True)
@@ -190,20 +222,27 @@ def upload(k, i, files, dataset=DATASET, work=None):
 
 def cmd_build(_):
     from pagetype.pack_npz import write_shard
+
     from dspages.kaggle_api import api
+
     S = pd.read_parquet(WORK / "select.parquet").reset_index(drop=True)
     NPZ.mkdir(parents=True, exist_ok=True)
     k = api()
     n_sh = -(-len(S) // SHARD_PAGES)
-    pool, pending, t0 = ThreadPoolExecutor(1), [], time.time()           # one upload at a time, while the next shards are built
+    pool, pending, t0 = ThreadPoolExecutor(1), [], time.time()  # one upload at a time, while the next shards are built
     for s in range(n_sh):
         f = NPZ / f"forms_{s:04d}.npz"
         if not f.exists():
-            part = S.iloc[s * SHARD_PAGES:(s + 1) * SHARD_PAGES]
-            got = run_jobs([(str(LAYOUTS / g.path.iloc[0]), list(zip(g.doc, g.page))) for _, g in part.groupby("doc", sort=True)])
+            part = S.iloc[s * SHARD_PAGES : (s + 1) * SHARD_PAGES]
+            got = run_jobs(
+                [(str(LAYOUTS / g.path.iloc[0]), list(zip(g.doc, g.page))) for _, g in part.groupby("doc", sort=True)]
+            )
             got.sort(key=lambda x: (x[0], x[1]))
             write_shard(f, [(d, p) for d, p, _ in got], [j for *_, j in got])
-            print(f"{f.name}: {len(got)}/{len(part)} pages, {round(f.stat().st_size / 1e9, 2)} GB, {int(time.time() - t0)} s", flush=True)
+            print(
+                f"{f.name}: {len(got)}/{len(part)} pages, {round(f.stat().st_size / 1e9, 2)} GB, {int(time.time() - t0)} s",
+                flush=True,
+            )
         if (s + 1) % SHARDS_PER_DATASET == 0 or s == n_sh - 1:
             i = s // SHARDS_PER_DATASET
             files = [NPZ / f"forms_{j:04d}.npz" for j in range(i * SHARDS_PER_DATASET, s + 1)]

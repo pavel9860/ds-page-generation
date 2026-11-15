@@ -1,4 +1,5 @@
 """Boxes around handwritten text lines from the ink"""
+
 import json
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -53,14 +54,18 @@ def _bands_by_level(ink):
 def _bands_by_valley(ink):
     prof = _profile(ink)
     z = prof - prof.mean()
-    ac = np.correlate(z, z, "full")[len(z) - 1:]
+    ac = np.correlate(z, z, "full")[len(z) - 1 :]
     lo, hi = C.lag[0], min(C.lag[1], len(z) // 2)
     if hi <= lo + 2 or ac[0] <= 0 or ac[lo:hi].max() <= C.ac_min * ac[0]:
         return None
     pitch = lo + int(np.argmax(ac[lo:hi]))
     valleys, _ = find_peaks(-prof, distance=max(int(C.valley * pitch), 5), prominence=C.prominence * prof.max())
     cuts = [0] + [int(v) for v in valleys] + [len(prof)]
-    return [(a, b, 1.6 * pitch) for a, b in zip(cuts, cuts[1:]) if b - a >= C.min_h and prof[a:b].max() > C.on_share * prof.max()]
+    return [
+        (a, b, 1.6 * pitch)
+        for a, b in zip(cuts, cuts[1:])
+        if b - a >= C.min_h and prof[a:b].max() > C.on_share * prof.max()
+    ]
 
 
 def boxes_of(ink):
@@ -101,7 +106,12 @@ def label_dir(d, workers=10):
     with ProcessPoolExecutor(workers) as ex:
         res = {n: (b, hw) for n, b, hw in ex.map(_one, jobs, chunksize=2)}
     for n, (boxes, (H, W)) in res.items():
-        (d / "labels" / f"{n}.txt").write_text("\n".join(f"0 {(a + c) / 2 / W:.6f} {(b + e) / 2 / H:.6f} {(c - a) / W:.6f} {(e - b) / H:.6f}" for a, b, c, e in boxes))
+        (d / "labels" / f"{n}.txt").write_text(
+            "\n".join(
+                f"0 {(a + c) / 2 / W:.6f} {(b + e) / 2 / H:.6f} {(c - a) / W:.6f} {(e - b) / H:.6f}"
+                for a, b, c, e in boxes
+            )
+        )
         im = cv2.imread(str(d / f"{n}.jpg"))
         for a, b, c, e in boxes:
             cv2.rectangle(im, (a, b), (c, e), (0, 160, 0), 2)

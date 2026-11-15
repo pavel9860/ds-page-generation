@@ -6,11 +6,21 @@ check    balance and leakage of a plan                                    run   
 labelled handwritten versions of labelled pages (pagetype labels.json)    rare    A4 pages of rare scripts from OCR'd real pages
 sheet    HTML sheet and contact sheet of a directory of samples
 """
+
 import importlib
 import sys
 
-COMMANDS = {"texts": "texts", "edu": "edu", "tables": "tables_src", "plan": "plan", "check": "check", "run": "run", "labelled": "labelled",
-            "rare": "rare", "sheet": "sheet"}
+COMMANDS = {
+    "texts": "texts",
+    "edu": "edu",
+    "tables": "tables_src",
+    "plan": "plan",
+    "check": "check",
+    "run": "run",
+    "labelled": "labelled",
+    "rare": "rare",
+    "sheet": "sheet",
+}
 
 
 def main(argv=None):

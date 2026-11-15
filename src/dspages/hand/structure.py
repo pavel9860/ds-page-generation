@@ -6,7 +6,7 @@ item = {k: h|p|li|l|v, t, gap, scale, align, lvl} | {k: cols, cols: [{x, w, star
 align center | right when the block is set so; lvl: indent level of a list item)
 """
 
-MAX_COLS = 4
+from .config import MAX_COLS  # noqa: F401
 
 
 def _gap(b, prev_y1, line):
@@ -35,13 +35,13 @@ def _item(b, prev_y1, body, line, x0=None, span=None):
     d = dict(k=k, t=t, gap=_gap(b, prev_y1, line))
     if k == "h":
         d["scale"] = float(min(max(size / body, 1.0), 1.25)) if len(t) <= 70 else 1.0
-    if len(b) > 4:                                          # the reader's own alignment and list level
+    if len(b) > 4:  # the reader's own alignment and list level
         if b[4].get("lvl"):
             d["lvl"] = int(b[4]["lvl"])
         if b[4].get("align"):
             d["align"] = b[4]["align"]
     elif span and k in ("h", "l", "v", "p") and (k != "p" or len(t) <= 160):
-        a = _align(box, x0, span)                               # OCR blocks: alignment from the position
+        a = _align(box, x0, span)  # OCR blocks: alignment from the position
         if a:
             d["align"] = a
     return d
@@ -72,7 +72,7 @@ def _columns(blocks):
     """The vertical-gap groups of the blocks when they are columns: 2..MAX_COLS of them and side by side (two overlapping in height), else None."""
     g = _cut(blocks, 0)
     ys = [(min(b[2][1] for b in c), max(b[2][3] for b in c)) for c in g]
-    side = any(min(a[1], b[1]) > max(a[0], b[0]) for i, a in enumerate(ys) for b in ys[i + 1:])
+    side = any(min(a[1], b[1]) > max(a[0], b[0]) for i, a in enumerate(ys) for b in ys[i + 1 :])
     return g if 2 <= len(g) <= MAX_COLS and side else None
 
 
@@ -89,11 +89,17 @@ def _xy(blocks, x0, span, body, line, prev):
             items = _xy(c, lefts[i], max(b[2][2] for b in c) - lefts[i], body, line, None)
             items[0]["gap"] = 0
             ext, room = (max(b[2][2] for b in c) - lefts[i]) / span, (lefts[i + 1] - lefts[i]) / span - 0.02
-            res.append(dict(x=(lefts[i] - x0) / span, w=min(max(ext, 0.15), room), start=int(min(max((min(b[2][1] for b in c) - top) / line * 0.5, 0), 6)),
-                            items=items))
+            res.append(
+                dict(
+                    x=(lefts[i] - x0) / span,
+                    w=min(max(ext, 0.15), room),
+                    start=int(min(max((min(b[2][1] for b in c) - top) / line * 0.5, 0), 6)),
+                    items=items,
+                )
+            )
         return [dict(k="cols", cols=res, gap=_gap(min(blocks, key=lambda b: b[2][1]), prev, line))]
     rows = []
-    for r in _cut(blocks, 1):                                          # rows one above the other that a vertical gap still divides together: one band
+    for r in _cut(blocks, 1):  # rows one above the other that a vertical gap still divides together: one band
         if rows and _columns(rows[-1] + r):
             rows[-1] = rows[-1] + r
         else:
@@ -105,7 +111,7 @@ def _xy(blocks, x0, span, body, line, prev):
     out = []
     for r in rows:
         out += _xy(r, x0, span, body, line, prev)
-        prev = max(b[2][3] for b in r)                             # the next gap is measured from the bottom of the group above
+        prev = max(b[2][3] for b in r)  # the next gap is measured from the bottom of the group above
     return out
 
 

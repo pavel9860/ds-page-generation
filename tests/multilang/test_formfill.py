@@ -1,15 +1,12 @@
 """detset"""
-import json
+
 import random
 import re
-import zipfile
 
-import cv2
-import numpy as np
 import pytest
+
 from dspages.multilang import formfill as FF
 from dspages.multilang import linebank as LB
-
 
 
 @pytest.fixture
@@ -33,7 +30,9 @@ def test_answers_fit_and_free_text_has_no_digits(bank):
     answers, prov = FF.fill_form(item("f1", caps), "en", set())
     assert len(answers) >= 0.8 * len(caps) and set(answers) == set(prov)
     assert all(len(answers[k]) <= caps[int(k)] for k in answers)
-    assert not any(re.search(r"\d", v) for k, v in answers.items() if prov[k][0] == "line")       # numbers only where the label asks
+    assert not any(
+        re.search(r"\d", v) for k, v in answers.items() if prov[k][0] == "line"
+    )  # numbers only where the label asks
 
 
 def test_nothing_repeats_inside_or_across_forms(bank):

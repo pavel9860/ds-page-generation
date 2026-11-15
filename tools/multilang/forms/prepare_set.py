@@ -1,4 +1,5 @@
 """Prepares a set of forms with the current field finder for the agents"""
+
 import json
 import random
 import shutil
@@ -55,9 +56,9 @@ def main():
                 res.append(r)
     (out / "meta.json").write_text(json.dumps({m["fid"]: m for _, m in res}))
     for k in range(0, len(res), 4):
-        (out / f"in_{k // 4:04d}.json").write_text(json.dumps([i for i, _ in res[k:k + 4]], ensure_ascii=False))
+        (out / f"in_{k // 4:04d}.json").write_text(json.dumps([i for i, _ in res[k : k + 4]], ensure_ascii=False))
     shutil.copy(HERE / "INSTRUCTIONS.md", out / "INSTRUCTIONS.md")
-    print(len(res), "forms,", len({m['lang'] for _, m in res}), "languages,", -(-len(res) // 4), "batches ->", out)
+    print(len(res), "forms,", len({m["lang"] for _, m in res}), "languages,", -(-len(res) // 4), "batches ->", out)
 
 
 if __name__ == "__main__":

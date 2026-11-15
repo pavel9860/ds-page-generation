@@ -5,8 +5,8 @@
 #   bash tools/seed_run.sh OUT [forms|hw|prev]      one line only (FORM_WORKERS=2: the forms line takes the Google worker of the finished texts line)
 cd "$(dirname "$0")/.."
 OUT=$1
-SEEDS=/run/media/p/D/ML_DS/UVTM/Layouts/archive/info/ds100k/seeds/${SEED_SET-v2}
-export PYTHONPATH=src:../handwriting_detection/src THREADS=2
+SEEDS=${DSPAGES_ROOT:?set DSPAGES_ROOT}/Layouts/archive/info/ds100k/seeds/${SEED_SET-v2}
+export PYTHONPATH=src THREADS=2
 PY=.venv/bin/python
 EMBED="$PY tools/shift_test.py embed"
 hw() {
@@ -17,10 +17,10 @@ hw() {
 }
 forms() {
   $PY tools/seed_texts.py forms "$OUT/work" --workers ${FORM_WORKERS:-1} > "$OUT/forms.log" 2>&1
-  $PY ../handwriting_detection/scripts/forms/fill_cpu.py "$OUT/work/forms_work" "$OUT/filled" 400 --workers 2 > "$OUT/filled.log" 2>&1
+  $PY tools/multilang/forms/fill_cpu.py "$OUT/work/forms_work" "$OUT/filled" 400 --workers 2 > "$OUT/filled.log" 2>&1
   $EMBED "$OUT/emb_filled.npz" "$OUT/filled" > "$OUT/emb_filled.log" 2>&1
 }
 prev() {
-  [ -f "$OUT/emb_translated.npz" ] || $EMBED "$OUT/emb_translated.npz" /run/media/p/D/ML_DS/UVTM/generation/translation/pages > "$OUT/emb_translated.log" 2>&1
+  [ -f "$OUT/emb_translated.npz" ] || $EMBED "$OUT/emb_translated.npz" ${DSPAGES_ROOT:?set DSPAGES_ROOT}/generation/translation/pages > "$OUT/emb_translated.log" 2>&1
 }
 if [ -n "$2" ]; then $2; else hw & forms & prev & wait; fi

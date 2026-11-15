@@ -11,14 +11,19 @@ def _flat():
 
 
 def _ratio(G, ts, seeds, scale=1.0):
-    return np.array([cockle.bands(cockle.apply(G, np.random.default_rng(s), t, scale)[..., 2]).std((1, 2)) / t["rms"]
-                     for t in ts for s in seeds])
+    return np.array(
+        [
+            cockle.bands(cockle.apply(G, np.random.default_rng(s), t, scale)[..., 2]).std((1, 2)) / t["rms"]
+            for t in ts
+            for s in seeds
+        ]
+    )
 
 
 def test_flat_page_reaches_every_band():
     r = _ratio(_flat(), cockle.targets()[:8], range(3))
-    assert np.all(np.abs(np.sqrt((r ** 2).mean(0)) - 1) < 0.1), np.sqrt((r ** 2).mean(0))
-    assert np.all(np.abs(r[:, :3] - 1) < 0.2)             # fine bands: many cycles per page, little scatter
+    assert np.all(np.abs(np.sqrt((r**2).mean(0)) - 1) < 0.1), np.sqrt((r**2).mean(0))
+    assert np.all(np.abs(r[:, :3] - 1) < 0.2)  # fine bands: many cycles per page, little scatter
 
 
 def test_present_energy_is_kept_not_doubled():
@@ -31,7 +36,7 @@ def test_present_energy_is_kept_not_doubled():
 def test_scale_and_xy_shift():
     G = _flat()
     r = _ratio(G, cockle.targets()[3:4], range(4), scale=0.5)
-    assert np.all(np.abs(np.sqrt((r ** 2).mean(0)) - 0.5) < 0.07), np.sqrt((r ** 2).mean(0))
+    assert np.all(np.abs(np.sqrt((r**2).mean(0)) - 0.5) < 0.07), np.sqrt((r**2).mean(0))
     C = cockle.apply(G, np.random.default_rng(0), cockle.targets()[3])
     assert np.allclose(C[..., :2], G[..., :2]) and C[..., 2].min() == 0
 
@@ -46,8 +51,12 @@ def test_elongation_along_height():
 def test_surface_with_water(full_small):
     """Added energy on the coarse test grid: Z resampled to the band tables' pitch reaches the drawn page's bands."""
     import cv2
+
     from dspages.geometry.surface import make_surface
-    cond = dict(combo=("book", 0, False, False), two=False, along_long=False, bend_dir=0.0, gsm=80.0, shallow=False, deep="")
+
+    cond = dict(
+        combo=("book", 0, False, False), two=False, along_long=False, bend_dir=0.0, gsm=80.0, shallow=False, deep=""
+    )
     g, p = full_small.geometry, full_small.paper
     dry = make_surface(np.random.default_rng(0), g, p, cond)
     wet = make_surface(np.random.default_rng(0), g, p, dict(cond, water=1.0))

@@ -18,7 +18,9 @@ page-dewarping networks. Three independent parts:
 pip install -e ".[dev]"
 ```
 
-Paths to the corpora, the manifest, fonts and the output root are in `dspages/config.py` (`Paths`).
+Data locations come from environment variables (or a `.env` file, see [.env.example](.env.example)), read once by
+`dspages/paths.py`; every tunable number lives in the `config.py` of its package (`dspages/config.py`,
+`dspages/<package>/config.py`).
 
 The layout finds pictures on source pages with YOLO11n trained on DocLayNet (ONNX). Its weights are AGPL-3.0 and not
 part of this repository; fetch and export them once:
@@ -51,6 +53,9 @@ as `meta`. A full-preset sample is about 2.9 MB (70k samples: about 200 GB).
 
 `src/dspages/hand` writes real digital-born text (headings, paragraphs, lists, tables, columns) by hand on many papers: `python -m dspages.hand`, see its
 [README](src/dspages/hand/README.md). Kaggle CPU shards: `tools/kaggle_handpages`.
+
+Drivers and one-off analyses live in `tools/` (corpus selection `ds_*`, `pages_*`; page-type classifier `pagekind_*`;
+embeddings `emb_*`; 3-D map metrics `maps3d_*`; legacy-font tables `*table*`; seeds and translation `seed_*`, `shift_test.py`).
 
 ## Presets
 

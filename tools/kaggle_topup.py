@@ -1,12 +1,13 @@
 """Embedding and text / handwriting boxes of the top-up shards (tools/pages_topup.py -> pages_1m.py build: datasets pages-768x1024-18..21)
 in two Kaggle runs of 2 x T4 each, every run on its own datasets: first pagetype/embed_kaggle.py as it is (both GPUs), then the detector
-(handwriting_detection models/yolo26s-ds3k3250v3.pt, fp16, the 768 x 1024 page as is at imgsz 1024, conf floor 0.25), one process per GPU,
+(handwriting_detection hwdet-s@1.0.0, fp16, the 768 x 1024 page as is at imgsz 1024, conf floor 0.25), one process per GPU,
 one output per input shard in the format of UVTM/Labels/hw_detection (ids, offsets, cls 0 hw / 1 print, conf uint8, failed).
 Data: Layouts/archive/info/pages_topup/kaggle/<run>.
 
   python tools/kaggle_topup.py weights           # the weights as the private dataset pavel9860/hwdet-yolo26s-weights (once)
   python tools/kaggle_topup.py push A|B          # waits for the run's datasets, pushes its kernel
   python tools/kaggle_topup.py fetch A|B         # status; when complete: output -> <run>/out (emb/embeddings.npy, ids.npy; hw/*.npz)"""
+
 import argparse
 import json
 import shutil
@@ -15,11 +16,12 @@ import sys
 import time
 from pathlib import Path
 
+from dspages import paths as _P  # noqa: E402
 from dspages.hand.config import PATHS
 
 WORK = Path(PATHS.layouts) / "archive" / "info" / "pages_topup" / "kaggle"
-EMBED = Path("/run/media/p/D/BUISNESS/corpus_collecting/pagetype/embed_kaggle.py")
-WEIGHTS = Path("/run/media/p/D/BUISNESS/handwriting_detection/models/hwdet-s-1.0.0.pt")
+EMBED = Path(f"{_P.CORPUS}/pagetype/embed_kaggle.py")
+WEIGHTS = _P.HWDET_WEIGHTS
 WEIGHTS_DS = "pavel9860/hwdet-yolo26s-weights"
 RUNS = {"A": (18, 19), "B": (20, 21)}
 KAGGLE = [sys.executable, "-W", "ignore", "-m", "kaggle"]
@@ -79,7 +81,9 @@ def cmd_weights(_):
     d = WORK / "weights"
     d.mkdir(parents=True, exist_ok=True)
     shutil.copy(WEIGHTS, d / WEIGHTS.name)
-    (d / "dataset-metadata.json").write_text(json.dumps({"title": WEIGHTS_DS.split("/")[1], "id": WEIGHTS_DS, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+    (d / "dataset-metadata.json").write_text(
+        json.dumps({"title": WEIGHTS_DS.split("/")[1], "id": WEIGHTS_DS, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]})
+    )
     print(kaggle("datasets", "create", "-p", str(d), timeout=1800))
 
 
@@ -95,10 +99,27 @@ def cmd_push(a):
     d.mkdir(parents=True)
     (d / "run.py").write_text(f"EMBED_SRC = {EMBED.read_text()!r}\n" + KERNEL)
     kid = f"pavel9860/topup-emb-hw-{a.run.lower()}"
-    (d / "kernel-metadata.json").write_text(json.dumps({
-        "id": kid, "title": kid.split("/")[1], "code_file": "run.py", "language": "python", "kernel_type": "script", "is_private": True,
-        "enable_gpu": True, "enable_tpu": False, "enable_internet": True, "keywords": ["gpu"], "dataset_sources": sets + [WEIGHTS_DS],
-        "kernel_sources": [], "competition_sources": [], "model_sources": [], "machine_shape": "NvidiaTeslaT4"}))
+    (d / "kernel-metadata.json").write_text(
+        json.dumps(
+            {
+                "id": kid,
+                "title": kid.split("/")[1],
+                "code_file": "run.py",
+                "language": "python",
+                "kernel_type": "script",
+                "is_private": True,
+                "enable_gpu": True,
+                "enable_tpu": False,
+                "enable_internet": True,
+                "keywords": ["gpu"],
+                "dataset_sources": sets + [WEIGHTS_DS],
+                "kernel_sources": [],
+                "competition_sources": [],
+                "model_sources": [],
+                "machine_shape": "NvidiaTeslaT4",
+            }
+        )
+    )
     print(kaggle("kernels", "push", "-p", str(d)))
 
 

@@ -1,20 +1,19 @@
 """Text descriptions of documents, the second input of the url model: the text of the first two pages. Corpus documents: from the file. Candidates of the
 Common Crawl index: from the first HEAD bytes of the capture (one range request; about half of the pdfs show text there) -> WORK/descr/part_NNNN.parquet
 (url, text), resumable."""
+
 import re
 import sys
 import zlib
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from pathlib import Path
 
 import httpx
 import pandas as pd
 import pymupdf
 
+from .config import CHARS, HEAD  # noqa: F401
 from .paths import CC_ROOT, LAYOUTS, WORK, doc_hash
 
-HEAD = 200_000
-CHARS = 600
 pymupdf.TOOLS.mupdf_display_errors(False)
 
 
@@ -48,6 +47,7 @@ def corpus(paths, workers=8):
 def _cc():
     sys.path.insert(0, str(CC_ROOT))
     from corpus import config as C
+
     return C.CC_DATA
 
 
@@ -73,7 +73,7 @@ def heads(cands, out=None, part=20_000, threads=16):
         f = out / f"part_{i:04d}.parquet"
         if f.exists():
             continue
-        rows = C.iloc[a:a + part].to_dict("records")
+        rows = C.iloc[a : a + part].to_dict("records")
         with ThreadPoolExecutor(threads) as ex:
             R = list(ex.map(head_one, [(cl, base, r) for r in rows]))
         pd.DataFrame(R, columns=["url", "text"]).to_parquet(f)

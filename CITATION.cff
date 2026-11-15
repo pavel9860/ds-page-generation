@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use ds-page-generation, please cite it as below."
+title: "ds-page-generation: synthetic document pages and photos with exact ground truth"
+authors:
+  - family-names: "pavel9860"
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/pavel9860/ds-page-generation"
+version: 0.3.0
+date-released: 2026-11-15

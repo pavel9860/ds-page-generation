@@ -1,5 +1,6 @@
 """A bank of real handwriting lines in the format of `bank.py` (items {ink: alpha uint8, rgb: ink colour relative to the paper, key: language, wid: document, boxes: [one line box]}), cut from real handwritten pages: the pages the agents accepted (`ga/real_hw_review/good`) plus the pages of the real `handwritten` set that a classifier on their page embeddings, trained on the agents' accepted / rejected pages, scores above `min_p`.
 python -m dspages.multilang.realbank [--min-p 0.95]"""
+
 import argparse
 import hashlib
 import json
@@ -13,12 +14,10 @@ import numpy as np
 import pymupdf
 
 from . import bank, paths
-from .config import Config
+from .config import CHUNKS, DPI, Config  # noqa: F401
 
 U = paths.UVTM
 GA = U / "handwriting_detection/ga"
-CHUNKS = 100
-DPI = 150
 MIN_H, MAX_H, MIN_ASPECT = 15, 120, 8.0
 
 
@@ -44,6 +43,7 @@ def reviewed(items):
 def pages_to_use(min_p):
     """[(path, page)] of the agent-accepted pages and of the pages the embedding classifier accepts."""
     from sklearn.linear_model import LogisticRegression
+
     R, items = load_real()
     pos, neg = reviewed(items)
     X = R[pos + neg]
@@ -57,6 +57,7 @@ def lines_of(job):
     """Items of one page: lines with alpha, ink colour and box."""
     path, page = job
     import pymupdf
+
     cv2.setNumThreads(1)
     try:
         pg = pymupdf.open(U / "Layouts" / path)[page]
@@ -70,6 +71,7 @@ def lines_of(job):
 def lines_of_rgb(rgb, key, wid):
     """Line items of a page image (rgb uint8 at DPI): the cut of lines_of, for real and generated pages alike."""
     from hwsynth.realism import clean
+
     g = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     b = cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 15)
     rules = np.zeros_like(b)
@@ -109,8 +111,15 @@ def lines_of_rgb(rgb, key, wid):
                             strong = a >= a.max() * 0.5
                         am = float(np.median(a[strong]))
                         col = np.clip(1 - (1 - np.median(ratio[strong], 0)) / max(am, 1e-3), 0, 1)
-                        out.append(dict(ink=(a * 255).astype(np.uint8), rgb=col.astype(np.float32), key=key, wid=wid,
-                                        boxes=[(0, 0, a.shape[1], a.shape[0])]))
+                        out.append(
+                            dict(
+                                ink=(a * 255).astype(np.uint8),
+                                rgb=col.astype(np.float32),
+                                key=key,
+                                wid=wid,
+                                boxes=[(0, 0, a.shape[1], a.shape[0])],
+                            )
+                        )
         y = y1
     return out
 
@@ -153,8 +162,15 @@ def load_real():
     for line in open(paths.UVTM / "emb_out/doc_types.jsonl"):
         r = json.loads(line)
         dt[r["doc"]] = r
-    ok = np.array([d in dt and dt[d]["label"] == "handwritten" and (U / "Layouts" / dt[d]["path"]).suffix == ".pdf"
-                   and (U / "Layouts" / dt[d]["path"]).exists() for d in ids[:, 0]])
+    ok = np.array(
+        [
+            d in dt
+            and dt[d]["label"] == "handwritten"
+            and (U / "Layouts" / dt[d]["path"]).suffix == ".pdf"
+            and (U / "Layouts" / dt[d]["path"]).exists()
+            for d in ids[:, 0]
+        ]
+    )
     ix = np.flatnonzero(ok)
     E = E[ix]
     return E / np.linalg.norm(E, axis=1, keepdims=True), [(dt[ids[i, 0]]["path"], int(ids[i, 1])) for i in ix]
@@ -205,4 +221,6 @@ def write(chosen, items, out):
             tiles.append(t)
         while len(tiles) < 20:
             tiles.append(np.full((360, 256, 3), 255, np.uint8))
-        cv2.imwrite(str(out / f"sheet_{s // 20:02d}.jpg"), np.vstack([np.hstack(tiles[i:i + 5]) for i in range(0, 20, 5)]))
+        cv2.imwrite(
+            str(out / f"sheet_{s // 20:02d}.jpg"), np.vstack([np.hstack(tiles[i : i + 5]) for i in range(0, 20, 5)])
+        )

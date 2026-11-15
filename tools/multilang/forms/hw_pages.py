@@ -1,4 +1,5 @@
 """N real handwritten pages (dspages.multilang.hwpick) with boxes around their text lines (dspages.multilang.hwlines). python scripts/forms/hw_pages.py OUT_DIR [N]"""
+
 import sys
 from collections import Counter
 

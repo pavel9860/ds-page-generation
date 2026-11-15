@@ -1,5 +1,6 @@
 """Pages as the 768 x 1024 JPEG shards of the corpus (tools/form_pages.py: no padding, q90, 4:2:0): scan pictures decoded at reduced scale, other pages
 rendered by MuPDF, PIL / pdftoppm as fallbacks, a crash of the pool splits the jobs until the file that kills MuPDF is found."""
+
 import io
 import signal
 import subprocess
@@ -32,7 +33,9 @@ def _alarm(*_):
 
 def encode(rgb):
     if rgb.shape[:2] != (H, W):
-        rgb = cv2.resize(rgb, (W, H), interpolation=cv2.INTER_AREA if rgb.shape[0] * rgb.shape[1] > W * H else cv2.INTER_CUBIC)
+        rgb = cv2.resize(
+            rgb, (W, H), interpolation=cv2.INTER_AREA if rgb.shape[0] * rgb.shape[1] > W * H else cv2.INTER_CUBIC
+        )
     buf = io.BytesIO()
     Image.fromarray(rgb).save(buf, "JPEG", quality=QUALITY)
     return buf.getvalue()
@@ -42,8 +45,25 @@ def fallback(path, d, p):
     try:
         if path.lower().endswith(".pdf"):
             with tempfile.TemporaryDirectory() as tmp:
-                subprocess.run(["pdftoppm", "-jpeg", "-f", str(p + 1), "-l", str(p + 1), "-scale-to-x", str(W), "-scale-to-y", str(H), path, f"{tmp}/o"],
-                               check=True, timeout=120, capture_output=True)
+                subprocess.run(
+                    [
+                        "pdftoppm",
+                        "-jpeg",
+                        "-f",
+                        str(p + 1),
+                        "-l",
+                        str(p + 1),
+                        "-scale-to-x",
+                        str(W),
+                        "-scale-to-y",
+                        str(H),
+                        path,
+                        f"{tmp}/o",
+                    ],
+                    check=True,
+                    timeout=120,
+                    capture_output=True,
+                )
                 rgb = np.asarray(Image.open(sorted(Path(tmp).glob("o*.jpg"))[0]).convert("RGB"))
         elif p == 0:
             rgb = np.asarray(Image.open(path).convert("RGB"))
@@ -71,13 +91,18 @@ def render_job(args):
         else:
             sys.path.insert(0, str(CC_ROOT))
             from pagetype import thumbs as T
+
             with pymupdf.open(path) as doc:
                 for d, p in items:
                     try:
                         pg = doc[p]
                         rgb = T.scan_image(doc, pg, H)
                         if rgb is None:
-                            pm = pg.get_pixmap(matrix=pymupdf.Matrix(W / pg.rect.width, H / pg.rect.height), colorspace=pymupdf.csRGB, alpha=False)
+                            pm = pg.get_pixmap(
+                                matrix=pymupdf.Matrix(W / pg.rect.width, H / pg.rect.height),
+                                colorspace=pymupdf.csRGB,
+                                alpha=False,
+                            )
                             rgb = np.frombuffer(pm.samples, np.uint8).reshape(pm.h, pm.w, 3)
                         out.append((d, p, encode(rgb)))
                     except Timeout:

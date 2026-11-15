@@ -1,5 +1,6 @@
 """Which handwriting fonts the writer may use per script."""
-from functools import lru_cache
+
+from functools import cache
 
 REALISTIC = {
     "Cyrillic": ("BadScript-Regular", "Caveat", "MarckScript-Regular"),
@@ -19,8 +20,20 @@ REALISTIC = {
     "Ethiopic": ("ChartGeez-Regular", "AbyssinicaSIL-Regular", "Menbere"),
     "Armenian": ("ChartArmenian-Regular",),
     "Han": ("LongCang-Regular", "MaShanZheng-Regular", "KleeOne-Regular", "Yomogi-Regular", "ZenKurenaido-Regular"),
-    "Hiragana": ("Kapakana", "KleeOne-Regular", "SlacksideOne-Regular", "Yomogi-Regular", "YujiHentaiganaAkari-Regular", "ZenKurenaido-Regular"),
-    "Hangul": ("EastSeaDokdo-Regular", "NanumBrushScript-Regular", "NanumGothicCoding-Regular", "NanumPenScript-Regular"),
+    "Hiragana": (
+        "Kapakana",
+        "KleeOne-Regular",
+        "SlacksideOne-Regular",
+        "Yomogi-Regular",
+        "YujiHentaiganaAkari-Regular",
+        "ZenKurenaido-Regular",
+    ),
+    "Hangul": (
+        "EastSeaDokdo-Regular",
+        "NanumBrushScript-Regular",
+        "NanumGothicCoding-Regular",
+        "NanumPenScript-Regular",
+    ),
     "Bengali": ("Galada-Regular", "Atma-Regular", "Alkatra"),
     "Gujarati": ("Mogra-Regular", "Farsan-Regular"),
     "Gurmukhi": ("BhuTukaExpandedOne-Regular", "ChartGurmukhi-Regular"),
@@ -37,14 +50,21 @@ def stem(path):
     return str(path).split("/")[-1].split("[")[0].removesuffix(".ttf")
 
 
-@lru_cache(maxsize=None)
+@cache
 def _listed(index, script):
     from hwsynth.config import GlyphCfg
     from hwsynth.fonts import core_letters
+
     core = core_letters(script) or ""
     need = GlyphCfg().coverage * len(core)
-    return tuple(sorted(f for f in index.cmap if any(stem(f) == s or stem(f).startswith(s) for s in STEMS[script])
-                        and sum(ord(c) in index.cmap[f] for c in core) >= need))
+    return tuple(
+        sorted(
+            f
+            for f in index.cmap
+            if any(stem(f) == s or stem(f).startswith(s) for s in STEMS[script])
+            and sum(ord(c) in index.cmap[f] for c in core) >= need
+        )
+    )
 
 
 class Restricted:
@@ -75,11 +95,17 @@ class Restricted:
     def writes(self, text):
         """True when every letter of `text` is in some allowed handwriting font (the writer drops a letter no font has)."""
         from hwsynth.scripts import text_script
+
         have = [f for f in self.index.hand if f in self.index.cmap]
-        return all(any(ord(c) in self.index.cmap[f] and self._ok(text_script(c), f) for f in have) for c in set(text) if c.isalpha())
+        return all(
+            any(ord(c) in self.index.cmap[f] and self._ok(text_script(c), f) for f in have)
+            for c in set(text)
+            if c.isalpha()
+        )
 
     def for_unit(self, font, unit):
         from hwsynth.scripts import text_script
+
         scr = text_script(unit)
         if font is not None and self.index.covers(font, unit):
             return font

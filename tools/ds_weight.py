@@ -10,17 +10,18 @@ x' = x + Q diag(s - 1) Q^T x. Data: ds100k/grid (OUT).
 
 python tools/ds_weight.py fit [--weights hw=1,type=1,...]   -> OUT/kaggle/aux_w/weight.npz (Q, s), OUT/weight.json
 python tools/ds_weight.py compare                            factor shares: in-scope pool / plain grid / weighted grid -> OUT/compare.csv"""
+
 import argparse
 import json
 import sqlite3
 
+import ds100k as D
+import ds_border as B
+import ds_grid as G
 import numpy as np
 import pandas as pd
 import torch
 
-import ds100k as D
-import ds_border as B
-import ds_grid as G
 from dspages.hand.config import PATHS
 
 SAMPLE, NLANG, NFONT = 200_000, 30, 30
@@ -62,7 +63,7 @@ def lda(X, y, k):
     Li = torch.linalg.cholesky(Sw)
     A = torch.linalg.solve_triangular(Li, Mb, upper=False)
     U, _, _ = torch.linalg.svd(A, full_matrices=False)
-    W = torch.linalg.solve_triangular(Li.T, U[:, :min(k, len(cls) - 1)], upper=True)
+    W = torch.linalg.solve_triangular(Li.T, U[:, : min(k, len(cls) - 1)], upper=True)
     return W, len(cls)
 
 
@@ -113,8 +114,12 @@ def cmd_fit(a):
     (G.OUT / "weight.json").write_text(json.dumps(dict(factors=rep, fonts=fams, v1=v1), indent=1))
     Xw = X + ((X @ Q) * (torch.tensor(S) - 1)) @ Q.T
     Cw = torch.cov(Xw.T)
-    print(f"total variance x {float(torch.trace(Cw) / torch.trace(C)):.2f}; factor subspace share after: {float(torch.trace(Q.T @ Cw @ Q) / torch.trace(Cw)):.3f}")
-    (d / "dataset-metadata.json").write_text(json.dumps({"title": G.AUXW.split("/")[1], "id": G.AUXW, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]}))
+    print(
+        f"total variance x {float(torch.trace(Cw) / torch.trace(C)):.2f}; factor subspace share after: {float(torch.trace(Q.T @ Cw @ Q) / torch.trace(Cw)):.3f}"
+    )
+    (d / "dataset-metadata.json").write_text(
+        json.dumps({"title": G.AUXW.split("/")[1], "id": G.AUXW, "licenses": [{"name": "CC-BY-NC-SA-4.0"}]})
+    )
     print(G.KF.kaggle("datasets", "create", "-p", str(d))[-200:])
 
 
@@ -125,8 +130,11 @@ def cmd_compare(_):
     L["fill"] = pd.cut(P.fill, [0.7, 0.8, 0.9, 1.01], right=False).astype(str)
     L["pic"] = pd.cut(P.pic, [0, 0.05, 0.1, 0.2], right=False).astype(str)
     L["fonts"] = np.where(has, "has fonts", "no fonts")
-    sets = {"pool": np.flatnonzero(m), "grid": pd.read_parquet(G.OUT / "grid.parquet").nn.to_numpy(),
-            "grid_w": pd.read_parquet(G.OUT / "grid_w.parquet").nn.to_numpy()}
+    sets = {
+        "pool": np.flatnonzero(m),
+        "grid": pd.read_parquet(G.OUT / "grid.parquet").nn.to_numpy(),
+        "grid_w": pd.read_parquet(G.OUT / "grid_w.parquet").nn.to_numpy(),
+    }
     rows = []
     for f in FACTORS:
         for k, ix in sets.items():
@@ -135,7 +143,11 @@ def cmd_compare(_):
     for j, fam in enumerate(fams):
         for k, ix in sets.items():
             rows.append(("font family", fam, k, Fm[ix, j].mean()))
-    T = pd.DataFrame(rows, columns=["factor", "value", "set", "share"]).pivot_table(index=["factor", "value"], columns="set", values="share").fillna(0)
+    T = (
+        pd.DataFrame(rows, columns=["factor", "value", "set", "share"])
+        .pivot_table(index=["factor", "value"], columns="set", values="share")
+        .fillna(0)
+    )
     T = T[["pool", "grid", "grid_w"]]
     T["w/pool"] = T.grid_w / T.pool.replace(0, np.nan)
     T.to_csv(G.OUT / "compare.csv")
@@ -144,8 +156,17 @@ def cmd_compare(_):
         print(T.loc[f].sort_values("pool", ascending=False).round(4).to_string(), "\n")
     for f in ("lang", "font family"):
         t = T.loc[f]
-        print(f, "values", len(t), "| entropy-normalised spread (1 = equal): pool %.3f grid %.3f grid_w %.3f" % tuple(
-            (-(t[c][t[c] > 0] * np.log(t[c][t[c] > 0])).sum() / np.log(len(t))) for c in ("pool", "grid", "grid_w")))
+        print(
+            f,
+            "values",
+            len(t),
+            "| entropy-normalised spread (1 = equal): pool {:.3f} grid {:.3f} grid_w {:.3f}".format(
+                *tuple(
+                    (-(t[c][t[c] > 0] * np.log(t[c][t[c] > 0])).sum() / np.log(len(t)))
+                    for c in ("pool", "grid", "grid_w")
+                )
+            ),
+        )
         print(t.sort_values("pool", ascending=False).head(8).round(4).to_string(), "\n")
     print("->", G.OUT / "compare.csv")
 

@@ -1,4 +1,5 @@
 """A page canvas (paper at the page long side) and ink strips: handwritten lines scaled to one size per page."""
+
 import random
 import unicodedata
 from collections import Counter
@@ -6,12 +7,9 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-
 from hwsynth.scripts import script as char_script
-from .config import GenCfg
 
-PAGE_MM = (210.0, 297.0)
-INK_DPI = 150
+from .config import INK_DPI, MIN_CONTRAST, PAGE_MM, GenCfg  # noqa: F401
 
 
 @dataclass
@@ -33,12 +31,11 @@ def native_digits(script):
         d = unicodedata.decimal(c, None)
         if d is not None and d > 0 or (d == 0 and unicodedata.name(c, "").endswith("DIGIT ZERO")):
             name = unicodedata.name(c, "")
-            if name.startswith(script.upper() + " DIGIT") or (script == "Arabic" and name.startswith("ARABIC-INDIC DIGIT")):
+            if name.startswith(script.upper() + " DIGIT") or (
+                script == "Arabic" and name.startswith("ARABIC-INDIC DIGIT")
+            ):
                 out[str(d)] = c
     return out
-
-
-MIN_CONTRAST = 100
 
 
 def contrast(img):
@@ -71,7 +68,10 @@ class Canvas:
             self.img = None
         else:
             from hwsynth.page import paper
-            sheet = paper((self.H, self.W), np.random.default_rng(rng.getrandbits(32)), ruled_mm, self.px_mm * 25.4, first_mm)
+
+            sheet = paper(
+                (self.H, self.W), np.random.default_rng(rng.getrandbits(32)), ruled_mm, self.px_mm * 25.4, first_mm
+            )
             self.img = (np.clip(sheet, 0, 1) * 255).astype(np.uint8)
         self.rules = (first_mm * self.px_mm, ruled_mm * self.px_mm) if ruled_mm else None
         self.y_max = self.H * 0.93
@@ -87,9 +87,9 @@ class Canvas:
         if x < 0 or y < 0 or x + w > self.W or y + h > self.H:
             return False
         if not self.dry:
-            region = self.img[y:y + h, x:x + w].astype(np.float32)
+            region = self.img[y : y + h, x : x + w].astype(np.float32)
             region *= 1 - density * strip.alpha[..., None] * (1 - np.asarray(rgb, np.float32))
-            self.img[y:y + h, x:x + w] = region.astype(np.uint8)
+            self.img[y : y + h, x : x + w] = region.astype(np.uint8)
         self.ink_rows.append((x, y, x + w, y + h))
         self.words += strip.words
         self.glyphs += strip.glyphs
@@ -103,8 +103,10 @@ class Canvas:
         t = np.linspace(0, 1, n)
         wander = np.cumsum([self.rng.gauss(0, 0.3) for _ in range(n)])
         wander = (wander - np.linspace(wander[0], wander[-1], n)) * 0.6
-        waves = sum(self.rng.uniform(0.06, 0.12) * np.sin(2 * np.pi * self.rng.uniform(0.7, 2.5) * t + self.rng.uniform(0, 6.3))
-                    for _ in range(2))
+        waves = sum(
+            self.rng.uniform(0.06, 0.12) * np.sin(2 * np.pi * self.rng.uniform(0.7, 2.5) * t + self.rng.uniform(0, 6.3))
+            for _ in range(2)
+        )
         w = np.clip(width * (1 + waves) * (1 - 0.3 * np.clip((t - 0.9) / 0.1, 0, 1)), 0.6, None)
         xs, ys = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t + wander
         pad = int(width * 3 + 4)
@@ -115,8 +117,14 @@ class Canvas:
         S = 4
         mask = np.zeros(((by1 - by0) * S, (bx1 - bx0) * S), np.uint8)
         for i in range(n - 1):
-            cv2.line(mask, (round((xs[i] - bx0) * S), round((ys[i] - by0) * S)),
-                     (round((xs[i + 1] - bx0) * S), round((ys[i + 1] - by0) * S)), 255, max(1, round(w[i] * S)), cv2.LINE_AA)
+            cv2.line(
+                mask,
+                (round((xs[i] - bx0) * S), round((ys[i] - by0) * S)),
+                (round((xs[i + 1] - bx0) * S), round((ys[i + 1] - by0) * S)),
+                255,
+                max(1, round(w[i] * S)),
+                cv2.LINE_AA,
+            )
         alpha = cv2.resize(mask, (bx1 - bx0, by1 - by0), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
         region = self.img[by0:by1, bx0:bx1].astype(np.float32)
         region *= 1 - density * alpha[..., None] * (1 - np.asarray(rgb, np.float32))
@@ -136,16 +144,26 @@ def pen_colour(rng: random.Random, cfg: GenCfg):
     if rng.random() < cfg.p_blue_ink:
         c = np.array([rng.uniform(0.02, 0.18), rng.uniform(0.04, 0.26), rng.uniform(0.22, 0.6)], np.float32)
     else:
-        c = np.array([rng.uniform(0.03, 0.15)] * 3, np.float32) + np.array([rng.uniform(0, 0.04) for _ in range(3)], np.float32)
+        c = np.array([rng.uniform(0.03, 0.15)] * 3, np.float32) + np.array(
+            [rng.uniform(0, 0.04) for _ in range(3)], np.float32
+        )
     return c * min(1.0, 0.22 / max(float(c @ [0.2126, 0.7152, 0.0722]), 1e-3))
 
 
 class Hand:
     """One writer and one handwriting size for a page."""
 
-    def __init__(self, cfg: GenCfg, rng: random.Random, px_mm: float, max_width: int, row_mm: float,
-                 canvas: Canvas | None = None):
-        self.cfg, self.rng, self.px_mm, self.max_width, self.row_mm, self.canvas = cfg, rng, px_mm, max_width, row_mm, canvas
+    def __init__(
+        self, cfg: GenCfg, rng: random.Random, px_mm: float, max_width: int, row_mm: float, canvas: Canvas | None = None
+    ):
+        self.cfg, self.rng, self.px_mm, self.max_width, self.row_mm, self.canvas = (
+            cfg,
+            rng,
+            px_mm,
+            max_width,
+            row_mm,
+            canvas,
+        )
         self.writer = new_writer(rng, cfg)
         self.writer.pen.width *= cfg.pen_width_scale * float(np.exp(np.clip(rng.gauss(0, cfg.pen_width_sd), -1.0, 1.0)))
         self.rgb = pen_colour(rng, cfg)
@@ -167,12 +185,20 @@ class Hand:
 
     def _raw(self, text):
         import hwsynth as H
+
         if text not in self.cache:
             written = self._cover(text)
             raw = None
             try:
-                s = H.write(written, self.writer, width_mm=min(1800.0, 14 + 14.0 * len(text)), dpi=INK_DPI, ruled=False,
-                            scan=False, image=False)
+                s = H.write(
+                    written,
+                    self.writer,
+                    width_mm=min(1800.0, 14 + 14.0 * len(text)),
+                    dpi=INK_DPI,
+                    ruled=False,
+                    scan=False,
+                    image=False,
+                )
             except Exception as e:
                 self.failures[type(e).__name__] += 1
             else:
@@ -180,7 +206,7 @@ class Hand:
                 if len(ys):
                     boxes = line_boxes(s.words, s.ink, self.cfg)
                     row = float(np.median([b[3] - b[1] for b in boxes])) if boxes else float(ys.max() - ys.min() + 1)
-                    raw = (s.ink[ys.min():ys.max() + 1, xs.min():xs.max() + 1], row)
+                    raw = (s.ink[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1], row)
                 elif any(c.isdigit() for c in text) and self._localize(text) != text:
                     raw = self._raw(self._localize(text))
                 else:
@@ -225,8 +251,8 @@ class Hand:
         if spaced:
             for w in words:
                 while len(w) > per:
-                    out.append((cur + " " + w[:per - len(cur)]).strip() if cur else w[:per])
-                    w, cur = w[per - len(cur):] if cur else w[per:], ""
+                    out.append((cur + " " + w[: per - len(cur)]).strip() if cur else w[:per])
+                    w, cur = w[per - len(cur) :] if cur else w[per:], ""
                 if len(cur) + 1 + len(w) > per and cur:
                     out.append(cur)
                     cur = w
@@ -236,7 +262,9 @@ class Hand:
         i = 0
         while i < len(text):
             j = min(len(text), i + per)
-            while j < len(text) and (unicodedata.category(text[j]).startswith("M") or text[j - 1] in "\u17d2\u0e3a\u1039"):
+            while j < len(text) and (
+                unicodedata.category(text[j]).startswith("M") or text[j - 1] in "\u17d2\u0e3a\u1039"
+            ):
                 j += 1
             out.append(text[i:j])
             i = j
@@ -277,8 +305,7 @@ class Hand:
         if h < 5 or w < 5 or w > self.max_width:
             return None
         alpha = cv2.resize(ink, (w, h), interpolation=cv2.INTER_AREA).astype(np.float32)
-        return Strip(np.clip(alpha, 0, 1) ** 0.75, count_words(text),
-                     len("".join(text.split())))
+        return Strip(np.clip(alpha, 0, 1) ** 0.75, count_words(text), len("".join(text.split())))
 
 
 def line_boxes(words, ink, cfg: GenCfg):
@@ -305,8 +332,10 @@ def line_boxes(words, ink, cfg: GenCfg):
 def new_writer(rng, cfg: GenCfg):
     """A writer of a natural person type and style (no medical, hurried, child or decorative hands)."""
     import hwsynth as H
+
     w = H.sample_writer(rng.choice(cfg.natural_persons), rng.choice(cfg.natural_styles), seed=rng.randrange(2**31))
     from .handfonts import Restricted
+
     w.fonts = Restricted(w.fonts)
     return w
 
@@ -328,7 +357,9 @@ def pick_fonts(w, text, prefer=None):
     mapping = {}
     for sc, chars in by.items():
         own = w.font(sc)
-        cands = ([own] if own else []) + list(w.fonts.candidates(sc, w.font_class)) + list(w.fonts.candidates(sc, "any"))
+        cands = (
+            ([own] if own else []) + list(w.fonts.candidates(sc, w.font_class)) + list(w.fonts.candidates(sc, "any"))
+        )
         name = (prefer or {}).get(sc)
         if name:
             cands = [f for f in cands if str(f).endswith(name)] + cands
@@ -351,7 +382,9 @@ def strip_missing(w, text):
             start = True
             continue
         cm = w.fonts.cmap.get(w.font(script_of(ch)), ())
-        if (unicodedata.category(ch)[0] == "M" and (start or unicodedata.combining(out[-1]) == 9)) or (cm and ord(ch) not in cm):
+        if (unicodedata.category(ch)[0] == "M" and (start or unicodedata.combining(out[-1]) == 9)) or (
+            cm and ord(ch) not in cm
+        ):
             start = True
             continue
         out.append(ch)

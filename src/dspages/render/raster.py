@@ -1,5 +1,6 @@
 """Triangle rasterizer for a page grid seen by a pinhole camera: per pixel page coordinates, depth and one
 scalar attribute, perspective-correct, nearest surface wins (z-buffer)."""
+
 import numpy as np
 from numba import njit
 
@@ -48,7 +49,17 @@ def rasterize(pix, depth, attrs, faces, size):
     uv = np.full((h, w, 2), np.nan, np.float32)
     a = np.zeros((h, w), np.float32)
     zbuf = np.zeros((h, w), np.float64)
-    _raster(pix[:, 0].astype(np.float64), pix[:, 1].astype(np.float64), 1.0 / depth.astype(np.float64),
-            attrs.astype(np.float64), faces, w, h, uv, a, zbuf)
+    _raster(
+        pix[:, 0].astype(np.float64),
+        pix[:, 1].astype(np.float64),
+        1.0 / depth.astype(np.float64),
+        attrs.astype(np.float64),
+        faces,
+        w,
+        h,
+        uv,
+        a,
+        zbuf,
+    )
     with np.errstate(divide="ignore"):
         return uv, a, np.where(zbuf > 0, 1.0 / zbuf, np.inf).astype(np.float32)

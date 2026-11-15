@@ -1,4 +1,5 @@
 """The detector: grey pages of the canvas -> window, ink tiles, picture share per tile, fill and pic."""
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,7 +39,9 @@ def fit(gray, cfg=CONFIG):
     h, w = cfg.geometry.canvas
     if gray.shape == (h, w):
         return gray
-    return cv2.resize(gray, (w, h), interpolation=cv2.INTER_AREA if gray.shape[0] * gray.shape[1] > h * w else cv2.INTER_CUBIC)
+    return cv2.resize(
+        gray, (w, h), interpolation=cv2.INTER_AREA if gray.shape[0] * gray.shape[1] > h * w else cv2.INTER_CUBIC
+    )
 
 
 def jpeg_roundtrip(gray, quality):
@@ -52,6 +55,7 @@ class Detector:
     @classmethod
     def load(cls, folder, cfg=CONFIG, n_jobs=1):
         import xgboost as xgb
+
         folder = Path(folder)
         ink_model, pic_model = xgb.XGBClassifier(n_jobs=n_jobs), xgb.XGBRegressor(n_jobs=n_jobs)
         ink_model.load_model(str(folder / "ink.json"))
@@ -72,7 +76,12 @@ class Detector:
         if win is None:
             return None
         maps, paper, noise = page_maps(gray, ink_, self.cfg)
-        return win, tile_cells(maps, win, gray.shape, self.cfg)[None], np.array([[paper, noise]], np.float32), ink_.mask.shape
+        return (
+            win,
+            tile_cells(maps, win, gray.shape, self.cfg)[None],
+            np.array([[paper, noise]], np.float32),
+            ink_.mask.shape,
+        )
 
     def tiles(self, X):
         """(ink bool, picture share) of feature rows (all columns of derive)."""

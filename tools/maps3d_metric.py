@@ -11,6 +11,7 @@ Held out: HOLD of the maps. On the held-out maps, for the raw input, every head 
 each class factor, 10-NN R2 of the axis. Data: tests_gen/maps3d_metric (OUT).
 
 python tools/maps3d_metric.py [--steps N]"""
+
 import argparse
 import json
 import time
@@ -21,9 +22,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-T = Path("/run/media/p/D/ML_DS/UVTM/GridPages/tests_gen")
+from dspages import paths as _P  # noqa: E402
+
+T = Path(f"{_P.ROOT}/GridPages/tests_gen")
 EMB, FE, OUT = T / "maps3d_emb", T / "maps3d_fe", T / "maps3d_metric"
-PLAN = Path("/run/media/p/D/ML_DS/UVTM/uv_ds_2.0.0/part6/plan.jsonl")
+PLAN = Path(f"{_P.ROOT}/uv_ds_2.0.0/part6/plan.jsonl")
 BLOCKS = ("base", "dog", "normgrad", "ridge", "gauss_img", "curv")
 HOLD, DIM, BATCH, RNC_B = 0.1, 8, 256, 128
 HEADS = ("folds", "deep", "shallow", "axis", "real")
@@ -35,16 +38,18 @@ def data():
     S = np.hstack([np.load(EMB / f"emb_siglip2_{k}_shade.npy") for k in ("final", "l4")])
     Fe = np.hstack([np.load(FE / f"fb_{k}.npy") for k in BLOCKS]).astype(np.float64)
     Fe = np.nan_to_num((Fe - Fe.mean(0)) / (Fe.std(0) + 1e-9)).clip(-10, 10)
-    S = S / np.linalg.norm(S, axis=1, keepdims=True) * np.sqrt(S.shape[1])          # both parts ~ unit variance per dim
+    S = S / np.linalg.norm(S, axis=1, keepdims=True) * np.sqrt(S.shape[1])  # both parts ~ unit variance per dim
     X = np.hstack([S, Fe]).astype(np.float32)
     gen = np.array([not i["real"] for i in its])
     lab = lambda vals: np.array(vals, np.int64)
     deeps = ["none", "light", "medium", "heavy"]
     cats = sorted({i["category"] for i in its if i["real"]})
-    y = dict(folds=lab([min(i["n_folds"], 3) if not i["real"] else -1 for i in its]),
-             deep=lab([deeps.index(i["deep"]) if not i["real"] else -1 for i in its]),
-             shallow=lab([int(i["shallow"]) if not i["real"] else -1 for i in its]),
-             real=lab([cats.index(i["category"]) if i["real"] else -1 for i in its]))
+    y = dict(
+        folds=lab([min(i["n_folds"], 3) if not i["real"] else -1 for i in its]),
+        deep=lab([deeps.index(i["deep"]) if not i["real"] else -1 for i in its]),
+        shallow=lab([int(i["shallow"]) if not i["real"] else -1 for i in its]),
+        real=lab([cats.index(i["category"]) if i["real"] else -1 for i in its]),
+    )
     ax = np.array([plan[int(i["path"][-11:-4])]["bend_dir"] if not i["real"] else np.nan for i in its], np.float32)
     return its, X, y, ax, gen
 
@@ -52,7 +57,9 @@ def data():
 class Head(nn.Module):
     def __init__(self, d):
         super().__init__()
-        self.f = nn.ModuleList([nn.Sequential(nn.Linear(d, 512), nn.GELU(), nn.Dropout(0.1), nn.Linear(512, DIM)) for _ in HEADS])
+        self.f = nn.ModuleList(
+            [nn.Sequential(nn.Linear(d, 512), nn.GELU(), nn.Dropout(0.1), nn.Linear(512, DIM)) for _ in HEADS]
+        )
 
     def forward(self, x):
         return [F.normalize(f(x), dim=1) for f in self.f]
@@ -90,7 +97,7 @@ def bal_acc(pred, true):
 
 def knn_eval(V, y, ax, tr, ho, k=10):
     V = torch.as_tensor(V, dtype=torch.float32)
-    d = torch.cdist(V[ho], V[tr])
+    torch.cdist(V[ho], V[tr])
     r = {}
     for name, lab in y.items():
         q, rf = ho[lab[ho] >= 0], tr[lab[tr] >= 0]
@@ -116,7 +123,10 @@ def main():
     n = len(X)
     hold = np.random.default_rng(0).random(n) < HOLD
     tr, ho = np.flatnonzero(~hold), np.flatnonzero(hold)
-    print(f"maps {n} (generated {int(gen.sum())}, real {int((~gen).sum())}); train {len(tr)}, held out {len(ho)}; input {X.shape[1]}", flush=True)
+    print(
+        f"maps {n} (generated {int(gen.sum())}, real {int((~gen).sum())}); train {len(tr)}, held out {len(ho)}; input {X.shape[1]}",
+        flush=True,
+    )
     E = torch.from_numpy(X)
     net = Head(X.shape[1])
     opt = torch.optim.AdamW(net.parameters(), lr=1e-3, weight_decay=1e-4)
@@ -126,7 +136,7 @@ def main():
     axt = tr[np.isfinite(ax[tr])]
     axv = torch.from_numpy(ax)[:, None]
 
-    def draw(gr):                                       # class-balanced batch
+    def draw(gr):  # class-balanced batch
         per = max(2, BATCH // len(gr))
         return torch.from_numpy(np.concatenate([g.choice(x, per, replace=len(x) < per) for x in gr]))
 
@@ -152,7 +162,11 @@ def main():
     with torch.no_grad():
         Z = [z.numpy() for z in net(E)]
     Z = [z / np.sqrt(((z[g.integers(0, n, 20000)] - z[g.integers(0, n, 20000)]) ** 2).sum(1).mean()) for z in Z]
-    spaces = {"raw siglip+feat": X, **{f"head {h}": z for h, z in zip(HEADS, Z)}, f"concat {len(HEADS)} x {DIM}": np.hstack(Z)}
+    spaces = {
+        "raw siglip+feat": X,
+        **{f"head {h}": z for h, z in zip(HEADS, Z)},
+        f"concat {len(HEADS)} x {DIM}": np.hstack(Z),
+    }
     res = {}
     for name, V in spaces.items():
         res[name] = knn_eval(V, y, ax, tr, ho)

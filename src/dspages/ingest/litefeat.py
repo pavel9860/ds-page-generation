@@ -1,8 +1,10 @@
 """Page choice inside a document: cheap layout vectors from the text blocks and a farthest-first pick (the most different pages first)."""
+
 import numpy as np
 
-GRID = (8, 6)                                              # rows x columns of the density grids
-LITE = 20 + GRID[0] * GRID[1]                              # block-level layout features of a text page
+from .config import GRID  # noqa: F401
+
+LITE = 20 + GRID[0] * GRID[1]  # block-level layout features of a text page
 
 
 def budget(n):
@@ -36,13 +38,19 @@ def lite_feats(pg):
         f[10], f[11] = len(set(x0)) / 20, np.log1p((nl).mean())
         f[12], f[13] = sum(c.isdigit() for c in s) / max(len(s), 1), sum(c.isupper() for c in s) / max(len(s), 1)
         f[14], f[15] = a[:, 1].min(), a[:, 3].max()
-        f[16], f[17] = (np.abs((a[:, 0] + a[:, 2]) / 2 - .5) < .05).mean(), (a[:, 2] > .9).mean()
+        f[16], f[17] = (np.abs((a[:, 0] + a[:, 2]) / 2 - 0.5) < 0.05).mean(), (a[:, 2] > 0.9).mean()
         f[19] = np.log1p((n / nl).mean())
-        gx0, gx1 = np.clip(a[:, 0] * GRID[1], 0, GRID[1] - 1).astype(int), np.clip(a[:, 2] * GRID[1], 0, GRID[1] - 1).astype(int)
-        gy0, gy1 = np.clip(a[:, 1] * GRID[0], 0, GRID[0] - 1).astype(int), np.clip(a[:, 3] * GRID[0], 0, GRID[0] - 1).astype(int)
+        gx0, gx1 = (
+            np.clip(a[:, 0] * GRID[1], 0, GRID[1] - 1).astype(int),
+            np.clip(a[:, 2] * GRID[1], 0, GRID[1] - 1).astype(int),
+        )
+        gy0, gy1 = (
+            np.clip(a[:, 1] * GRID[0], 0, GRID[0] - 1).astype(int),
+            np.clip(a[:, 3] * GRID[0], 0, GRID[0] - 1).astype(int),
+        )
         cells = np.zeros((GRID[0], GRID[1]))
         for i in range(len(a)):
-            cells[gy0[i]:gy1[i] + 1, gx0[i]:gx1[i] + 1] += n[i] / ((gy1[i] - gy0[i] + 1) * (gx1[i] - gx0[i] + 1))
+            cells[gy0[i] : gy1[i] + 1, gx0[i] : gx1[i] + 1] += n[i] / ((gy1[i] - gy0[i] + 1) * (gx1[i] - gx0[i] + 1))
         f[20:] = (cells / max(cells.sum(), 1)).ravel()
     return f, chars
 

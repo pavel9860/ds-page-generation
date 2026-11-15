@@ -1,4 +1,5 @@
 """The window around the content and the tile means of maps over it."""
+
 import numpy as np
 
 from .config import CONFIG
@@ -22,9 +23,16 @@ def tile_matrices(win, shape, grid):
     image is empty). A map's tile sums are Ty @ map @ Tx.T."""
     x, y, w, h = win
     t = np.linspace(0, 1, grid + 1)
-    ys, xs = np.clip(np.round(y + h * t).astype(int), 0, shape[0]), np.clip(np.round(x + w * t).astype(int), 0, shape[1])
+    ys, xs = (
+        np.clip(np.round(y + h * t).astype(int), 0, shape[0]),
+        np.clip(np.round(x + w * t).astype(int), 0, shape[1]),
+    )
     ry, rx = np.arange(shape[0]), np.arange(shape[1])
-    return ((ry >= ys[:-1, None]) & (ry < ys[1:, None])).astype(np.float32), ((rx >= xs[:-1, None]) & (rx < xs[1:, None])).astype(np.float32), max(w * h / grid / grid, 1)
+    return (
+        ((ry >= ys[:-1, None]) & (ry < ys[1:, None])).astype(np.float32),
+        ((rx >= xs[:-1, None]) & (rx < xs[1:, None])).astype(np.float32),
+        max(w * h / grid / grid, 1),
+    )
 
 
 def tile_mean(m, win, grid=CONFIG.geometry.grid):
@@ -37,7 +45,10 @@ def tile_cells(maps, win, shape, cfg=CONFIG):
     grid = cfg.geometry.grid
     ref = maps["hat"][0].shape
     rx, ry = shape[1] / ref[1], shape[0] / ref[0]
-    mats = {0: tile_matrices(win, ref, grid), 1: tile_matrices((win[0] * rx, win[1] * ry, win[2] * rx, win[3] * ry), shape, grid)}
+    mats = {
+        0: tile_matrices(win, ref, grid),
+        1: tile_matrices((win[0] * rx, win[1] * ry, win[2] * rx, win[3] * ry), shape, grid),
+    }
     out = []
     for n in map_names(cfg):
         m, page_size = maps[n]
