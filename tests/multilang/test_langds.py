@@ -1,6 +1,5 @@
 """Fast checks of the language dataset"""
 
-import json
 import random
 from collections import Counter
 
@@ -275,36 +274,3 @@ def test_handwritten_page_is_filled_with_a_margin(tmp_path):
     ink = np.nonzero((a < 128).any(axis=1))[0]
     assert ink.max() - ink.min() > 0.5 * C.side
     assert all(b["k"] == "hand" for b in row["boxes"])
-
-
-GAPS = {"ps": "Pashto has 5 clean paragraphs: source text of the language is missing"}
-
-
-@pytest.mark.skipif(not (PARAS.exists() and (DATA / "bucketing/src.json").exists()), reason="no text pools")
-@pytest.mark.parametrize(
-    "lang",
-    [
-        pytest.param(lang, marks=pytest.mark.xfail(reason=GAPS[lang], strict=True)) if lang in GAPS else lang
-        for lang in LANGS
-    ],
-)
-def test_pool_of_a_language_is_clean(lang):
-    from dspages.multilang.synthpages import load_pools
-
-    pool = load_pools(lang, DATA / "langds", DATA / "bucketing", None)
-    assert len(pool["p"]) >= 10, "too few clean paragraphs"
-    for k in ("p", "h", "li"):
-        assert all(clean_ok(x, lang, 0.25) for x in random.Random(lang).sample(pool[k], min(len(pool[k]), 25))), k
-    assert pool["labels"] and pool["heads"] and pool["cells"]
-    text = "".join(pool["p"] + pool["h"] + pool["li"])
-    assert not any(
-        0xFB50 <= ord(c) <= 0xFDFF or 0xFE70 <= ord(c) <= 0xFEFC or 0x80 <= ord(c) <= 0x9F or ord(c) == 0xFFFD
-        for c in text
-    )
-
-
-@pytest.mark.skipif(not (DATA / "langds" / "real_checked.jsonl").exists(), reason="no checked real pages")
-def test_checked_real_pages_are_digital_and_of_their_type():
-    rows = [json.loads(x) for x in open(DATA / "langds" / "real_checked.jsonl", encoding="utf-8")]
-    assert all(r["type_mass"] >= C.min_mass for r in rows)
-    assert not [r for r in rows if r.get("lang_status") == "mismatch"]

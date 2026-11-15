@@ -1,4 +1,4 @@
-"""Data locations, from the environment (or a .env file in the working directory or DSPAGES_ENV); nothing else names a path.
+"""Data locations, from the environment (or the .env file DSPAGES_ENV names, else ./.env and the repository's .env); nothing else names a path.
 DSPAGES_ROOT      data root (Layouts/, Labels/, GridPages/, handwriting/ ...), default ./data
 DSPAGES_CORPUS    corpus_collecting checkout (page-type classifier, URL index, language models), default <root>/corpus_collecting
 DSPAGES_LAYOUTS   the PDF corpus, default <root>/Layouts
@@ -16,7 +16,12 @@ def _load_env(path):
                 os.environ.setdefault(k.strip(), v.strip().strip('"'))
 
 
-for _f in (os.environ.get("DSPAGES_ENV", ".env"), Path(__file__).resolve().parents[2] / ".env"):
+_files = (
+    [os.environ["DSPAGES_ENV"]]
+    if os.environ.get("DSPAGES_ENV")
+    else [".env", Path(__file__).resolve().parents[2] / ".env"]
+)
+for _f in _files:
     _load_env(Path(_f))
 
 

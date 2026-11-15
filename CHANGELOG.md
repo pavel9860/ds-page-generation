@@ -2,6 +2,14 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions: [SemVer](https://semver.org/).
 
+## 0.3.2 (2026-11-15)
+### Changed
+- `DSPAGES_ENV` names the one `.env` file read; without it `./.env` and the repository's `.env`.
+### Tests
+- Added: data locations (`paths`), sample files (`io`), ICU line breaks (`layout.linebreak`).
+- Removed: the per-language text-pool checks (91 cases) and the checked-real-pages check: they read
+  `bucketing/src.json` and `langds/real_checked.jsonl`, which no build writes any more, so they always skipped.
+
 ## 0.3.1 (2026-11-15)
 ### Fixed
 - Dependencies the code imports are declared: core `pandas`, `pyarrow`, `scikit-learn`, `threadpoolctl`, `uharfbuzz`,

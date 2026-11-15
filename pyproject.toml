@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ds-page-generation"
-version = "0.3.1"
+version = "0.3.2"
 description = "Synthetic document photos with exact UV and 3D maps: layouts, physical page geometry, rendering"
 readme = "README.md"
 license = "Apache-2.0"
