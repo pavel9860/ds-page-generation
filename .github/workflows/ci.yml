@@ -15,4 +15,4 @@ jobs:
           python-version: "3.12"
       - run: uv venv && uv pip install -e ".[dev,multilang,pagegen]" ruff
       - run: uv run ruff check . && uv run ruff format --check .
-      - run: uv run pytest -q -m "not slow" -p no:xdist
+      - run: uv run pytest -q -m "not slow"
