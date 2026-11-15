@@ -1,7 +1,7 @@
 """Texts and forms of the seeds of tools/seed_pick.py (ds100k/seeds/{hw,filled,notes}.csv): where src is set the layout is in another language and its text is
-translated into the language of the row (Google Translate over HTTP, hand.rare.translated: structure and boxes kept; forms: hwdet.translate.render sets the
+translated into the language of the row (Google Translate over HTTP, hand.rare.translated: structure and boxes kept; forms: dspages.multilang.translate.render sets the
 translated lines back into the page). Google answers 429 above about one request a second: few workers, and a start only when it answers.
-  texts  -> SEEDS/{hw,notes}.jsonl (rows done are kept)        forms  -> OUT/forms_work (hwdet.filledforms.prepare)
+  texts  -> SEEDS/{hw,notes}.jsonl (rows done are kept)        forms  -> OUT/forms_work (dspages.multilang.filledforms.prepare)
 tools/seed_run.sh runs both, the page generators and the embedding.
 
   PYTHONPATH=src:../handwriting_detection/src python tools/seed_texts.py texts|forms OUT [--workers 1]"""
@@ -24,14 +24,13 @@ from dspages.hand.util import walk_text  # noqa: E402
 from hwsynth.scripts import script  # noqa: E402
 
 
-HWDET = Path("/run/media/p/D/BUISNESS/handwriting_detection")
-sys.path.insert(0, str(HWDET / "scripts" / "translation"))
+sys.path.insert(0, str(Path(__file__).parent / "multilang" / "translation"))           # gt_run (Google Translate page through selenium)
 CHUNK = 4800                                                                          # characters translated at once (Google web input: 5000, 5200 measured cut)
 GOOGLE = {"ku": "ckb", "zh": "zh-CN", "mni": "mni-Mtei"}                                                # Google: ku is Kurmanji in Latin letters (the corpus's ku is Sorani); Chinese is zh-CN / zh-TW, a bare zh falls back to the profile's last language
 
 
 def tagged_lines(texts, tl, sl="auto"):
-    """hwdet.gtranslate.lines as one tagged text per chunk of at most CHUNK characters (whole(): translate.googleapis.com, Google Translate as the
+    """dspages.multilang.gtranslate.lines as one tagged text per chunk of at most CHUNK characters (whole(): translate.googleapis.com, Google Translate as the
     web page); None for a line whose tag Google dropped."""
     tl, sl = GOOGLE.get(tl, tl), GOOGLE.get(sl, sl)
     out, lines = [], [" ".join(t.split()) or "." for t in texts]
@@ -49,7 +48,9 @@ def tagged_lines(texts, tl, sl="auto"):
     return out
 
 
-KEY = re.compile(r'<\s*p\s*id\s*=\s*"?(\d+)"?\s*>')                                    # a block's opening tag as Google gives it back (<pid="9"> too)
+KEY = re.compile(r'<\s*[^\s<>=/"\d]{1,3}\s*[^\s<>=/"\d]{1,3}\s*=\s*"?(\d+)"?\s*>')          # a block's opening tag as Google gives it back: <pid="9">, and
+# its letters transliterated into the target script (<п ид="9">, <פּ יד="9">)
+CLOSE = re.compile(r'<\s*/\s*[^\s<>=/"\d]{1,3}\s*>')                                       # its closing tag, the same way
 
 
 def whole(lines, tl, sl):
@@ -64,13 +65,60 @@ def keyed(answer, n):
     got = {}
     for k, seg in zip(parts[1::2], parts[2::2]):
         if int(k) < n and int(k) not in got:
-            got[int(k)] = " ".join(re.sub(r"<\s*/\s*p\s*>", " ", seg).split())
+            got[int(k)] = " ".join(CLOSE.sub(" ", seg).split())
     return [got.get(i) for i in range(n)]
 
 
-import hwdet.gtranslate as GT  # noqa: E402
+import dspages.multilang.gtranslate as GT  # noqa: E402
 
-_google = GT.google
+_driver = {}                                                                          # this process's browser and the page's (sl, tl)
+
+
+def _google(text, tl, sl):
+    """The translation of text by Google Translate as the web page, in one headless Chrome per process (tools/multilang/translation/gt_run's selenium setup; Chrome, not the snap Brave: a snap does not start in a
+    systemd-run memory scope;
+    the HTTP endpoint answers 429); None when no answer comes."""
+    import gt_run as G
+    from selenium import webdriver
+    if "d" not in _driver:
+        o = webdriver.ChromeOptions()
+        import atexit, os, tempfile
+        for a in ("--headless=new", "--no-sandbox", f"--user-data-dir={tempfile.mkdtemp(prefix=f'gtprofile_{os.getpid()}_')}"):   # a profile of its own:
+            o.add_argument(a)                                                          # no lock left by another run
+        _driver["d"] = webdriver.Chrome(options=o)
+        atexit.register(_driver["d"].quit)
+    d = _driver["d"]
+    for _ in range(2):                                                                 # a page that gives no answer: loaded again, one more try
+        t = _ask(d, text, tl, sl)
+        if t:
+            return t
+        _driver.pop("at", None)
+    return None
+
+
+def _ask(d, text, tl, sl):
+    """text into the Translate page of (sl, tl) -> its answer once it stops changing; None after 60 s."""
+    import gt_run as G
+    if _driver.get("at") != (sl, tl):
+        d.get(f"https://translate.google.com/?sl={sl}&tl={tl}&op=translate")
+        time.sleep(3)
+        _driver["at"] = (sl, tl)
+    d.execute_script(G.SET, "")
+    t0 = time.time()
+    while d.execute_script(G.GET) and time.time() - t0 < 5:                           # the last text's output gone: nothing stale is read
+        time.sleep(0.1)
+    d.execute_script(G.SET, text)
+    last, stable, t0 = "", 0, time.time()
+    while time.time() - t0 < 60:
+        time.sleep(0.25)
+        t = d.execute_script(G.GET)
+        stable = stable + 1 if t and t == last else 0
+        last = t
+        if stable >= 8:                                                                # 2 s unchanged (Google refines a long text in steps)
+            return t
+    return None
+
+
 GT.lines = tagged_lines                                                               # rare.translated and form() translate whole tagged texts
 
 
@@ -109,7 +157,7 @@ def form(job):
             legacy.mark_no_text(str(pdf))
         return str(pdf), 0, lang
     import pymupdf
-    from hwdet import translate as TR
+    from dspages.multilang import translate as TR
     from hwsynth.writer import _index
     t0 = time.time()
     read = Path(out) / f"src_{Path(path).stem}_{page}_{src}.json"                    # the source page read once for all its target languages
@@ -121,7 +169,10 @@ def form(job):
         read.with_suffix(".tmp").replace(read)
     got = json.loads(read.read_text())
     ls, drawn = got["lines"], [tuple(b) for b in got["drawn"]]
-    tr = GT.lines([x["text"] for x in ls], lang, src) if ls else []
+    for _ in range(2):                                                                   # a second try when Google drops the tags
+        tr = GT.lines([x["text"] for x in ls], lang, src) if ls else []
+        if len(tr) == len(ls) and sum(t is None for t in tr) <= rare.LOST * len(tr):
+            break
     if len(tr) != len(ls) or sum(t is None for t in tr) > rare.LOST * len(tr):          # garbled: more than LOST of the lines' tags lost
         print("garbled (tags lost):", lang, path, page, flush=True)
         return None
@@ -157,7 +208,7 @@ def main():
         else:
             S = sorted(rows("filled"), key=lambda r: r.lang)                              # a worker takes a run of rows of the same languages
             F = [f for f in ex.map(form, [(r.path, r.page, r.lang, r.src, str(out)) for r in S], chunksize=-(-len(S) // a.workers)) if f]
-            from hwdet import filledforms as FF
+            from dspages.multilang import filledforms as FF
             print("filled", len(F), "of", len(S), "forms;", FF.prepare(F, str(out), workers=2), "with fields", flush=True)
 
 
